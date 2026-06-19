@@ -59,7 +59,7 @@ profiles when the hardware can handle it.
 ## Requirements
 
 - Linux (X11 or Wayland). A browser (Brave/Chromium/Firefox) for streaming launchers.
-- Build deps: `webkit2gtk-4.1`, Rust (1.80+), Node 20+ or Bun.
+- Build deps: `webkit2gtk-4.1`, `libudev` (gamepad input), Rust (1.80+), Node 20+ or Bun.
 - Optional: `gamescope` + `gamescope-session-plus` (for the 10-foot session tier);
   `cage` (media-kiosk tier on GPU-less hosts); `playerctl` (live song/show titles in the
   Now Playing card via MPRIS); `xorg-xprop` (needed inside a gamescope session).
