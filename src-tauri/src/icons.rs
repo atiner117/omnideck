@@ -47,21 +47,15 @@ pub async fn favicon(url: &str) -> Option<String> {
     if path.exists() {
         return to_data_url(&path);
     }
-    // Try, in order: DDG(host) → DDG(root) → Google s2(host) → Google s2(root).
-    // DDG is privacy-friendly and usually best; Google's service has wider coverage and
-    // higher-res icons (catches sites DDG returns junk for, e.g. Spotify).
-    let candidates: Vec<String> = {
-        let mut c = vec![ddg_url(&host)];
-        let root = root_domain(&host);
-        if let Some(r) = &root {
-            c.push(ddg_url(r));
-        }
-        c.push(google_url(&host));
-        if let Some(r) = &root {
-            c.push(google_url(r));
-        }
-        c
-    };
+    // Try, per domain: DDG → the site's own /favicon.ico → Google s2; host first, then root.
+    // DDG is privacy-friendly; the site's own favicon recovers real logos the services lack
+    // (e.g. VLC's cone); Google s2 is the normalized last resort.
+    let mut candidates: Vec<String> = Vec::new();
+    for d in [Some(host.clone()), root_domain(&host)].into_iter().flatten() {
+        candidates.push(ddg_url(&d));
+        candidates.push(format!("https://{d}/favicon.ico"));
+        candidates.push(google_url(&d));
+    }
     let mut bytes = None;
     for url in candidates {
         if let Some(b) = fetch_image(&url).await {
@@ -81,10 +75,16 @@ fn google_url(domain: &str) -> String {
     format!("https://www.google.com/s2/favicons?domain={domain}&sz=128")
 }
 
-/// GET an icon URL; Some(bytes) only if the body is a recognized image that isn't a tiny
-/// placeholder (Google serves a 16x16 globe for unknown domains; DDG serves junk/empties).
+/// GET an icon URL; Some(bytes) only if the body is a recognized image that isn't a known
+/// placeholder. Google serves a 16x16 globe for unknown domains (caught by too_small), and
+/// DuckDuckGo serves a fixed 1478-byte 48x48 generic for domains it doesn't have — rejected
+/// here so unknown apps fall through to their real favicon or the emoji instead.
 async fn fetch_image(url: &str) -> Option<Vec<u8>> {
     let bytes = reqwest::get(url).await.ok()?.bytes().await.ok()?;
+    let is_ddg = url.contains("icons.duckduckgo.com");
+    if is_ddg && bytes.len() == 1478 {
+        return None; // DuckDuckGo's generic "unknown domain" fallback
+    }
     if bytes.len() >= 100 && sniff(&bytes).is_some() && !too_small(&bytes) {
         Some(bytes.to_vec())
     } else {

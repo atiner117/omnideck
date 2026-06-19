@@ -22,6 +22,7 @@ pub struct Settings {
     pub bg_blur: f64, // background cover-art blur in px (0 = sharp)
     pub bg_brightness: f64, // background cover-art brightness (0.3–1.0)
     pub search_provider: String, // web-search URL prefix for the global search (e.g. a SearXNG instance)
+    pub search_mode: String, // "duckduckgo" | "google" | "brave" | "bing" | "searxng" | "custom"
     pub sound: bool, // subtle navigation/confirm sounds
     pub sound_volume: f64, // navigation sound volume multiplier (0.0–1.0)
     pub dashboard_recents: usize, // recently-played items shown on Home (0 = off)
@@ -49,6 +50,7 @@ impl Default for Settings {
             bg_blur: 0.0,
             bg_brightness: 0.82,
             search_provider: "https://duckduckgo.com/?q=".into(),
+            search_mode: "duckduckgo".into(),
             sound: true,
             sound_volume: 0.5,
             dashboard_recents: 8,

@@ -6,6 +6,7 @@
   type App = { id: string; name: string; icon: string; exec: string[]; accent: string; category?: string };
   type Game = {
     appid: string; name: string; installed: boolean; is_tool: boolean; last_played?: number;
+    installdir?: string; library_path?: string;
     art_box?: string | null; art_header?: string | null; art_hero?: string | null; art_logo?: string | null;
   };
   type Tile =
@@ -21,11 +22,13 @@
     { id: "settings", label: "Settings", icon: "⚙" },
   ];
   const ACCENTS = ["#4cc2ff", "#b14cff", "#6ee7a8", "#ff8a3d", "#ff5d6c", "#ffd166"];
-  const SEARCH_PROVIDERS = [
-    { label: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
-    { label: "Google", url: "https://www.google.com/search?q=" },
-    { label: "Brave", url: "https://search.brave.com/search?q=" },
-    { label: "Bing", url: "https://www.bing.com/search?q=" },
+  const SEARCH_MODES = [
+    { mode: "duckduckgo", label: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
+    { mode: "google", label: "Google", url: "https://www.google.com/search?q=" },
+    { mode: "brave", label: "Brave", url: "https://search.brave.com/search?q=" },
+    { mode: "bing", label: "Bing", url: "https://www.bing.com/search?q=" },
+    { mode: "searxng", label: "SearXNG", url: "" }, // self-hosted: user supplies the URL
+    { mode: "custom", label: "Custom", url: "" },
   ];
   const PRESET: Record<string, number> = { small: 1.3, medium: 1.6, large: 1.9, huge: 2.3 };
   const SIZE_MODES = ["small", "medium", "large", "huge", "custom"];
@@ -50,6 +53,7 @@
     { key: "sound", label: "Navigation sounds", type: "cycle" },
     { key: "soundvol", label: "Sound volume", type: "num" },
     { key: "search", label: "Search provider", type: "cycle" },
+    { key: "searchurl", label: "Search URL", type: "text" },
     { key: "addcustom", label: "Add custom launcher", type: "action" },
   ];
   const POWER = [
@@ -78,7 +82,8 @@
     if (key === "runtimes") return s.show_runtimes ? "on" : "off";
     if (key === "sound") return soundLabel();
     if (key === "soundvol") return `${Math.round((s.sound_volume ?? 0.6) * 100)}%`;
-    if (key === "search") return SEARCH_PROVIDERS.find((p) => p.url === s.search_provider)?.label ?? "Custom";
+    if (key === "search") return SEARCH_MODES.find((m) => m.mode === (s.search_mode ?? "duckduckgo"))?.label ?? "DuckDuckGo";
+    if (key === "searchurl") return s.search_provider || "(not set)";
     return "";
   }
 
@@ -124,6 +129,7 @@
   let heroes = $state<Record<string, string>>({}); // wide hero art for the background
   let appIcons = $state<Record<string, string>>({}); // fetched site icons for web/app tiles
   let iconBg = $state<Record<string, string>>({}); // contrast-aware tile bg per fetched icon
+  let iconColor = $state<Record<string, string>>({}); // dominant "r,g,b" per fetched icon (app bg gradient)
   let searchEngineIcon = $state(""); // favicon of the configured web-search provider
   const iconTried = new Set<string>();
   // native apps with no launch URL but a known site to pull an icon from
@@ -178,9 +184,11 @@
         const d = ctx.getImageData(0, 0, n, n).data;
         let r = 0, g = 0, b = 0, a = 0;
         for (let i = 0; i < d.length; i += 4) { const al = d[i + 3] / 255; r += d[i] * al; g += d[i + 1] * al; b += d[i + 2] * al; a += al; }
+        const ar = a < 1 ? 90 : Math.round(r / a), ag = a < 1 ? 96 : Math.round(g / a), ab = a < 1 ? 110 : Math.round(b / a);
         const iconLum = a < 1 ? 1 : (0.2126 * r + 0.7152 * g + 0.0722 * b) / a / 255;
         const keepAccent = Math.abs(iconLum - hexLum(accent)) >= 0.12; // enough contrast → keep color
         iconBg = { ...iconBg, [id]: keepAccent ? accent : iconLum > 0.5 ? "#0d0f14" : "#f4f5f8" };
+        iconColor = { ...iconColor, [id]: `${ar},${ag},${ab}` }; // dominant color for the app bg gradient
       } catch {}
     };
     img.src = dataUrl;
@@ -253,6 +261,7 @@
       if (s.key === "soundvol") return soundLabel() === "Custom";
       if (s.key === "bgcolor") return (set.background_default ?? "color") === "color";
       if (s.key === "bgimage") return set.background_default === "image";
+      if (s.key === "searchurl") return set.search_mode === "searxng" || set.search_mode === "custom";
       // blur/brightness only matter when something is overlaid (game art or app wash)
       if (s.key === "blur" || s.key === "bright") return (set.game_backgrounds ?? true) || (set.app_backgrounds ?? true) || set.background_default === "image";
       return true;
@@ -267,17 +276,26 @@
   let settingsEditing = $state(false);
 
   // Background = a base (solid color or a custom image) plus an optional overlay: the
-  // focused game's wide hero art, or a blurred color-wash of the focused app's icon.
+  // focused game's wide hero art, or a dominant-color gradient from the focused app's icon.
   let bgDefault = $derived<string>(cfg?.settings?.background_default ?? "color");
   let bgImageUrl = $state(""); // custom base image (data URL)
-  let overlay = $derived.by<{ url: string; wash: boolean } | null>(() => {
+  // Debounce which item drives the background: swapping a fullscreen image on every
+  // keypress while cycling fast is what tanked fps, so only update once focus settles.
+  let settledFocus = $state(0);
+  let bgTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const f = focus; catSel; // track focus + category
+    clearTimeout(bgTimer);
+    bgTimer = setTimeout(() => { settledFocus = f; }, 150);
+  });
+  let overlay = $derived.by<{ kind: "art"; url: string } | { kind: "wash"; color: string } | null>(() => {
     if (catId === "settings") return null;
-    const t = items[focus];
+    const t = items[settledFocus];
     if (t?.kind === "game" && (cfg?.settings?.game_backgrounds ?? true)) {
-      const u = heroes[t.game.appid]; return u ? { url: u, wash: false } : null;
+      const u = heroes[t.game.appid]; return u ? { kind: "art", url: u } : null;
     }
     if (t?.kind === "app" && (cfg?.settings?.app_backgrounds ?? true)) {
-      const u = appIcons[t.app.id]; return u ? { url: u, wash: true } : null; // icon → color wash
+      const c = iconColor[t.app.id]; return c ? { kind: "wash", color: c } : null;
     }
     return null;
   });
@@ -320,6 +338,19 @@
   function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
   let lastNav = 0;
   function navGate() { const n = performance.now(); if (n - lastNav < 100) return false; lastNav = n; return true; }
+
+  // Gamepad hold-to-repeat: gilrs emits one button_pressed per press (no auto-repeat like
+  // the keyboard). Run the action once, then repeat while the direction is held.
+  let heldCode = "";
+  let heldDelay: ReturnType<typeof setTimeout> | undefined;
+  let heldRepeat: ReturnType<typeof setInterval> | undefined;
+  function holdStop() { clearTimeout(heldDelay); clearInterval(heldRepeat); heldCode = ""; }
+  function holdStart(code: string, fn: () => void) {
+    holdStop();
+    heldCode = code;
+    fn();
+    heldDelay = setTimeout(() => { heldRepeat = setInterval(() => { if (heldCode === code) fn(); else holdStop(); }, 110); }, 360);
+  }
 
   async function loadArt(g: Game) {
     if (!art[g.appid]) {
@@ -378,11 +409,13 @@
     if (!cfg) return;
     const s = { ...cfg.settings };
     if (key === "bgimage") s.background_image = raw.trim();
+    else if (key === "searchurl") s.search_provider = raw.trim();
     cfg = { ...cfg, settings: s };
     invoke("save_settings", { settings: s }).catch(() => {});
   }
   function textValue(key: string): string {
     if (key === "bgimage") return cfg?.settings?.background_image ?? "";
+    if (key === "searchurl") return cfg?.settings?.search_provider ?? "";
     return "";
   }
   function onBgColor(e: Event) {
@@ -438,6 +471,26 @@
     invoke("save_recent_apps", { recentApps }).catch(() => {});
   }
   function gotoSettings() { catSel = CATEGORIES.findIndex((c) => c.id === "settings"); focus = 0; }
+  function goHome() { catSel = CATEGORIES.findIndex((c) => c.id === "dashboard"); focus = 0; }
+
+  // ---- in-app info panel (games + apps) ----
+  let infoOpen = $state(false);
+  let infoTile = $state<Tile | null>(null);
+  function showInfo() { if (catId === "settings") return; const t = items[focus]; if (t) { infoTile = t; infoOpen = true; } }
+  function appSource(a: App): string {
+    const e = a.exec;
+    if (e[0] === "flatpak") return "Flatpak · " + (e[2] ?? "");
+    if (e[0] === "BROWSER") { const u = webUrl(a); return "Web app · " + (u ? (iconDomainText(u)) : "browser"); }
+    return "Command · " + e.join(" ");
+  }
+  function iconDomainText(url: string): string {
+    return url.replace(/^--app=/, "").replace(/^https?:\/\//, "").split("/")[0];
+  }
+  function fmtPlayed(ts?: number): string {
+    if (!ts) return "never";
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+  }
   async function cycleSetting(key: string) {
     if (!cfg) return;
     const s = { ...cfg.settings };
@@ -458,16 +511,18 @@
     else if (key === "bgcolor") { const c = BG_COLORS.indexOf(s.background_color ?? BG_COLORS[0]); s.background_color = BG_COLORS[((c < 0 ? -1 : c) + 1) % BG_COLORS.length]; }
     else if (key === "recents_show") { const c = RECENTS_MODES.indexOf(s.recents_show ?? "both"); s.recents_show = RECENTS_MODES[((c < 0 ? 0 : c) + 1) % RECENTS_MODES.length]; }
     else if (key === "accent") { const c = ACCENTS.indexOf(s.accent ?? "#4cc2ff"); s.accent = ACCENTS[((c < 0 ? 0 : c) + 1) % ACCENTS.length]; }
-    else if (key === "search") { const c = SEARCH_PROVIDERS.findIndex((p) => p.url === s.search_provider); s.search_provider = SEARCH_PROVIDERS[((c < 0 ? -1 : c) + 1) % SEARCH_PROVIDERS.length].url; }
+    else if (key === "search") {
+      const c = SEARCH_MODES.findIndex((m) => m.mode === (s.search_mode ?? "duckduckgo"));
+      const next = SEARCH_MODES[((c < 0 ? 0 : c) + 1) % SEARCH_MODES.length];
+      s.search_mode = next.mode;
+      if (next.url) s.search_provider = next.url; // preset
+      else if (SEARCH_MODES.some((m) => m.url === s.search_provider)) s.search_provider = ""; // entering searxng/custom from a preset → clear for the URL field
+    }
     cfg = { ...cfg, settings: s };
     accent = s.accent ?? "#4cc2ff";
     invoke("save_settings", { settings: s }).catch(() => {});
   }
 
-  function gameProperties() {
-    const t = items[focus];
-    if (t && t.kind === "game") { invoke("game_properties", { appid: t.game.appid }).catch(() => {}); status = `⚙ ${t.game.name} properties…`; setTimeout(() => (status = ""), 2500); }
-  }
   function mediaControl(action: string) {
     invoke("media_control", { action }).catch(() => {});
     // re-poll so the play/pause glyph and title update promptly
@@ -600,6 +655,7 @@
       else if (e.key === "ArrowRight" && wizardStep === 1 && navGate()) wizardAccent(1);
       return;
     }
+    if (infoOpen) { if (e.key === "Escape" || e.key === "Enter" || e.key === "i" || e.key === "I") infoOpen = false; return; }
     if (formOpen) {
       // native inputs handle typing; only intercept Escape to close
       if (e.key === "Escape") { e.preventDefault(); formOpen = false; }
@@ -639,8 +695,9 @@
       return;
     }
     if (e.key === "p" || e.key === "P") { gotoSettings(); return; }
+    if (e.key === "h" || e.key === "H") { goHome(); return; }
     if (e.key === "f" || e.key === "F") { favCurrent(); return; }
-    if (e.key === "i" || e.key === "I") { gameProperties(); return; }
+    if (e.key === "i" || e.key === "I") { showInfo(); return; }
     if (e.key === "Escape") { settingsEditing = false; return; }
     if (e.key === "ArrowLeft" && navGate()) horiz(-1);
     else if (e.key === "ArrowRight" && navGate()) horiz(1);
@@ -694,42 +751,48 @@
           else if (p.code === "East") confirmAct = null;
           return;
         }
+        if (infoOpen) { if (p.code === "East" || p.code === "South") infoOpen = false; return; }
         if (powerOpen) {
-          if (p.code === "DPadUp" && navGate()) powerMove(-1);
-          else if (p.code === "DPadDown" && navGate()) powerMove(1);
+          if (p.code === "DPadUp") holdStart(p.code, () => powerMove(-1));
+          else if (p.code === "DPadDown") holdStart(p.code, () => powerMove(1));
           else if (p.code === "South") powerActivate();
           else if (p.code === "East") powerOpen = false;
           return;
         }
         if (searchOpen) {
-          if (p.code === "DPadUp" && navGate()) searchMove(-1);
-          else if (p.code === "DPadDown" && navGate()) searchMove(1);
+          if (p.code === "DPadUp") holdStart(p.code, () => searchMove(-1));
+          else if (p.code === "DPadDown") holdStart(p.code, () => searchMove(1));
           else if (p.code === "South") searchActivate();
           else if (p.code === "East") searchOpen = false;
           return;
         }
-        if (p.code === "North") { toggleCatalog(); return; }
         if (catalogOpen) {
-          if (p.code === "DPadUp" && navGate()) catMove(-1); else if (p.code === "DPadDown" && navGate()) catMove(1);
-          else if (p.code === "South") catToggle(catFocus); else if (p.code === "East") catalogOpen = false;
+          if (p.code === "DPadUp") holdStart(p.code, () => catMove(-1));
+          else if (p.code === "DPadDown") holdStart(p.code, () => catMove(1));
+          else if (p.code === "South") catToggle(catFocus);
+          else if (p.code === "North") catSort = catSort === "group" ? "alpha" : "group"; // toggle sort
+          else if (p.code === "East") catalogOpen = false;
           return;
         }
+        if (p.code === "North") { toggleCatalog(); return; }
         if (p.code === "Select") { openSearch(); return; }
-        if (p.code === "Start") { gotoSettings(); return; }
+        if (p.code === "Start") { goHome(); return; }
         if (p.code === "West") { favCurrent(); return; }
-        if (p.code === "RightTrigger") { gameProperties(); return; }
+        if (p.code === "RightTrigger") { showInfo(); return; }
         if (p.code === "East") { settingsEditing = false; return; }
-        if (p.code === "DPadLeft" && navGate()) horiz(-1);
-        else if (p.code === "DPadRight" && navGate()) horiz(1);
-        else if (p.code === "DPadUp" && navGate()) moveItem(-1);
-        else if (p.code === "DPadDown" && navGate()) moveItem(1);
+        if (p.code === "DPadLeft") holdStart(p.code, () => horiz(-1));
+        else if (p.code === "DPadRight") holdStart(p.code, () => horiz(1));
+        else if (p.code === "DPadUp") holdStart(p.code, () => moveItem(-1));
+        else if (p.code === "DPadDown") holdStart(p.code, () => moveItem(1));
         else if (p.code === "South") activate();
+      } else if (p.kind === "button_released") {
+        if (p.code === heldCode) holdStop();
       } else if (p.kind === "axis_changed" && (p.code === "LeftStickX" || p.code === "LeftStickY")) {
-        if (wizardActive || catalogOpen || searchOpen || powerOpen || confirmAct || formOpen) return;
+        if (wizardActive || catalogOpen || searchOpen || powerOpen || confirmAct || formOpen || infoOpen) return;
         if (Math.abs(p.value) > 0.6 && navGate()) {
           if (p.code === "LeftStickX") horiz(p.value > 0 ? 1 : -1);
           else moveItem(p.value > 0 ? 1 : -1);
-        }
+        } else if (Math.abs(p.value) < 0.3) { holdStop(); }
       }
     }).then((u) => off.push(u));
 
@@ -757,7 +820,10 @@
 
 <main style="--accent:{accent}; --scale:{scaleNum}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{cfg?.settings?.background_color ?? '#05070b'}">
   {#if baseImageShown}<div class="xbg base has" style="background-image:url({bgImageUrl})"></div>{/if}
-  <div class="xbg" class:has={!!overlay} class:wash={overlay?.wash} style={overlay ? `background-image:url(${overlay.url})` : ""}></div>
+  <div class="xbg" class:has={!!overlay} class:wash={overlay?.kind === "wash"}
+    style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`
+      : overlay?.kind === "wash" ? `background-image:radial-gradient(120% 90% at 75% 25%, rgba(${overlay.color},0.55) 0%, rgba(${overlay.color},0.18) 38%, transparent 72%)`
+      : ""}></div>
   <div class="xbg-fade" class:dim={!hasImagery}></div>
 
   <header>
@@ -766,7 +832,7 @@
       <span class="clock">{clock}</span>
       <button class="badge gear" onclick={openSearch} title="Search (/)">🔍</button>
       <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)">＋</button>
-      <button class="badge gear" onclick={gotoSettings} title="Settings (Start / P)">⚙</button>
+      <button class="badge gear" onclick={gotoSettings} title="Settings (P)">⚙</button>
       <button class="badge gear" onclick={openPower} title="Power">⏻</button>
     </div>
   </header>
@@ -882,6 +948,38 @@
     </div>
   {/if}
 
+  {#if infoOpen && infoTile}
+    <button class="prefs-backdrop" aria-label="Close info" onclick={() => (infoOpen = false)}></button>
+    <div class="prefs info">
+      <button class="prefs-close" title="Close (Esc)" onclick={() => (infoOpen = false)}>✕</button>
+      {#if infoTile.kind === "game"}
+        <h2>{infoTile.game.name}</h2>
+        <dl class="infogrid">
+          <dt>Type</dt><dd>Steam game</dd>
+          <dt>App ID</dt><dd>{infoTile.game.appid}</dd>
+          <dt>Installed in</dt><dd>{infoTile.game.library_path}/steamapps/common/{infoTile.game.installdir}</dd>
+          <dt>Last played</dt><dd>{fmtPlayed(infoTile.game.last_played)}</dd>
+          <dt>Status</dt><dd>{infoTile.game.installed ? "Installed" : "Not installed"}</dd>
+        </dl>
+        <div class="confirm-btns">
+          <button class="cbtn danger" onclick={() => { const t = infoTile; infoOpen = false; if (t) launchTile(t); }}>▶ Launch</button>
+          <button class="cbtn" onclick={() => { if (infoTile?.kind === "game") invoke("game_properties", { appid: infoTile.game.appid }).catch(() => {}); }}>Steam properties</button>
+        </div>
+        <p class="phint">Steam properties opens Steam (for launch options / verify). Esc/◯ close.</p>
+      {:else}
+        <h2>{infoTile.app.name}</h2>
+        <dl class="infogrid">
+          <dt>Category</dt><dd>{infoTile.cat}</dd>
+          <dt>Source</dt><dd>{appSource(infoTile.app)}</dd>
+        </dl>
+        <div class="confirm-btns">
+          <button class="cbtn danger" onclick={() => { const t = infoTile; infoOpen = false; if (t) launchTile(t); }}>▶ Launch</button>
+        </div>
+        <p class="phint">Esc/◯ close · □/F favorite</p>
+      {/if}
+    </div>
+  {/if}
+
   {#if powerOpen}
     <button class="prefs-backdrop" aria-label="Close power menu" onclick={() => (powerOpen = false)}></button>
     <div class="prefs power">
@@ -954,7 +1052,7 @@
       {:else}
         <div class="wstep">
           <h2>You're set! 🎮</h2>
-          <ul class="wfacts"><li><b>← →</b> category · <b>↑ ↓</b> items</li><li><b>Enter / ✕</b> launch · <b>□ / F</b> favorite</li><li><b>△ / A</b> add apps · <b>Start / P</b> settings · <b>/ Select</b> search</li></ul>
+          <ul class="wfacts"><li><b>← →</b> category · <b>↑ ↓</b> items</li><li><b>Enter / ✕</b> launch · <b>□ / F</b> favorite</li><li><b>△ / A</b> add apps · <b>Start / H</b> home · <b>P</b> settings · <b>/ Select</b> search · <b>i / R1</b> info</li></ul>
           <div class="wnav">Press <b>Enter / ✕</b> to start</div>
         </div>
       {/if}
@@ -988,7 +1086,7 @@
 
   {#if status}<div class="toast">{status}</div>{/if}
 
-  <footer>fps {fps} · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> game info · <b>Start/P</b> settings</footer>
+  <footer>fps {fps} · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
 </main>
 
 <style>
@@ -1004,11 +1102,12 @@
     --cw: calc(clamp(4.2rem, 8.5vw, 7rem) * var(--scale));
     --ih: calc(clamp(2.8rem, 5.2vh, 4.4rem) * var(--scale));
   }
-  .xbg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(var(--bg-blur, 0px)) brightness(var(--bg-bright, .82)) saturate(1.12); opacity: 0; transition: opacity .3s ease, filter .15s ease; z-index: 0; }
+  .xbg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(var(--bg-blur, 0px)) brightness(var(--bg-bright, .82)) saturate(1.12); opacity: 0; transition: opacity .3s ease; z-index: 0; }
   .xbg.has { opacity: 1; }
   .xbg.base { z-index: 0; } /* custom image sits under the dynamic overlay */
   /* app icon → blurred, enlarged color wash (the small icon becomes a branded gradient) */
-  .xbg.wash { filter: blur(70px) brightness(var(--bg-bright, .82)) saturate(1.5); transform: scale(1.6); }
+  /* app background is now a cheap dominant-color gradient (no image decode / heavy blur) */
+  .xbg.wash { filter: brightness(var(--bg-bright, .9)) saturate(1.25); }
   /* sharp art; dark only under the item list (left), clear on the right so the art reads */
   .xbg-fade { position: absolute; inset: 0; z-index: 0; background: linear-gradient(90deg, #05070bfa 0%, #05070bf0 26%, #05070b9e 55%, #05070b33 100%), linear-gradient(180deg, #05070b59 0%, transparent 32%, #05070b99 100%); }
   /* solid-color mode: only a light left-edge darken for item legibility, color shows elsewhere */
@@ -1098,6 +1197,9 @@
   .cwheel::-webkit-color-swatch { border: none; border-radius: 4px; }
   .phint { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
 
+  .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
+  .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
+  .infogrid dd { margin: 0; color: #dde5f0; font-size: clamp(12px, 1.3vw, 15px); word-break: break-word; }
   .confirm-btns { display: flex; gap: 12px; justify-content: flex-end; margin: 14px 0 4px; }
   .cbtn { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
   .cbtn:hover { border-color: var(--accent); }
