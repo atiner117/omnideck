@@ -11,6 +11,7 @@ mod library;
 mod steamgriddb;
 
 use serde::Serialize;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::Emitter;
 
 #[derive(Clone, Serialize)]
@@ -20,6 +21,30 @@ struct GamepadEvent {
     value: f32,
     gamepad: String,
     name: String,
+}
+
+/// PID of the most-recently-launched foreground app (PWA/native) that OmniDeck spawned,
+/// or 0 for none. Lets the Guide ("Home") button / a UI action close the launched app and
+/// return to OmniDeck — inside gamescope a launched window stacks on top of us with no other
+/// way back. Steam games use a separate path (gamescope refocuses us when the game exits).
+static CURRENT_CHILD: AtomicU32 = AtomicU32::new(0);
+
+/// Close the current foreground app so gamescope refocuses OmniDeck. Best-effort SIGTERM by
+/// PID; the child's `watch_child` thread reaps it and emits `app-exited`. Returns true if a
+/// running app was signalled.
+fn return_home() -> bool {
+    let pid = CURRENT_CHILD.load(Ordering::SeqCst);
+    if pid == 0 {
+        return false;
+    }
+    // Signal the whole process GROUP (negative pid). Browsers (Brave/Chromium) fork a
+    // persistent main process, so SIGTERM to the single spawned pid can leave a window
+    // behind; the child is spawned as its own group leader (process_group(0) in launch),
+    // so -pid reaches every forked helper. Fall back to the bare pid if that misses.
+    let grp = format!("-{pid}");
+    let _ = std::process::Command::new("kill").args(["-TERM", &grp]).status();
+    let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    true
 }
 
 fn gamepad_loop(handle: tauri::AppHandle) {
@@ -45,6 +70,14 @@ fn gamepad_loop(handle: tauri::AppHandle) {
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
+            // Guide/Home button closes a launched app and returns to OmniDeck. gilrs reads
+            // evdev directly, so this fires even while the launched app holds window focus.
+            if let gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) = &event {
+                if return_home() {
+                    let _ = handle.emit("app-closed", ());
+                    continue; // swallow the press; don't also forward it as a UI event
+                }
+            }
             let (kind, code, value) = match event {
                 gilrs::EventType::ButtonPressed(b, _) => {
                     ("button_pressed".to_string(), format!("{b:?}"), 1.0)
@@ -82,9 +115,13 @@ fn gamepad_loop(handle: tauri::AppHandle) {
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
 /// (Lets the UI show a "now playing" state and know when focus returns.)
 fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: String) {
+    let pid = child.id();
+    CURRENT_CHILD.store(pid, Ordering::SeqCst); // newest launch becomes the "current" app
     let _ = app.emit("app-launched", name.clone());
     std::thread::spawn(move || {
         let _ = child.wait();
+        // Clear only if a newer launch hasn't already replaced us as the current app.
+        let _ = CURRENT_CHILD.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
         let _ = app.emit("app-exited", name);
     });
 }
@@ -315,7 +352,8 @@ fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>
     let mut exec = exec;
     if exec.first().map(|s| s == "BROWSER").unwrap_or(false) {
         let browser = apps::detect_browser().ok_or("no browser found")?;
-        if browser.contains("firefox") {
+        let is_firefox = browser.contains("firefox");
+        if is_firefox {
             for a in exec.iter_mut() {
                 if let Some(url) = a.strip_prefix("--app=") {
                     *a = url.to_string();
@@ -323,10 +361,19 @@ fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>
             }
         }
         exec[0] = browser;
+        // Inside a gamescope session a browser PWA opens windowed and doesn't fill the
+        // screen; ask it to start fullscreen (Firefox uses --kiosk, Chromium --start-fullscreen).
+        if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+            exec.insert(1, if is_firefox { "--kiosk".into() } else { "--start-fullscreen".into() });
+        }
     }
     let (cmd, args) = exec.split_first().ok_or("empty command")?;
+    use std::os::unix::process::CommandExt;
     let child = std::process::Command::new(cmd)
         .args(args)
+        // Own process group so return_home() can SIGTERM the whole group (browsers fork
+        // helpers/persistent processes that would otherwise survive a single-pid kill).
+        .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
     watch_child(app, child, name.unwrap_or_else(|| cmd.clone()));
@@ -429,6 +476,20 @@ fn media_control(action: String) -> Result<(), String> {
 #[tauri::command]
 fn quit(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// Close the currently-foregrounded launched app and return to OmniDeck (UI/keyboard path;
+/// the gamepad Guide button does the same). Returns true if an app was running.
+#[tauri::command]
+fn close_current_app() -> bool {
+    return_home()
+}
+
+/// True when OmniDeck is running as a gamescope session (vs. a window on the desktop). Lets
+/// the UI relabel "Exit OmniDeck" as "Log out" — in a session, quitting returns to the greeter.
+#[tauri::command]
+fn in_gamescope_session() -> bool {
+    std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
 }
 
 /// Fetch missing vertical box art from SteamGridDB (no-op without a configured key). Cached.
@@ -541,6 +602,8 @@ pub fn run() {
             media_now_playing,
             media_control,
             quit,
+            close_current_app,
+            in_gamescope_session,
             power_action,
             app_icon
         ])
@@ -548,6 +611,16 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || gamepad_loop(handle));
             set_steam_game_atom_if_gamescope();
+            // In a gamescope session take the whole output: a windowed (e.g. 1280x720)
+            // toplevel gets scaled/letterboxed by gamescope, so request real fullscreen
+            // and let the webview render at the monitor's native resolution. On the
+            // desktop we stay windowed (this only triggers inside gamescope).
+            if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_fullscreen(true);
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

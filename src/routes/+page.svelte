@@ -89,6 +89,7 @@
 
   let cap = $state<any>(null);
   let cfg = $state<any>(null);
+  let inSession = $state(false); // true when running as a gamescope session (vs desktop window)
   let accent = $state("#b14cff");
   let clock = $state("");
   // Now Playing: launch-tracked entries (games + non-media apps), each cleared when the
@@ -373,7 +374,7 @@
     if (!cfg) return;
     const s = { ...cfg.settings };
     if (key === "recents") s.dashboard_recents = clamp((s.dashboard_recents ?? 8) + dir, 0, 20);
-    else if (key === "custom") s.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 2.6));
+    else if (key === "custom") s.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 3.5));
     else if (key === "blur") s.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
     else if (key === "bright") s.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
     else if (key === "soundvol") { s.sound_volume = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); s.sound = s.sound_volume > 0; }
@@ -387,7 +388,7 @@
   // --- numeric settings: also typeable via a real <input> while editing ---
   const NUM_META: Record<string, { get: () => number; lo: number; hi: number; step: number; int?: boolean }> = {
     recents: { get: () => cfg?.settings?.dashboard_recents ?? 8, lo: 0, hi: 20, step: 1, int: true },
-    custom: { get: () => cfg?.settings?.ui_scale_custom ?? 1.6, lo: 0.8, hi: 2.6, step: 0.05 },
+    custom: { get: () => cfg?.settings?.ui_scale_custom ?? 1.6, lo: 0.8, hi: 3.5, step: 0.05 },
     blur: { get: () => cfg?.settings?.bg_blur ?? 0, lo: 0, hi: 24, step: 1, int: true },
     bright: { get: () => cfg?.settings?.bg_brightness ?? 0.82, lo: 0.3, hi: 1.0, step: 0.05 },
     soundvol: { get: () => cfg?.settings?.sound_volume ?? 0.6, lo: 0, hi: 1, step: 0.05 },
@@ -709,6 +710,7 @@
   onMount(() => {
     window.addEventListener("keydown", onKey);
     invoke("get_capability").then((c) => (cap = c)).catch(() => {});
+    invoke<boolean>("in_gamescope_session").then((v) => (inSession = !!v)).catch(() => {});
     invoke<any>("get_catalog").then((c) => (catalog = c ?? [])).catch(() => {});
     invoke<any>("get_config")
       .then((c) => {
@@ -989,7 +991,7 @@
         {#each POWER as p, i}
           <div class="crow" class:focused={i === powerFocus} onmouseenter={() => (powerFocus = i)} onclick={() => { powerFocus = i; powerActivate(); }}>
             <span class="cicon" style="background:#22304a">{p.icon}</span>
-            <span class="cname">{p.label}</span>
+            <span class="cname">{p.key === "exit" && inSession ? "Log out" : p.label}</span>
           </div>
         {/each}
       </div>
@@ -1078,6 +1080,7 @@
               <button class="np-c" title="Next" onclick={() => mediaControl("next")}>⏭</button>
             </span>
           {/if}
+          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (or press the Guide button)" onclick={() => invoke("close_current_app")}>↩</button>{/if}
           {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" onclick={() => (nowList = nowList.filter((x) => x.name !== c.name))}>✕</button>{/if}
         </div>
       {/each}
@@ -1130,7 +1133,10 @@
   .xclabel { position: absolute; top: calc(4.2rem * var(--scale)); white-space: nowrap; color: #fff; font-weight: 700; font-size: calc(clamp(14px, 1.5vw, 20px) * var(--scale)); }
 
   /* vertical item cascade, focused item parked at the cross line */
-  .xitems-wrap { position: absolute; top: 34%; left: 30vw; right: 4vw; bottom: 0; overflow: hidden; }
+  /* Anchor the list below the category label using the SAME rem*scale unit the label
+     uses (.xclabel sits at 4.2rem*scale), so they never collide on short viewports
+     (720p, or a 1280x800 handheld). A bare 34% clipped the top icon at small heights. */
+  .xitems-wrap { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; bottom: 0; overflow: hidden; }
   .xitems { display: flex; flex-direction: column; gap: 0; will-change: transform; transition: transform .12s cubic-bezier(.2,.7,.2,1); }
   .xitem { height: var(--ih); display: flex; align-items: center; gap: 1rem; background: none; border: 0; color: #c2cbdb; cursor: pointer; text-align: left; opacity: .42; transition: opacity .12s, transform .12s; padding: 0 10px; border-radius: 12px; }
   .xitem.near { opacity: .72; }
@@ -1150,7 +1156,7 @@
   .numedit { width: 5em; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
   .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
   .numedit:focus, .textedit:focus { outline: none; }
-  .xempty { position: absolute; top: 34%; left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
+  .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
 
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
