@@ -1,0 +1,41 @@
+# Maintainer: atiner <atiner@comfortwindows.com>
+# AUR package — builds OmniDeck from source. Set the real repo URL + tag before publishing.
+pkgname=omnideck
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="10-foot, controller-first media & game launcher for Linux"
+arch=('x86_64')
+url="https://github.com/atiner/omnideck"
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3')
+optdepends=('gamescope: 10-foot gamescope session mode'
+            'gamescope-session-git: boot OmniDeck as a session from your display manager'
+            'cage: media-kiosk tier on hosts without a usable GPU'
+            'steam: Steam library scanning + launching'
+            'xorg-xprop: STEAM_GAME atom handling inside the gamescope session')
+makedepends=('rust' 'cargo' 'bun-bin' 'nodejs')
+source=("git+https://github.com/atiner/omnideck.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname"
+  bun install --frozen-lockfile
+  bun run tauri build --no-bundle
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm755 "src-tauri/target/release/omnideck" "$pkgdir/usr/bin/omnideck"
+  install -Dm644 "src-tauri/icons/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/omnideck.png"
+  install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/omnideck.desktop" <<'EOF'
+[Desktop Entry]
+Name=OmniDeck
+Comment=10-foot media & game launcher
+Exec=omnideck
+Icon=omnideck
+Type=Application
+Categories=Game;AudioVideo;
+EOF
+}

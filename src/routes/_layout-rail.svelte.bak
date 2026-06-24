@@ -1,0 +1,580 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { invoke } from "@tauri-apps/api/core";
+
+  type App = { id: string; name: string; icon: string; exec: string[]; accent: string; category?: string };
+  type Game = {
+    appid: string; name: string; installed: boolean; is_tool: boolean; last_played?: number;
+    art_box?: string | null; art_header?: string | null; art_hero?: string | null; art_logo?: string | null;
+  };
+  type Tile =
+    | { kind: "game"; id: string; cat: string; game: Game }
+    | { kind: "app"; id: string; cat: string; app: App };
+
+  const CATEGORIES = [
+    { id: "dashboard", label: "Dashboard", icon: "⭐" },
+    { id: "games", label: "Games", icon: "🎮" },
+    { id: "video", label: "Movies & TV", icon: "🎬" },
+    { id: "music", label: "Music", icon: "🎵" },
+    { id: "apps", label: "Apps", icon: "🧩" },
+    { id: "settings", label: "Settings", icon: "⚙" },
+  ];
+  const ACCENTS = ["#4cc2ff", "#b14cff", "#6ee7a8", "#ff8a3d", "#ff5d6c", "#ffd166"];
+  const SETTINGS_ROWS = 4;
+
+  let cap = $state<any>(null);
+  let cfg = $state<any>(null);
+  let cols = $state(6);
+  let accent = $state("#b14cff");
+  let clock = $state("");
+
+  let allGames = $state<Game[]>([]);
+  let favorites = $state<string[]>([]);
+  let catSel = $state(1); // start on Games (Dashboard may be empty on first run)
+  let zone = $state<"rail" | "content">("rail");
+  let focus = $state(0);
+  let status = $state("Loading…");
+  let fps = $state(0);
+  let lastInput = $state("—");
+
+  let art = $state<Record<string, string>>({});
+  let logos = $state<Record<string, string>>({});
+  let gridBox = $state<Record<string, boolean>>({});
+  let catalog = $state<App[]>([]);
+
+  let apps = $derived<App[]>((cfg?.apps ?? []) as App[]);
+  let games = $derived(
+    allGames
+      .filter((g) => g.installed && (cfg?.settings?.show_runtimes ? true : !g.is_tool))
+      .sort((a, b) =>
+        cfg?.settings?.sort === "recent"
+          ? (b.last_played ?? 0) - (a.last_played ?? 0)
+          : a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+      ),
+  );
+  let gameTiles = $derived<Tile[]>(games.map((g) => ({ kind: "game", id: "steam:" + g.appid, cat: "games", game: g })));
+  // Back-fill category for apps saved before categories existed (match the catalog by id).
+  function catOf(a: App): string {
+    if (a.category) return a.category;
+    const m = catalog.find((c) => c.id === a.id);
+    if (m?.category) return m.category;
+    if (a.id === "steam-bpm" || a.id === "heroic") return "games";
+    if (a.id === "jellyfin") return "video";
+    return "apps";
+  }
+  let appTiles = $derived<Tile[]>(apps.map((a) => ({ kind: "app", id: a.id, cat: catOf(a), app: a })));
+  let allTiles = $derived<Tile[]>([...gameTiles, ...appTiles]);
+  let catId = $derived(CATEGORIES[catSel].id);
+  let contentTiles = $derived.by<Tile[]>(() => {
+    switch (catId) {
+      case "dashboard": return allTiles.filter((t) => favorites.includes(t.id));
+      case "games": return allTiles.filter((t) => t.cat === "games");
+      case "video": return appTiles.filter((t) => t.cat === "video");
+      case "music": return appTiles.filter((t) => t.cat === "music");
+      case "apps": return appTiles.filter((t) => t.cat === "apps");
+      default: return [];
+    }
+  });
+
+  function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+  let lastNav = 0;
+  function navGate() {
+    const now = performance.now();
+    if (now - lastNav < 130) return false;
+    lastNav = now;
+    return true;
+  }
+  function scrollFocus() {
+    queueMicrotask(() =>
+      document.querySelector(`[data-idx="${focus}"]`)?.scrollIntoView({ block: "nearest", behavior: "auto" }),
+    );
+  }
+
+  async function loadArt(g: Game) {
+    if (!art[g.appid]) {
+      const p = g.art_box || g.art_header || g.art_hero;
+      if (p) {
+        try { const d = await invoke<string | null>("get_art", { path: p }); if (d) art = { ...art, [g.appid]: d }; } catch {}
+      }
+    }
+    if (!g.art_box && !gridBox[g.appid] && cfg?.settings?.steamgriddb_key) {
+      try {
+        const d = await invoke<string | null>("grid_art", { appid: g.appid });
+        if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; }
+      } catch {}
+    }
+    if (!g.art_box && !gridBox[g.appid] && !logos[g.appid] && g.art_logo) {
+      try { const d = await invoke<string | null>("get_art", { path: g.art_logo }); if (d) logos = { ...logos, [g.appid]: d }; } catch {}
+    }
+  }
+
+  // ---- navigation ----
+  function moveRail(d: number) { catSel = clamp(catSel + d, 0, CATEGORIES.length - 1); focus = 0; }
+  function enterContent() {
+    if (catId === "settings") { zone = "content"; focus = 0; return; }
+    if (contentTiles.length) { zone = "content"; focus = 0; scrollFocus(); }
+  }
+  function moveContent(dx: number, dy: number) {
+    if (catId === "settings") {
+      if (dy !== 0) focus = clamp(focus + dy, 0, SETTINGS_ROWS - 1);
+      else if (dx !== 0) settingsChange(focus, dx);
+      return;
+    }
+    if (dx < 0 && focus % cols === 0) { zone = "rail"; return; } // left edge → back to rail
+    const n = contentTiles.length;
+    if (!n) { zone = "rail"; return; }
+    focus = clamp(focus + dx + dy * cols, 0, n - 1);
+    scrollFocus();
+  }
+  function activateContent() {
+    if (catId === "settings") { settingsChange(focus, 1); return; }
+    const t = contentTiles[focus];
+    if (t) launchTile(t);
+  }
+  async function launchTile(t: Tile) {
+    try {
+      if (t.kind === "game") {
+        status = `▶ Launching ${t.game.name}…`;
+        await invoke("launch_game", { appid: t.game.appid, name: t.game.name });
+      } else {
+        status = `▶ ${t.app.name}…`;
+        await invoke("launch_command", { exec: t.app.exec, name: t.app.name });
+      }
+    } catch (e) { status = `launch error: ${e}`; return; }
+    setTimeout(() => (status = ""), 3500); // transient confirmation (forking apps can't be tracked)
+  }
+  function gotoSettings() { catSel = CATEGORIES.findIndex((c) => c.id === "settings"); zone = "content"; focus = 0; }
+
+  async function settingsChange(row: number, dir: number) {
+    if (!cfg) return;
+    const s = { ...cfg.settings };
+    if (row === 0) s.grid_columns = clamp((s.grid_columns ?? 6) + dir, 3, 10);
+    else if (row === 1) s.sort = s.sort === "recent" ? "alpha" : "recent";
+    else if (row === 2) s.show_runtimes = !s.show_runtimes;
+    else if (row === 3) {
+      const cur = ACCENTS.indexOf(s.accent ?? "#4cc2ff");
+      s.accent = ACCENTS[((cur < 0 ? 0 : cur) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length];
+    }
+    cfg = { ...cfg, settings: s };
+    cols = s.grid_columns;
+    accent = s.accent ?? "#4cc2ff";
+    invoke("save_settings", { settings: s }).catch(() => {});
+  }
+
+  // ---- favorites ----
+  function isFav(id: string) { return favorites.includes(id); }
+  function favCurrent() {
+    const t = contentTiles[focus];
+    if (!t) return;
+    favorites = isFav(t.id) ? favorites.filter((x) => x !== t.id) : [...favorites, t.id];
+    invoke("save_favorites", { favorites }).catch(() => {});
+  }
+
+  // ---- add-apps catalog ----
+  let catalogOpen = $state(false);
+  let catFocus = $state(0);
+  function toggleCatalog() { catalogOpen = !catalogOpen; catFocus = 0; }
+  function catMove(d: number) {
+    catFocus = clamp(catFocus + d, 0, catalog.length - 1);
+    queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" }));
+  }
+  function isAdded(id: string) { return apps.some((a) => a.id === id); }
+  async function catToggle(i: number) {
+    const entry = catalog[i];
+    if (!entry || !cfg) return;
+    const next = isAdded(entry.id) ? apps.filter((a) => a.id !== entry.id) : [...apps, entry];
+    cfg = { ...cfg, apps: next };
+    try { await invoke("save_apps", { apps: next }); } catch {}
+  }
+
+  // ---- first-run wizard ----
+  let wizardActive = $state(false);
+  let wizardStep = $state(0);
+  async function finishWizard() {
+    wizardActive = false;
+    if (!cfg) return;
+    const s = { ...cfg.settings, onboarded: true };
+    cfg = { ...cfg, settings: s };
+    try { await invoke("save_settings", { settings: s }); } catch {}
+  }
+  function wizardNext() { if (wizardStep >= 2) finishWizard(); else wizardStep++; }
+  function wizardPrev() { if (wizardStep > 0) wizardStep--; }
+  function wizardAccent(dir: number) {
+    if (!cfg) return;
+    const cur = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff");
+    const a = ACCENTS[((cur < 0 ? 0 : cur) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length];
+    cfg = { ...cfg, settings: { ...cfg.settings, accent: a } };
+    accent = a;
+    invoke("save_settings", { settings: cfg.settings }).catch(() => {});
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Escape"].includes(e.key)) e.preventDefault();
+    if (wizardActive) {
+      if (e.key === "Enter") wizardNext();
+      else if (e.key === "Escape") wizardPrev();
+      else if (e.key === "ArrowLeft" && wizardStep === 1 && navGate()) wizardAccent(-1);
+      else if (e.key === "ArrowRight" && wizardStep === 1 && navGate()) wizardAccent(1);
+      return;
+    }
+    if (e.key === "a" || e.key === "A") { toggleCatalog(); return; }
+    if (catalogOpen) {
+      if (e.key === "ArrowUp" && navGate()) catMove(-1);
+      else if (e.key === "ArrowDown" && navGate()) catMove(1);
+      else if (e.key === "Enter") catToggle(catFocus);
+      else if (e.key === "Escape") catalogOpen = false;
+      return;
+    }
+    if (e.key === "p" || e.key === "P") { gotoSettings(); return; }
+    if (e.key === "f" || e.key === "F") { if (zone === "content") favCurrent(); return; }
+    if (zone === "rail") {
+      if (e.key === "ArrowUp" && navGate()) moveRail(-1);
+      else if (e.key === "ArrowDown" && navGate()) moveRail(1);
+      else if (e.key === "ArrowRight" || e.key === "Enter") enterContent();
+    } else {
+      if (e.key === "ArrowUp" && navGate()) moveContent(0, -1);
+      else if (e.key === "ArrowDown" && navGate()) moveContent(0, 1);
+      else if (e.key === "ArrowLeft" && navGate()) moveContent(-1, 0);
+      else if (e.key === "ArrowRight" && navGate()) moveContent(1, 0);
+      else if (e.key === "Enter") activateContent();
+      else if (e.key === "Escape") zone = "rail";
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener("keydown", onKey);
+    invoke("get_capability").then((c) => (cap = c)).catch(() => {});
+    invoke<any>("get_catalog").then((c) => (catalog = c ?? [])).catch(() => {});
+    invoke<any>("get_config")
+      .then((c) => {
+        cfg = c;
+        cols = c.settings?.grid_columns ?? 6;
+        accent = c.settings?.accent ?? "#b14cff";
+        favorites = c.favorites ?? [];
+        if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
+      })
+      .catch(() => {})
+      .finally(() => {
+        invoke<any>("get_library")
+          .then((lib) => {
+            allGames = lib.games ?? [];
+            status = "";
+            allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt);
+          })
+          .catch((e) => (status = `library error: ${e}`));
+      });
+
+    let raf = 0, acc = 0, timer = performance.now();
+    const loop = (t: number) => {
+      acc++;
+      if (t - timer >= 500) {
+        fps = Math.round((acc * 1000) / (t - timer)); acc = 0; timer = t;
+        clock = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+
+    const off: Array<() => void> = [];
+    listen("gamepad-event", (e: any) => {
+      const p = e.payload as { kind: string; code: string; value: number };
+      if (p.kind === "button_pressed") {
+        lastInput = p.code;
+        if (wizardActive) {
+          if (p.code === "South") wizardNext();
+          else if (p.code === "East") wizardPrev();
+          else if (p.code === "DPadLeft" && wizardStep === 1 && navGate()) wizardAccent(-1);
+          else if (p.code === "DPadRight" && wizardStep === 1 && navGate()) wizardAccent(1);
+          return;
+        }
+        if (p.code === "North") { toggleCatalog(); return; }
+        if (catalogOpen) {
+          if (p.code === "DPadUp" && navGate()) catMove(-1);
+          else if (p.code === "DPadDown" && navGate()) catMove(1);
+          else if (p.code === "South") catToggle(catFocus);
+          else if (p.code === "East") catalogOpen = false;
+          return;
+        }
+        if (p.code === "Start" || p.code === "Select") { gotoSettings(); return; }
+        if (p.code === "West") { if (zone === "content") favCurrent(); return; }
+        if (zone === "rail") {
+          if (p.code === "DPadUp" && navGate()) moveRail(-1);
+          else if (p.code === "DPadDown" && navGate()) moveRail(1);
+          else if (p.code === "DPadRight" || p.code === "South") enterContent();
+        } else {
+          if (p.code === "DPadUp" && navGate()) moveContent(0, -1);
+          else if (p.code === "DPadDown" && navGate()) moveContent(0, 1);
+          else if (p.code === "DPadLeft" && navGate()) moveContent(-1, 0);
+          else if (p.code === "DPadRight" && navGate()) moveContent(1, 0);
+          else if (p.code === "South") activateContent();
+          else if (p.code === "East") zone = "rail";
+        }
+      } else if (p.kind === "axis_changed" && (p.code === "LeftStickX" || p.code === "LeftStickY")) {
+        if (wizardActive || catalogOpen) return;
+        if (Math.abs(p.value) > 0.6 && navGate()) {
+          const dx = p.code === "LeftStickX" ? (p.value > 0 ? 1 : -1) : 0;
+          const dy = p.code === "LeftStickY" ? (p.value > 0 ? -1 : 1) : 0;
+          if (zone === "rail") { if (dy) moveRail(dy); else if (dx > 0) enterContent(); }
+          else moveContent(dx, dy);
+        }
+      }
+    }).then((u) => off.push(u));
+
+    return () => { window.removeEventListener("keydown", onKey); cancelAnimationFrame(raf); off.forEach((u) => u()); };
+  });
+
+  // keep content focus in range when the category/content changes
+  $effect(() => { if (focus >= contentTiles.length && contentTiles.length) focus = contentTiles.length - 1; });
+</script>
+
+<main style="--accent:{accent}">
+  <header>
+    <div class="brand">OMNIDECK</div>
+    <div class="meta">
+      <span class="clock">{clock}</span>
+      {#if cap}<span class="badge">{cap.tier}</span>{/if}
+      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)">＋</button>
+      <button class="badge gear" onclick={gotoSettings} title="Settings (Start / P)">⚙</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- category rail -->
+    <nav class="rail" class:active={zone === "rail"}>
+      {#each CATEGORIES as c, i}
+        <button
+          class="railitem"
+          class:sel={i === catSel}
+          class:focused={i === catSel && zone === "rail"}
+          onclick={() => { catSel = i; if (c.id === "settings") { zone = "content"; focus = 0; } else { zone = "rail"; } }}
+          onmouseenter={() => (catSel = i)}
+        >
+          <span class="ricon">{c.icon}</span><span class="rlabel">{c.label}</span>
+        </button>
+      {/each}
+    </nav>
+
+    <!-- content -->
+    <section class="content">
+      {#if catId === "settings" && cfg}
+        <h2 class="ctitle">Settings</h2>
+        <div class="settings">
+          {#each [["Grid columns", cfg.settings.grid_columns], ["Sort", cfg.settings.sort], ["Show runtimes", cfg.settings.show_runtimes ? "on" : "off"], ["Accent", ""]] as row, r}
+            <div class="srow" class:focused={zone === "content" && focus === r} onmouseenter={() => { zone = "content"; focus = r; }}>
+              <span class="slabel">{row[0]}</span>
+              <span class="sval">
+                <button class="arw" onclick={() => settingsChange(r, -1)}>◀</button>
+                {#if r === 3}<span class="swatch" style="background:{accent}"></span>{:else}{row[1]}{/if}
+                <button class="arw" onclick={() => settingsChange(r, 1)}>▶</button>
+              </span>
+            </div>
+          {/each}
+          <p class="ppath">Full config: {cfg.config_path}</p>
+        </div>
+      {:else}
+        <h2 class="ctitle">{CATEGORIES[catSel].label} <span class="ccount">{contentTiles.length}</span></h2>
+        {#if !contentTiles.length}
+          <div class="empty">
+            {#if catId === "dashboard"}Nothing pinned yet — press <b>□ / F</b> on any tile to add it here.
+            {:else if catId === "games"}No games found.
+            {:else}Nothing here yet — press <b>△ / A</b> to add apps.{/if}
+          </div>
+        {:else}
+          <div class="grid" style="--cols:{cols}">
+            {#each contentTiles as t, i (t.id)}
+              <button
+                class="tile"
+                class:app={t.kind === "app"}
+                class:focused={zone === "content" && i === focus}
+                data-idx={i}
+                style={t.kind === "app" ? `background:${t.app.accent}` : ""}
+                onclick={() => { zone = "content"; focus = i; launchTile(t); }}
+                onmouseenter={() => { zone = "content"; focus = i; }}
+              >
+                {#if isFav(t.id)}<span class="favstar">⭐</span>{/if}
+                {#if t.kind === "app"}
+                  <span class="appicon">{t.app.icon}</span>
+                  <span class="tname applabel">{t.app.name}</span>
+                {:else}
+                  {@const g = t.game}
+                  {#if art[g.appid]}
+                    <img src={art[g.appid]} alt={g.name} class:hero={!g.art_box && !gridBox[g.appid]} />
+                    {#if !g.art_box && !gridBox[g.appid]}
+                      <span class="overlay">
+                        {#if logos[g.appid]}<img class="logo" src={logos[g.appid]} alt="" />{:else}<span class="tname">{g.name}</span>{/if}
+                      </span>
+                    {/if}
+                  {:else}
+                    <span class="tname placeholder">{g.name}</span>
+                  {/if}
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      {/if}
+    </section>
+  </div>
+
+  {#if catalogOpen}
+    <button class="prefs-backdrop" aria-label="Close add apps" onclick={() => (catalogOpen = false)}></button>
+    <div class="prefs catalog">
+      <h2>Add apps &amp; media</h2>
+      <div class="catlist">
+        {#each catalog as c, i (c.id)}
+          <div class="crow" class:focused={i === catFocus} data-cat={i} onmouseenter={() => (catFocus = i)} onclick={() => { catFocus = i; catToggle(i); }}>
+            <span class="cicon" style="background:{c.accent}">{c.icon}</span>
+            <span class="cname">{c.name}</span>
+            <span class="ccat">{c.category}</span>
+            <span class="cstate" class:on={isAdded(c.id)}>{isAdded(c.id) ? "✓ Added" : "+ Add"}</span>
+          </div>
+        {/each}
+      </div>
+      <p class="phint">↑↓ select · Enter / ✕ toggle · Esc / ◯ close</p>
+    </div>
+  {/if}
+
+  {#if wizardActive && cfg}
+    <div class="wizard">
+      {#if wizardStep === 0}
+        <div class="wstep">
+          <div class="wlogo">OMNIDECK</div>
+          <h2>Welcome 👋</h2>
+          <p class="wlead">Your living-room launcher for games, streaming, music, and your own media — one grid, one controller.</p>
+          <ul class="wfacts">
+            <li>Mode detected: <b>{cap?.tier ?? "…"}</b></li>
+            <li>Games found: <b>{games.length}</b></li>
+            <li>Apps you can add: <b>{catalog.length}</b></li>
+          </ul>
+          <div class="wnav">Press <b>Enter / ✕</b> to continue</div>
+        </div>
+      {:else if wizardStep === 1}
+        <div class="wstep">
+          <h2>Pick a theme</h2>
+          <p class="wlead">Choose an accent color — change it anytime in Settings.</p>
+          <div class="wswatches">
+            {#each ACCENTS as a}<span class="wsw" class:sel={cfg.settings.accent === a} style="background:{a}"></span>{/each}
+          </div>
+          <div class="wnav"><b>◀ ▶</b> change · <b>Enter / ✕</b> next · <b>Esc / ◯</b> back</div>
+        </div>
+      {:else}
+        <div class="wstep">
+          <h2>You're set! 🎮</h2>
+          <ul class="wfacts">
+            <li><b>Left rail</b> — pick a category (Games, Movies, Music…)</li>
+            <li><b>Enter / ✕</b> — launch · <b>□ / F</b> — favorite (Dashboard)</li>
+            <li><b>△ / A</b> — add apps · <b>Start / P</b> — settings</li>
+          </ul>
+          <div class="wnav">Press <b>Enter / ✕</b> to start</div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if status}<div class="toast">{status}</div>{/if}
+
+  <footer>
+    fps {fps} · {cap?.tier ?? "?"} · {lastInput} ·
+    <b>↑↓</b> nav · <b>← →</b> rail/grid · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>Start/P</b> settings
+  </footer>
+</main>
+
+<style>
+  :global(html), :global(body) { margin: 0; height: 100%; }
+  :global(body) { background: #07090d; overflow: hidden; }
+
+  main {
+    height: 100vh; box-sizing: border-box; display: flex; flex-direction: column;
+    color: #e8edf4; font-family: "Inter", system-ui, sans-serif;
+    background: radial-gradient(1400px 700px at 60% -15%, #16213c 0%, #07090d 55%);
+  }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 1.8vh 2.4vw 1vh; }
+  .brand { font-size: clamp(20px, 2.4vw, 36px); font-weight: 800; letter-spacing: 3px; color: var(--accent); }
+  .meta { display: flex; gap: 10px; align-items: center; }
+  .clock { color: #cdd7e6; font-weight: 700; font-variant-numeric: tabular-nums; font-size: clamp(13px, 1.5vw, 19px); margin-right: 4px; }
+  .badge { background: #121a2b; border: 1px solid #25324d; border-radius: 999px; padding: 5px 14px; color: #9fb0c8; font-size: clamp(11px, 1.2vw, 14px); }
+  .gear { cursor: pointer; font-size: 1.05em; line-height: 1; }
+
+  .layout { flex: 1; display: flex; min-height: 0; padding: 0 2.4vw 1vh; gap: 1.6vw; }
+
+  .rail {
+    width: clamp(180px, 19vw, 280px); flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
+    padding: 6px; overflow-y: auto;
+  }
+  .railitem {
+    display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 14px;
+    border: 2px solid transparent; background: none; color: #aeb9cc; cursor: pointer; text-align: left;
+    font-size: clamp(15px, 1.6vw, 21px); transition: background .1s, color .1s;
+  }
+  .railitem .ricon { font-size: 1.3em; width: 1.4em; text-align: center; }
+  .railitem.sel { color: #fff; background: #131c30; }
+  .railitem.focused { border-color: var(--accent); background: #1b2540; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .ctitle { margin: 2px 4px 10px; font-size: clamp(18px, 2vw, 28px); font-weight: 700; }
+  .ccount { color: #6b7790; font-weight: 600; font-size: .6em; vertical-align: middle; margin-left: 6px; }
+  .empty { flex: 1; display: grid; place-items: center; color: #7e8aa0; font-size: clamp(15px, 1.8vw, 22px); text-align: center; padding: 0 10%; }
+  .empty b { color: var(--accent); }
+
+  .grid {
+    flex: 1; overflow-y: auto; padding: 2px 2px 2vh; display: grid;
+    grid-template-columns: repeat(var(--cols), 1fr); gap: 1.2vw; align-content: start;
+  }
+  .tile {
+    position: relative; aspect-ratio: 2 / 3; border-radius: 14px; overflow: hidden;
+    border: 3px solid transparent; background: #121a2b; padding: 0; cursor: pointer;
+    transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+  }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile img.hero { object-position: center; filter: saturate(1.05); }
+  .tile.focused { transform: scale(1.06); border-color: var(--accent); z-index: 2; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 38%, transparent), 0 14px 40px #000a; }
+  .tile.app { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  .appicon { font-size: clamp(30px, 4.4vw, 64px); line-height: 1; }
+  .applabel { font-size: clamp(12px, 1.3vw, 18px); }
+  .favstar { position: absolute; top: 6px; right: 8px; font-size: clamp(13px, 1.3vw, 18px); filter: drop-shadow(0 1px 3px #000); z-index: 3; }
+  .overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding: 10px; background: linear-gradient(180deg, #0000 35%, #000b 100%); }
+  .overlay .logo { width: 78%; height: auto; max-height: 55%; object-fit: contain; }
+  .tname { font-size: clamp(12px, 1.1vw, 15px); font-weight: 700; text-align: center; text-shadow: 0 2px 6px #000; line-height: 1.2; }
+  .placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 10px; color: #93a0b6; }
+
+  .settings { max-width: 620px; }
+  .srow { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-radius: 12px; border: 2px solid transparent; }
+  .srow.focused { background: #1b2540; border-color: var(--accent); }
+  .slabel { font-size: clamp(15px, 1.6vw, 20px); }
+  .sval { display: flex; align-items: center; gap: 14px; min-width: 150px; justify-content: flex-end; font-weight: 700; font-size: clamp(15px, 1.6vw, 20px); }
+  .swatch { width: 30px; height: 18px; border-radius: 5px; display: inline-block; border: 1px solid #ffffff33; }
+  .arw { background: none; border: 0; color: var(--accent); font-size: 1.1em; cursor: pointer; padding: 0 4px; }
+  .ppath { color: #5b6678; font-size: clamp(11px, 1.1vw, 13px); margin-top: 16px; word-break: break-all; }
+
+  .toast { position: fixed; bottom: 8vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
+
+  .prefs-backdrop { position: fixed; inset: 0; background: rgba(4,6,10,.6); border: 0; padding: 0; cursor: pointer; z-index: 10; }
+  .prefs { position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(620px, 92vw); background: #121826; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 18px; padding: 22px 26px; box-shadow: 0 30px 80px #000c; display: flex; flex-direction: column; gap: 4px; }
+  .prefs h2 { margin: 0 0 10px; font-size: clamp(20px, 2.2vw, 26px); }
+  .catlist { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+  .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; }
+  .crow.focused { background: #1b2540; border-color: var(--accent); }
+  .cicon { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; font-size: 20px; flex: 0 0 auto; }
+  .cname { flex: 1; font-size: clamp(14px, 1.5vw, 18px); font-weight: 600; }
+  .ccat { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 1px; }
+  .cstate { color: #7e8aa0; font-weight: 700; font-size: clamp(12px, 1.3vw, 15px); min-width: 72px; text-align: right; }
+  .cstate.on { color: #6ee7a8; }
+  .phint { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
+
+  .wizard { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: radial-gradient(1200px 800px at 50% 30%, #1a2236 0%, #05070b 70%); }
+  .wstep { width: min(640px, 90vw); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 32px; }
+  .wlogo { font-size: clamp(26px, 3.4vw, 48px); font-weight: 800; letter-spacing: 4px; color: var(--accent); }
+  .wstep h2 { margin: 0; font-size: clamp(26px, 3.4vw, 44px); }
+  .wlead { margin: 0; color: #aab6c9; font-size: clamp(15px, 1.7vw, 21px); max-width: 34em; line-height: 1.5; }
+  .wfacts { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 8px; color: #cdd7e6; font-size: clamp(14px, 1.6vw, 20px); }
+  .wfacts b { color: #fff; }
+  .wswatches { display: flex; gap: 16px; margin: 8px 0; }
+  .wsw { width: 56px; height: 56px; border-radius: 14px; border: 3px solid transparent; box-shadow: 0 6px 20px #0008; }
+  .wsw.sel { border-color: #fff; transform: scale(1.12); }
+  .wnav { margin-top: 14px; color: #7e8aa0; font-size: clamp(13px, 1.4vw, 17px); }
+  .wnav b { color: var(--accent); }
+
+  footer { padding: 7px 2.4vw; color: #5b6678; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e; background: #07090d; }
+  footer b { color: #93a0b6; font-weight: 600; }
+</style>

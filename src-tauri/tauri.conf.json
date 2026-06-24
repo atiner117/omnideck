@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "omnideck",
+  "version": "0.1.0",
+  "identifier": "com.omnideck.launcher",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "omnideck",
+        "width": 1280,
+        "height": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Game",
+    "shortDescription": "10-foot media & game launcher",
+    "longDescription": "OmniDeck is a controller-first, 10-foot launcher for Linux that unifies games, streaming, music, and your own media in one grid — easy for the living room, capable on the desktop.",
+    "publisher": "OmniDeck contributors",
+    "homepage": "https://github.com/atiner/omnideck",
+    "license": "GPL-3.0-or-later",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
