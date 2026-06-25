@@ -75,18 +75,38 @@ fn google_url(domain: &str) -> String {
     format!("https://www.google.com/s2/favicons?domain={domain}&sz=128")
 }
 
+/// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy
+/// response (content-length can be absent or lie, so we cap the actual byte stream).
+async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
+    let mut resp = reqwest::get(url).await.ok()?;
+    let mut buf = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if buf.len() + chunk.len() > max {
+                    return None;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(_) => return None,
+        }
+    }
+    Some(buf)
+}
+
 /// GET an icon URL; Some(bytes) only if the body is a recognized image that isn't a known
 /// placeholder. Google serves a 16x16 globe for unknown domains (caught by too_small), and
 /// DuckDuckGo serves a fixed 1478-byte 48x48 generic for domains it doesn't have — rejected
 /// here so unknown apps fall through to their real favicon or the emoji instead.
 async fn fetch_image(url: &str) -> Option<Vec<u8>> {
-    let bytes = reqwest::get(url).await.ok()?.bytes().await.ok()?;
+    let bytes = fetch_capped(url, 4 * 1024 * 1024).await?; // favicons are KB; 4 MiB is plenty
     let is_ddg = url.contains("icons.duckduckgo.com");
     if is_ddg && bytes.len() == 1478 {
         return None; // DuckDuckGo's generic "unknown domain" fallback
     }
     if bytes.len() >= 100 && sniff(&bytes).is_some() && !too_small(&bytes) {
-        Some(bytes.to_vec())
+        Some(bytes)
     } else {
         None
     }

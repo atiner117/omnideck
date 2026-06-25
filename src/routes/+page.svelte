@@ -133,6 +133,7 @@
   let iconColor = $state<Record<string, string>>({}); // dominant "r,g,b" per fetched icon (app bg gradient)
   let searchEngineIcon = $state(""); // favicon of the configured web-search provider
   const iconTried = new Set<string>();
+  const iconInflight = new Set<string>(); // ids with an in-flight fetch (avoid duplicate IPC calls)
   // native apps with no launch URL but a known site to pull an icon from
   const ICON_DOMAIN: Record<string, string> = {
     jellyfin: "jellyfin.org", "jellyfin-mp": "jellyfin.org",
@@ -161,10 +162,18 @@
     return null;
   }
   async function loadAppIcon(a: App) {
-    if (appIcons[a.id] || iconTried.has(a.id)) return;
+    if (appIcons[a.id] || iconTried.has(a.id) || iconInflight.has(a.id)) return;
     const url = iconSource(a); if (!url) return;
-    iconTried.add(a.id);
-    try { const d = await invoke<string | null>("app_icon", { url }); if (d) { appIcons = { ...appIcons, [a.id]: d }; computeIconBg(a.id, d, a.accent); } } catch {}
+    iconInflight.add(a.id);
+    try {
+      const d = await invoke<string | null>("app_icon", { url });
+      if (d) { appIcons = { ...appIcons, [a.id]: d }; computeIconBg(a.id, d, a.accent); }
+      iconTried.add(a.id); // got a definitive answer (icon or "none") — don't refetch
+    } catch {
+      // transient (IPC/network) failure: leave un-tried so a later pass can retry the icon
+    } finally {
+      iconInflight.delete(a.id);
+    }
   }
   function hexLum(hex: string): number {
     const m = /^#?([0-9a-f]{6})$/i.exec((hex ?? "").trim());
@@ -605,7 +614,8 @@
   }
   function webSearch() {
     if (!searchQuery.trim()) return;
-    const prov = cfg?.settings?.search_provider || "https://duckduckgo.com/?q=";
+    let prov = cfg?.settings?.search_provider || "https://duckduckgo.com/?q=";
+    if (!/^https?:\/\//i.test(prov)) prov = "https://duckduckgo.com/?q="; // ignore a non-URL provider (safety + UX)
     invoke("launch_command", { exec: ["BROWSER", prov + encodeURIComponent(searchQuery)], name: "Search" }).catch(() => {});
     searchOpen = false;
     status = `🔎 ${searchQuery}`;
@@ -720,9 +730,9 @@
         recentApps = c.recent_apps ?? [];
         if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
       })
-      .catch(() => {})
+      .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
       .finally(() => {
-        invoke<any>("get_library").then((lib) => { allGames = lib.games ?? []; status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
+        invoke<any>("get_library").then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
       });
 
     let raf = 0, acc = 0, timer = performance.now();

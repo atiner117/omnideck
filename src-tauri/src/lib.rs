@@ -223,6 +223,17 @@ mod tests {
         // "57" must NOT match the "570"/"12570" blocks (quote-anchored).
         assert_eq!(steam_app_running(SAMPLE, "57"), None);
     }
+
+    #[test]
+    fn rejects_unsafe_browser_args() {
+        use super::is_safe_browser_arg;
+        assert!(is_safe_browser_arg("https://duckduckgo.com/?q=cats"));
+        assert!(is_safe_browser_arg("--app=https://www.netflix.com"));
+        assert!(is_safe_browser_arg("http://192.168.1.5:8080")); // local SearXNG over http
+        assert!(!is_safe_browser_arg("--renderer-cmd-prefix=/bin/sh -c id")); // RCE flag
+        assert!(!is_safe_browser_arg("--no-sandbox"));
+        assert!(!is_safe_browser_arg("--app=file:///etc/passwd")); // non-http scheme
+    }
 }
 
 /// Exit watchdog for a Steam launch (M2): the `steam://` URI returns immediately, so we
@@ -344,6 +355,14 @@ fn save_settings(settings: config::Settings) -> Result<(), String> {
     config::save_settings(settings)
 }
 
+/// True if `arg` is safe to pass to a browser after the BROWSER token: an http(s) URL, or
+/// our `--app=<http(s) URL>` PWA form. Rejects flags so a crafted `search_provider` or a
+/// hand-edited config can't inject e.g. Chromium's `--renderer-cmd-prefix` (arbitrary exec).
+fn is_safe_browser_arg(arg: &str) -> bool {
+    let u = arg.strip_prefix("--app=").unwrap_or(arg);
+    u.starts_with("https://") || u.starts_with("http://")
+}
+
 /// Launch an arbitrary app/media command (argv form). A leading "BROWSER" token is
 /// resolved to the host's browser (Chromium-family `--app=` PWA mode; Firefox opens
 /// the URL directly since it lacks `--app`).
@@ -351,6 +370,12 @@ fn save_settings(settings: config::Settings) -> Result<(), String> {
 fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>) -> Result<(), String> {
     let mut exec = exec;
     if exec.first().map(|s| s == "BROWSER").unwrap_or(false) {
+        // Only URLs may follow the BROWSER token (flag-injection guard — see is_safe_browser_arg).
+        for a in &exec[1..] {
+            if !is_safe_browser_arg(a) {
+                return Err(format!("refusing unsafe browser argument: {a}"));
+            }
+        }
         let browser = apps::detect_browser().ok_or("no browser found")?;
         let is_firefox = browser.contains("firefox");
         if is_firefox {

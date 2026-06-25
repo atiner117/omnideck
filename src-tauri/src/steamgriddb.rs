@@ -21,6 +21,26 @@ fn cache_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".cache/omnideck/art"))
 }
 
+/// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy
+/// response (content-length can be absent or lie, so we cap the actual byte stream).
+async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
+    let mut resp = reqwest::get(url).await.ok()?;
+    let mut buf = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if buf.len() + chunk.len() > max {
+                    return None;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(_) => return None,
+        }
+    }
+    Some(buf)
+}
+
 /// Returns a data URL for the game's vertical box art (cached or freshly fetched),
 /// or None if no key, no result, or a network error.
 pub async fn box_art(appid: &str, key: &str) -> Option<String> {
@@ -55,7 +75,7 @@ pub async fn box_art(appid: &str, key: &str) -> Option<String> {
     } else {
         "jpg"
     };
-    let bytes = reqwest::get(&img_url).await.ok()?.bytes().await.ok()?;
+    let bytes = fetch_capped(&img_url, 16 * 1024 * 1024).await?; // box art is ~KB–low MB; 16 MiB cap
     let path = dir.join(format!("{appid}_box.{ext}"));
     std::fs::write(&path, &bytes).ok()?;
     to_data_url(&path)
