@@ -40,7 +40,7 @@
     "shortDescription": "10-foot media & game launcher",
     "longDescription": "OmniDeck is a controller-first, 10-foot launcher for Linux that unifies games, streaming, music, and your own media in one grid — easy for the living room, capable on the desktop.",
     "publisher": "OmniDeck contributors",
-    "homepage": "https://github.com/atiner/omnideck",
+    "homepage": "https://github.com/atiner117/omnideck",
     "license": "GPL-3.0-or-later",
     "icon": [
       "icons/32x32.png",

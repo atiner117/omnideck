@@ -1,20 +1,22 @@
-# Maintainer: atiner <atiner@comfortwindows.com>
-# AUR package — builds OmniDeck from source. Set the real repo URL + tag before publishing.
+# Maintainer: atiner117 <130574030+atiner117@users.noreply.github.com>
+# AUR package — builds OmniDeck from the tagged source.
+# Note: builds the v$pkgver git tag; bump pkgver + retag a release to ship newer work.
 pkgname=omnideck
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="10-foot, controller-first media & game launcher for Linux"
 arch=('x86_64')
-url="https://github.com/atiner/omnideck"
+url="https://github.com/atiner117/omnideck"
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3')
 optdepends=('gamescope: 10-foot gamescope session mode'
             'gamescope-session-git: boot OmniDeck as a session from your display manager'
             'cage: media-kiosk tier on hosts without a usable GPU'
             'steam: Steam library scanning + launching'
+            'playerctl: live song/show titles in Now Playing (MPRIS)'
             'xorg-xprop: STEAM_GAME atom handling inside the gamescope session')
-makedepends=('rust' 'cargo' 'bun-bin' 'nodejs')
-source=("git+https://github.com/atiner/omnideck.git#tag=v$pkgver")
+makedepends=('rust' 'cargo' 'bun-bin' 'pkgconf')
+source=("git+https://github.com/atiner117/omnideck.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
 build() {
@@ -29,6 +31,8 @@ package() {
   install -Dm644 "src-tauri/icons/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/omnideck.png"
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
+  # Regular desktop-menu launcher. The 10-foot gamescope *session* is an opt-in extra:
+  # run packaging/install-session.sh after install to add it to your display manager.
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/omnideck.desktop" <<'EOF'
 [Desktop Entry]
 Name=OmniDeck
