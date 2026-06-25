@@ -610,7 +610,7 @@
       .filter((t) => (t.kind === "game" ? t.game.name : t.app.name).toLowerCase().includes(q))
       .slice(0, 40);
   });
-  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; }
+  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; oskFocus = 0; }
   function searchMove(d: number) {
     searchFocus = clamp(searchFocus + d, 0, searchResults.length); // last index = web-search row
     queueMicrotask(() => document.querySelector(`[data-sr="${searchFocus}"]`)?.scrollIntoView({ block: "nearest" }));
@@ -627,6 +627,34 @@
   function searchActivate() {
     if (searchFocus < searchResults.length) { searchOpen = false; launchTile(searchResults[searchFocus]); }
     else webSearch();
+  }
+
+  // ---- on-screen keyboard (controller/mouse text entry for search; search is case-insensitive
+  // so it's lowercase-only — no shift needed) ----
+  const OSK_ROWS = [
+    ["a", "b", "c", "d", "e", "f"],
+    ["g", "h", "i", "j", "k", "l"],
+    ["m", "n", "o", "p", "q", "r"],
+    ["s", "t", "u", "v", "w", "x"],
+    ["y", "z", "0", "1", "2", "3"],
+    ["4", "5", "6", "7", "8", "9"],
+    ["␣", ".", "-", "⌫", "✕", "⏎"],
+  ];
+  const OSK_FLAT = OSK_ROWS.flat();
+  const OSK_COLS = 6;
+  let oskFocus = $state(0);
+  function oskMove(dx: number, dy: number) {
+    const rows = OSK_ROWS.length;
+    const col = ((oskFocus % OSK_COLS) + dx + OSK_COLS) % OSK_COLS;
+    const row = (Math.floor(oskFocus / OSK_COLS) + dy + rows) % rows;
+    oskFocus = row * OSK_COLS + col;
+  }
+  function oskPress(k: string) {
+    if (k === "␣") searchQuery += " ";
+    else if (k === "⌫") searchQuery = searchQuery.slice(0, -1);
+    else if (k === "✕") searchQuery = "";
+    else if (k === "⏎") searchActivate();
+    else searchQuery += k;
   }
   function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocus = 0; }
   function catMove(d: number) { catFocus = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
@@ -775,10 +803,16 @@
           return;
         }
         if (searchOpen) {
-          if (p.code === "DPadUp") holdStart(p.code, () => searchMove(-1));
-          else if (p.code === "DPadDown") holdStart(p.code, () => searchMove(1));
-          else if (p.code === "South") searchActivate();
-          else if (p.code === "East") searchOpen = false;
+          // D-pad drives the on-screen keyboard; bumpers move the result selection.
+          if (p.code === "DPadUp") holdStart(p.code, () => oskMove(0, -1));
+          else if (p.code === "DPadDown") holdStart(p.code, () => oskMove(0, 1));
+          else if (p.code === "DPadLeft") holdStart(p.code, () => oskMove(-1, 0));
+          else if (p.code === "DPadRight") holdStart(p.code, () => oskMove(1, 0));
+          else if (p.code === "South") oskPress(OSK_FLAT[oskFocus]);
+          else if (p.code === "LeftTrigger") searchMove(-1);
+          else if (p.code === "RightTrigger") searchMove(1);
+          else if (p.code === "West") searchQuery = searchQuery.slice(0, -1);
+          else if (p.code === "East") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
           return;
         }
         if (catalogOpen) {
@@ -939,7 +973,13 @@
           <span class="cname">Search the web{searchQuery ? ` for “${searchQuery}”` : "…"}</span>
         </div>
       </div>
-      <p class="phint">type · ↑↓ select · Enter open · Esc clear/close · web-search provider set in Settings</p>
+      <div class="osk" role="group" aria-label="On-screen keyboard">
+        {#each OSK_FLAT as k, i}
+          <button class="oskkey" class:focused={i === oskFocus} class:special={"␣⌫✕⏎".includes(k)}
+            onmouseenter={() => (oskFocus = i)} onclick={() => { oskFocus = i; oskPress(k); }}>{k}</button>
+        {/each}
+      </div>
+      <p class="phint">keyboard: type · ↑↓ select · Enter open — controller: D-pad + ✕ to type · bumpers pick result · ⏎ go · ◯ clear/close</p>
     </div>
   {/if}
 
@@ -1221,6 +1261,11 @@
   .cwheel::-webkit-color-swatch-wrapper { padding: 0; }
   .cwheel::-webkit-color-swatch { border: none; border-radius: 4px; }
   .phint { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
+  .osk { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; }
+  .oskkey { background: #0c1320; border: 2px solid #2c3a5c; color: #dde5f0; border-radius: 8px; padding: 10px 0; font-size: clamp(15px, 1.6vw, 20px); font-weight: 700; cursor: pointer; text-transform: uppercase; }
+  .oskkey.special { color: var(--accent); background: #11192b; }
+  .oskkey.focused { border-color: var(--accent); background: #1b2540; color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .oskkey:hover { border-color: var(--accent); }
 
   .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
   .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
