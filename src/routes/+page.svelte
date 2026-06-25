@@ -486,7 +486,7 @@
   // ---- in-app info panel (games + apps) ----
   let infoOpen = $state(false);
   let infoTile = $state<Tile | null>(null);
-  function showInfo() { if (catId === "settings") return; const t = items[focus]; if (t) { infoTile = t; infoOpen = true; } }
+  function showInfo() { holdStop(); if (catId === "settings") return; const t = items[focus]; if (t) { infoTile = t; infoOpen = true; } }
   function appSource(a: App): string {
     const e = a.exec;
     if (e[0] === "flatpak") return "Flatpak · " + (e[2] ?? "");
@@ -556,7 +556,7 @@
   let fExec = $state("");
   let fIcon = $state("🚀");
   let fCat = $state("apps");
-  function openPower() { powerOpen = true; powerFocus = 0; }
+  function openPower() { holdStop(); powerOpen = true; powerFocus = 0; }
   function powerMove(d: number) { powerFocus = clamp(powerFocus + d, 0, POWER.length - 1); }
   function powerActivate() {
     const key = POWER[powerFocus].key;
@@ -607,7 +607,7 @@
       .filter((t) => (t.kind === "game" ? t.game.name : t.app.name).toLowerCase().includes(q))
       .slice(0, 40);
   });
-  function openSearch() { searchOpen = true; searchQuery = ""; searchFocus = 0; }
+  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; }
   function searchMove(d: number) {
     searchFocus = clamp(searchFocus + d, 0, searchResults.length); // last index = web-search row
     queueMicrotask(() => document.querySelector(`[data-sr="${searchFocus}"]`)?.scrollIntoView({ block: "nearest" }));
@@ -625,7 +625,7 @@
     if (searchFocus < searchResults.length) { searchOpen = false; launchTile(searchResults[searchFocus]); }
     else webSearch();
   }
-  function toggleCatalog() { catalogOpen = !catalogOpen; catFocus = 0; }
+  function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocus = 0; }
   function catMove(d: number) { catFocus = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
   function isAdded(id: string) { return apps.some((a) => a.id === id); }
   async function catToggle(i: number) {
@@ -800,11 +800,15 @@
       } else if (p.kind === "button_released") {
         if (p.code === heldCode) holdStop();
       } else if (p.kind === "axis_changed" && (p.code === "LeftStickX" || p.code === "LeftStickY")) {
-        if (wizardActive || catalogOpen || searchOpen || powerOpen || confirmAct || formOpen || infoOpen) return;
-        if (Math.abs(p.value) > 0.6 && navGate()) {
-          if (p.code === "LeftStickX") horiz(p.value > 0 ? 1 : -1);
-          else moveItem(p.value > 0 ? 1 : -1);
-        } else if (Math.abs(p.value) < 0.3) { holdStop(); }
+        // One deadzone (no 0.3–0.6 dead band) + the same hold-repeat the D-pad uses. Track the
+        // active axis:direction so a held stick auto-repeats once, and recentering or any modal
+        // opening stops it — fixes drift-stuck nav and phantom nav behind a modal.
+        if (wizardActive || catalogOpen || searchOpen || powerOpen || confirmAct || formOpen || infoOpen) { holdStop(); return; }
+        const DZ = 0.6;
+        const dir = p.value > DZ ? 1 : p.value < -DZ ? -1 : 0;
+        const code = `${p.code}:${dir}`;
+        if (dir === 0) { if (heldCode.startsWith(p.code)) holdStop(); }
+        else if (heldCode !== code) holdStart(code, () => { if (p.code === "LeftStickX") horiz(dir); else moveItem(dir); });
       }
     }).then((u) => off.push(u));
 
