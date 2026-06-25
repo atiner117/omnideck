@@ -1,14 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
-  import { invoke } from "@tauri-apps/api/core";
+  import * as api from "$lib/backend";
+  import type { App, Game, Config, Capability, MediaInfo } from "$lib/backend";
 
-  type App = { id: string; name: string; icon: string; exec: string[]; accent: string; category?: string };
-  type Game = {
-    appid: string; name: string; installed: boolean; is_tool: boolean; last_played?: number;
-    installdir?: string; library_path?: string;
-    art_box?: string | null; art_header?: string | null; art_hero?: string | null; art_logo?: string | null;
-  };
   type Tile =
     | { kind: "game"; id: string; cat: string; game: Game }
     | { kind: "app"; id: string; cat: string; app: App };
@@ -75,7 +69,7 @@
     if (key === "recents_show") return cap1(s.recents_show ?? "both");
     if (key === "bgdefault") return { color: "Solid color", image: "Custom image" }[s.background_default as string] ?? "Solid color";
     if (key === "bgcolor") return s.background_color ?? "#05070b";
-    if (key === "bgimage") return s.background_image ? s.background_image.split("/").pop() : "(none)";
+    if (key === "bgimage") return s.background_image ? (s.background_image.split("/").pop() ?? "(none)") : "(none)";
     if (key === "gamebg") return s.game_backgrounds ? "on" : "off";
     if (key === "appbg") return s.app_backgrounds ? "on" : "off";
     if (key === "sort") return s.sort;
@@ -87,16 +81,15 @@
     return "";
   }
 
-  let cap = $state<any>(null);
-  let cfg = $state<any>(null);
+  let cap = $state<Capability | null>(null);
+  let cfg = $state<Config | null>(null);
   let inSession = $state(false); // true when running as a gamescope session (vs desktop window)
   let accent = $state("#b14cff");
   let clock = $state("");
   // Now Playing: launch-tracked entries (games + non-media apps), each cleared when the
   // backend reports that process/game exited. Media apps are enriched with live MPRIS
   // metadata (song/artist) from the `media` poll below.
-  type NowEntry = { kind: string; name: string; category: string };
-  type MediaInfo = { status: string; title: string; artist: string; player: string };
+  type NowEntry = { id: string; kind: string; name: string; category: string };
   let nowList = $state<NowEntry[]>([]);
   let media = $state<MediaInfo | null>(null);
   // One card per launch entry; a media app's card shows its song. If something is playing
@@ -111,7 +104,7 @@
     }
     // standalone card for media we didn't launch (phone via KDE Connect, etc.): only while
     // actively playing, so a paused background player doesn't leave a card lingering.
-    if (media && media.status === "Playing" && !mediaShown) out.push({ kind: "media", name: media.player || "Media", category: "music", media });
+    if (media && media.status === "Playing" && !mediaShown) out.push({ id: "media", kind: "media", name: media.player || "Media", category: "music", media });
     return out.slice(0, 3);
   });
 
@@ -123,6 +116,15 @@
   let status = $state("Loading…");
   let fps = $state(0);
   let lastInput = $state("—");
+  // user-facing error channel (separate from the transient `status` launch toast)
+  let toastErr = $state("");
+  let toastErrTimer: ReturnType<typeof setTimeout> | undefined;
+  function reportError(ctx: string, e: unknown) {
+    console.warn(`[omnideck] ${ctx}:`, e);
+    toastErr = ctx;
+    clearTimeout(toastErrTimer);
+    toastErrTimer = setTimeout(() => (toastErr = ""), 5000);
+  }
 
   let art = $state<Record<string, string>>({});
   let logos = $state<Record<string, string>>({});
@@ -166,7 +168,7 @@
     const url = iconSource(a); if (!url) return;
     iconInflight.add(a.id);
     try {
-      const d = await invoke<string | null>("app_icon", { url });
+      const d = await api.appIcon(url);
       if (d) { appIcons = { ...appIcons, [a.id]: d }; computeIconBg(a.id, d, a.accent); }
       iconTried.add(a.id); // got a definitive answer (icon or "none") — don't refetch
     } catch {
@@ -266,7 +268,7 @@
   // hide rows that only apply to a current selection (custom size, bg color/image, custom volume)
   let visibleSettings = $derived(
     ALL_SETTINGS.filter((s) => {
-      const set = cfg?.settings ?? {};
+      const set = cfg?.settings; if (!set) return true;
       if (s.key === "custom") return set.ui_scale === "custom";
       if (s.key === "soundvol") return soundLabel() === "Custom";
       if (s.key === "bgcolor") return (set.background_default ?? "color") === "color";
@@ -365,13 +367,13 @@
   async function loadArt(g: Game) {
     if (!art[g.appid]) {
       const p = g.art_box || g.art_header || g.art_hero;
-      if (p) { try { const d = await invoke<string | null>("get_art", { path: p }); if (d) art = { ...art, [g.appid]: d }; } catch {} }
+      if (p) { try { const d = await api.getArt(p); if (d) art = { ...art, [g.appid]: d }; } catch {} }
     }
     if (!g.art_box && !gridBox[g.appid] && cfg?.settings?.steamgriddb_key) {
-      try { const d = await invoke<string | null>("grid_art", { appid: g.appid }); if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; } } catch {}
+      try { const d = await api.gridArt(g.appid); if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; } } catch {}
     }
     if (g.art_hero && !heroes[g.appid]) {
-      try { const d = await invoke<string | null>("get_art", { path: g.art_hero }); if (d) heroes = { ...heroes, [g.appid]: d }; } catch {}
+      try { const d = await api.getArt(g.art_hero); if (d) heroes = { ...heroes, [g.appid]: d }; } catch {}
     }
   }
 
@@ -388,7 +390,7 @@
     else if (key === "bright") s.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
     else if (key === "soundvol") { s.sound_volume = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); s.sound = s.sound_volume > 0; }
     cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
     if (key === "soundvol") blip(620, 0.06, 0.42, "sine", true);
   }
   function doAction(key: string) {
@@ -412,7 +414,7 @@
     else if (key === "bright") s.bg_brightness = v;
     else if (key === "soundvol") { s.sound_volume = v; s.sound = v > 0; }
     cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
   }
   // text settings (currently just the custom background image path)
   function setText(key: string, raw: string) {
@@ -421,7 +423,7 @@
     if (key === "bgimage") s.background_image = raw.trim();
     else if (key === "searchurl") s.search_provider = raw.trim();
     cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
   }
   function textValue(key: string): string {
     if (key === "bgimage") return cfg?.settings?.background_image ?? "";
@@ -433,7 +435,7 @@
     if (!cfg) return;
     const s = { ...cfg.settings, background_color: v };
     cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
   }
   function focusSelect(node: HTMLInputElement) { node.focus(); node.select(); }
   function isTyping() {
@@ -446,7 +448,7 @@
     const s = { ...cfg.settings, accent: v };
     cfg = { ...cfg, settings: s };
     accent = v;
-    invoke("save_settings", { settings: s }).catch(() => {});
+    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
   }
   // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise always
   // switches category (so you can never get trapped in Settings).
@@ -468,17 +470,18 @@
   }
   async function launchTile(t: Tile) {
     const name = t.kind === "game" ? t.game.name : t.app.name;
+    const id = t.id; // tile id doubles as the launch / now-playing correlation key
     try {
       const category = t.kind === "game" ? "games" : catOf(t.app);
-      if (t.kind === "game") { status = `▶ Launching ${name}…`; await invoke("launch_game", { appid: t.game.appid, name }); }
-      else { status = `▶ ${name}…`; await invoke("launch_command", { exec: t.app.exec, name }); recordRecentApp(t.app.id); }
-      nowList = [{ kind: t.kind, name, category }, ...nowList.filter((e) => e.name !== name)].slice(0, 3);
+      if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, id); }
+      else { status = `▶ ${name}…`; await api.launchCommand(t.app.exec, name, id); recordRecentApp(t.app.id); }
+      nowList = [{ id, kind: t.kind, name, category }, ...nowList.filter((e) => e.id !== id)].slice(0, 3);
     } catch (e) { status = `launch error: ${e}`; return; }
     setTimeout(() => (status = ""), 3500);
   }
   function recordRecentApp(id: string) {
     recentApps = [id, ...recentApps.filter((x) => x !== id)].slice(0, 20);
-    invoke("save_recent_apps", { recentApps }).catch(() => {});
+    api.saveRecentApps(recentApps).catch((e) => reportError("Couldn't save recents", e));
   }
   function gotoSettings() { catSel = CATEGORIES.findIndex((c) => c.id === "settings"); focus = 0; }
   function goHome() { catSel = CATEGORIES.findIndex((c) => c.id === "dashboard"); focus = 0; }
@@ -530,20 +533,20 @@
     }
     cfg = { ...cfg, settings: s };
     accent = s.accent ?? "#4cc2ff";
-    invoke("save_settings", { settings: s }).catch(() => {});
+    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
   }
 
   function mediaControl(action: string) {
-    invoke("media_control", { action }).catch(() => {});
+    api.mediaControl(action).catch((e) => reportError("Media control failed", e));
     // re-poll so the play/pause glyph and title update promptly
-    setTimeout(() => invoke<MediaInfo | null>("media_now_playing").then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {}), 250);
+    setTimeout(() => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {}), 250);
   }
   function isFav(id: string) { return favorites.includes(id); }
   function favCurrent() {
     if (catId === "settings") return;
     const t = items[focus]; if (!t) return;
     favorites = isFav(t.id) ? favorites.filter((x) => x !== t.id) : [...favorites, t.id];
-    invoke("save_favorites", { favorites }).catch(() => {});
+    api.saveFavorites(favorites).catch((e) => reportError("Couldn't save favorites", e));
   }
 
   // ---- add-apps catalog ----
@@ -561,13 +564,13 @@
   function powerActivate() {
     const key = POWER[powerFocus].key;
     powerOpen = false;
-    if (key === "exit") invoke("quit").catch(() => {});
-    else if (key === "suspend") invoke("power_action", { action: "suspend" }).catch(() => {});
+    if (key === "exit") api.quit().catch((e) => reportError("Couldn't exit", e));
+    else if (key === "suspend") api.powerAction("suspend").catch((e) => reportError("Suspend failed", e));
     else confirmAct = { key, label: POWER[powerFocus].label };
   }
   function doConfirm() {
     if (!confirmAct) return;
-    invoke("power_action", { action: confirmAct.key }).catch(() => {});
+    api.powerAction(confirmAct.key).catch((e) => reportError("Power action failed", e));
     confirmAct = null;
   }
   function addCustom() {
@@ -582,7 +585,7 @@
     const app = { id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat };
     const next = [...apps.filter((a) => a.id !== id), app];
     cfg = { ...cfg, apps: next };
-    invoke("save_apps", { apps: next }).catch(() => {});
+    api.saveApps(next).catch((e) => reportError("Couldn't save apps", e));
     formOpen = false;
   }
 
@@ -616,7 +619,7 @@
     if (!searchQuery.trim()) return;
     let prov = cfg?.settings?.search_provider || "https://duckduckgo.com/?q=";
     if (!/^https?:\/\//i.test(prov)) prov = "https://duckduckgo.com/?q="; // ignore a non-URL provider (safety + UX)
-    invoke("launch_command", { exec: ["BROWSER", prov + encodeURIComponent(searchQuery)], name: "Search" }).catch(() => {});
+    api.launchCommand(["BROWSER", prov + encodeURIComponent(searchQuery)], "Search").catch((e) => reportError("Search failed", e));
     searchOpen = false;
     status = `🔎 ${searchQuery}`;
     setTimeout(() => (status = ""), 2500);
@@ -632,16 +635,16 @@
     const e = displayedCatalog[i]; if (!e || !cfg) return;
     const next = isAdded(e.id) ? apps.filter((a) => a.id !== e.id) : [...apps, e];
     cfg = { ...cfg, apps: next };
-    try { await invoke("save_apps", { apps: next }); } catch {}
+    try { await api.saveApps(next); } catch (e) { reportError("Couldn't save apps", e); }
   }
 
   // ---- first-run wizard ----
   let wizardActive = $state(false);
   let wizardStep = $state(0);
-  async function finishWizard() { wizardActive = false; if (!cfg) return; const s = { ...cfg.settings, onboarded: true }; cfg = { ...cfg, settings: s }; try { await invoke("save_settings", { settings: s }); } catch {} }
+  async function finishWizard() { wizardActive = false; if (!cfg) return; const s = { ...cfg.settings, onboarded: true }; cfg = { ...cfg, settings: s }; try { await api.saveSettings(s); } catch (e) { reportError("Couldn't save settings", e); } }
   function wizardNext() { if (wizardStep >= 2) finishWizard(); else wizardStep++; }
   function wizardPrev() { if (wizardStep > 0) wizardStep--; }
-  function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; cfg = { ...cfg, settings: { ...cfg.settings, accent: a } }; accent = a; invoke("save_settings", { settings: cfg.settings }).catch(() => {}); }
+  function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; cfg = { ...cfg, settings: { ...cfg.settings, accent: a } }; accent = a; api.saveSettings(cfg.settings).catch((e) => reportError("Couldn't save settings", e)); }
 
   function onKey(e: KeyboardEvent) {
     // A real <input>/<select> is focused (settings number field, custom-launcher form):
@@ -719,10 +722,10 @@
 
   onMount(() => {
     window.addEventListener("keydown", onKey);
-    invoke("get_capability").then((c) => (cap = c)).catch(() => {});
-    invoke<boolean>("in_gamescope_session").then((v) => (inSession = !!v)).catch(() => {});
-    invoke<any>("get_catalog").then((c) => (catalog = c ?? [])).catch(() => {});
-    invoke<any>("get_config")
+    api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
+    api.inGamescopeSession().then((v) => (inSession = v)).catch(() => {});
+    api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
+    api.getConfig()
       .then((c) => {
         cfg = c;
         accent = c.settings?.accent ?? "#b14cff";
@@ -732,7 +735,7 @@
       })
       .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
       .finally(() => {
-        invoke<any>("get_library").then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
+        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
       });
 
     let raf = 0, acc = 0, timer = performance.now();
@@ -740,15 +743,15 @@
     raf = requestAnimationFrame(loop);
 
     const off: Array<() => void> = [];
-    // We add to nowList when we launch (we know game vs app there); the backend tells us
-    // when the process/game actually exits so we can remove it. Match by name.
-    listen("app-exited", (e: any) => { const n = String(e.payload ?? ""); nowList = nowList.filter((x) => x.name !== n); }).then((u) => off.push(u));
+    // We add to nowList when we launch (we know game vs app there); the backend tells us when
+    // the process/game exits — correlate by the launch id (the tile id), not the display name.
+    api.onAppExited((e) => { const id = String(e.payload ?? ""); nowList = nowList.filter((x) => x.id !== id); }).then((u) => off.push(u));
     // Poll MPRIS for the current song/show (works for native players + browser PWAs).
-    const pollMedia = () => invoke<MediaInfo | null>("media_now_playing").then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {});
+    const pollMedia = () => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {});
     pollMedia();
     const mediaTimer = setInterval(pollMedia, 4000);
-    listen("gamepad-event", (e: any) => {
-      const p = e.payload as { kind: string; code: string; value: number };
+    api.onGamepad((e) => {
+      const p = e.payload;
       if (p.kind === "button_pressed") {
         lastInput = p.code;
         if (wizardActive) {
@@ -824,13 +827,13 @@
   $effect(() => {
     const path = cfg?.settings?.background_image;
     if (cfg?.settings?.background_default === "image" && path) {
-      invoke<string | null>("get_art", { path }).then((d) => { bgImageUrl = d ?? ""; }).catch(() => { bgImageUrl = ""; });
+      api.getArt(path).then((d) => { bgImageUrl = d ?? ""; }).catch(() => { bgImageUrl = ""; });
     } else { bgImageUrl = ""; }
   });
   // fetch the current web-search provider's favicon (shown on the search "web" row)
   $effect(() => {
     const prov = cfg?.settings?.search_provider;
-    if (prov) invoke<string | null>("app_icon", { url: prov }).then((d) => { searchEngineIcon = d ?? ""; }).catch(() => {});
+    if (prov) api.appIcon(prov).then((d) => { searchEngineIcon = d ?? ""; }).catch(() => {});
   });
 </script>
 
@@ -979,7 +982,7 @@
         </dl>
         <div class="confirm-btns">
           <button class="cbtn danger" onclick={() => { const t = infoTile; infoOpen = false; if (t) launchTile(t); }}>▶ Launch</button>
-          <button class="cbtn" onclick={() => { if (infoTile?.kind === "game") invoke("game_properties", { appid: infoTile.game.appid }).catch(() => {}); }}>Steam properties</button>
+          <button class="cbtn" onclick={() => { if (infoTile?.kind === "game") api.gameProperties(infoTile.game.appid).catch((e) => reportError("Couldn't open Steam properties", e)); }}>Steam properties</button>
         </div>
         <p class="phint">Steam properties opens Steam (for launch options / verify). Esc/◯ close.</p>
       {:else}
@@ -1077,7 +1080,7 @@
 
   {#if nowCards.length}
     <div class="nowstack">
-      {#each nowCards as c (c.kind + c.name)}
+      {#each nowCards as c (c.id)}
         <div class="nowplaying">
           {#if c.media && c.media.status === "Playing"}<span class="np-eq"><i></i><i></i><i></i></span>
           {:else if c.media}<span class="np-icon">⏸</span>
@@ -1094,14 +1097,15 @@
               <button class="np-c" title="Next" onclick={() => mediaControl("next")}>⏭</button>
             </span>
           {/if}
-          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (or press the Guide button)" onclick={() => invoke("close_current_app")}>↩</button>{/if}
-          {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" onclick={() => (nowList = nowList.filter((x) => x.name !== c.name))}>✕</button>{/if}
+          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (or press the Guide button)" onclick={() => api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e))}>↩</button>{/if}
+          {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" onclick={() => (nowList = nowList.filter((x) => x.id !== c.id))}>✕</button>{/if}
         </div>
       {/each}
     </div>
   {/if}
 
   {#if status}<div class="toast">{status}</div>{/if}
+  {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
   <footer>fps {fps} · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
 </main>
@@ -1174,6 +1178,7 @@
   .xempty b { color: var(--accent); }
 
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
+  .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
 
   .nowstack { position: fixed; z-index: 12; right: 2.4vw; bottom: 8vh; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
   .nowplaying { display: flex; align-items: center; gap: 16px; background: #0c1320e8; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 16px; padding: 14px 20px; box-shadow: 0 20px 60px #000b; max-width: 42vw; }

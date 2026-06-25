@@ -114,15 +114,18 @@ fn gamepad_loop(handle: tauri::AppHandle) {
 
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
 /// (Lets the UI show a "now playing" state and know when focus returns.)
-fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: String) {
+fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: String, id: Option<String>) {
     let pid = child.id();
     CURRENT_CHILD.store(pid, Ordering::SeqCst); // newest launch becomes the "current" app
-    let _ = app.emit("app-launched", name.clone());
+    // The frontend correlates Now Playing entries by this launch id (the tile id), falling back
+    // to the name for any legacy caller, so two same-named launchables don't clobber on exit.
+    let exit_key = id.unwrap_or_else(|| name.clone());
+    let _ = app.emit("app-launched", name);
     std::thread::spawn(move || {
         let _ = child.wait();
         // Clear only if a newer launch hasn't already replaced us as the current app.
         let _ = CURRENT_CHILD.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
-        let _ = app.emit("app-exited", name);
+        let _ = app.emit("app-exited", exit_key);
     });
 }
 
@@ -246,7 +249,8 @@ mod tests {
 /// re-stamp below is a belt-and-suspenders no-op if the atom is still set; if M2 shows
 /// gamescope NOT returning to us, the stronger lever is GAMESCOPECTRL_BASELAYER_APPID on
 /// the root window (pins our appid as the base layer) — add that only if needed.
-fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String) {
+fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: Option<String>) {
+    let exit_key = id.unwrap_or_else(|| name.clone());
     std::thread::spawn(move || {
         let reg = match steam_registry_path() {
             Some(p) => p,
@@ -266,7 +270,7 @@ fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String) {
         }
         if !started {
             eprintln!("[omnideck] watchdog: '{name}' never reported running; giving up");
-            let _ = app.emit("app-exited", name);
+            let _ = app.emit("app-exited", exit_key);
             return;
         }
         eprintln!("[omnideck] watchdog: '{name}' is running");
@@ -275,7 +279,7 @@ fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String) {
             std::thread::sleep(std::time::Duration::from_millis(1000));
         }
         eprintln!("[omnideck] watchdog: '{name}' exited — refocusing OmniDeck");
-        let _ = app.emit("app-exited", name);
+        let _ = app.emit("app-exited", exit_key);
         // Best-effort focus recovery in a gamescope session.
         if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
             stamp_steam_atom_once();
@@ -327,7 +331,7 @@ fn get_art(path: String) -> Option<String> {
 /// Launch a Steam game by appid. In a gamescope session Steam stamps the game
 /// window's STEAM_GAME atom so it foregrounds; the exit watchdog is M2.
 #[tauri::command]
-fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>) -> Result<(), String> {
+fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, id: Option<String>) -> Result<(), String> {
     // Steam's URI handler returns immediately, so the running game has no child handle
     // here; watch_steam_game polls Steam's registry to detect start/exit instead.
     std::process::Command::new("steam")
@@ -336,7 +340,7 @@ fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>) -> Re
         .map_err(|e| e.to_string())?;
     let label = name.unwrap_or_else(|| format!("game {appid}"));
     let _ = app.emit("app-launched", label.clone());
-    watch_steam_game(app, appid, label);
+    watch_steam_game(app, appid, label, id);
     Ok(())
 }
 
@@ -367,7 +371,7 @@ fn is_safe_browser_arg(arg: &str) -> bool {
 /// resolved to the host's browser (Chromium-family `--app=` PWA mode; Firefox opens
 /// the URL directly since it lacks `--app`).
 #[tauri::command]
-fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>) -> Result<(), String> {
+fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
     let mut exec = exec;
     if exec.first().map(|s| s == "BROWSER").unwrap_or(false) {
         // Only URLs may follow the BROWSER token (flag-injection guard — see is_safe_browser_arg).
@@ -401,7 +405,7 @@ fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>
         .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
-    watch_child(app, child, name.unwrap_or_else(|| cmd.clone()));
+    watch_child(app, child, name.unwrap_or_else(|| cmd.clone()), id);
     Ok(())
 }
 
