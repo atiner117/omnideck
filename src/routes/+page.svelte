@@ -114,7 +114,11 @@
   let catSel = $state(1);
   let focus = $state(0);
   let status = $state("Loading…");
-  let fps = $state(0);
+  let fps = $state(0); // current (500ms window) frame rate
+  let fpsAvg = $state(0); // smoothed average
+  let fpsLo = $state(9999); // worst frame since reset (the dips)
+  let fpsHi = $state(0); // best frame since reset
+  function resetFpsStats() { fpsAvg = 0; fpsLo = 9999; fpsHi = 0; }
   let lastInput = $state("—");
   // user-facing error channel (separate from the transient `status` launch toast)
   let toastErr = $state("");
@@ -766,8 +770,30 @@
         api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
       });
 
-    let raf = 0, acc = 0, timer = performance.now();
-    const loop = (t: number) => { acc++; if (t - timer >= 500) { fps = Math.round((acc * 1000) / (t - timer)); acc = 0; timer = t; clock = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } raf = requestAnimationFrame(loop); };
+    // Per-frame sampling catches brief dips a 500ms average smooths away; we only commit the
+    // numbers to reactive state once per 500ms window so the tracker adds no per-frame cost.
+    let raf = 0, frames = 0, winStart = performance.now(), lastFrame = winStart;
+    const warmupEnd = winStart + 600; // skip the first frames (long initial frame) for lo/hi
+    let loAcc = 9999, hiAcc = 0, avgAcc = 0, avgN = 0;
+    const loop = (t: number) => {
+      const dt = t - lastFrame; lastFrame = t;
+      if (dt > 0 && t > warmupEnd) {
+        const inst = Math.min(1000 / dt, 240);
+        if (inst < loAcc) loAcc = inst;
+        if (inst > hiAcc) hiAcc = inst;
+        avgAcc += inst; avgN++;
+      }
+      frames++;
+      if (t - winStart >= 500) {
+        fps = Math.round((frames * 1000) / (t - winStart));
+        if (avgN) fpsAvg = fpsAvg ? Math.round(fpsAvg * 0.7 + (avgAcc / avgN) * 0.3) : Math.round(avgAcc / avgN);
+        if (loAcc < fpsLo) fpsLo = Math.round(loAcc); // session watermarks (persist until reset)
+        if (hiAcc > fpsHi) fpsHi = Math.round(hiAcc);
+        loAcc = 9999; hiAcc = 0; avgAcc = 0; avgN = 0; frames = 0; winStart = t;
+        clock = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+      raf = requestAnimationFrame(loop);
+    };
     raf = requestAnimationFrame(loop);
 
     const off: Array<() => void> = [];
@@ -1147,7 +1173,7 @@
   {#if status}<div class="toast">{status}</div>{/if}
   {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
-  <footer>fps {fps} · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
+  <footer><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
 </main>
 
 <style>
@@ -1294,4 +1320,6 @@
 
   footer { padding: 7px 2.4vw; color: #5b6678; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
   footer b { color: #93a0b6; font-weight: 600; }
+  .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
+  .fpsbtn:hover { color: var(--accent); }
 </style>
