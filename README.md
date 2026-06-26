@@ -60,9 +60,11 @@ profiles when the hardware can handle it.
 
 - Linux (X11 or Wayland). A browser (Brave/Chromium/Firefox) for streaming launchers.
 - Build deps: `webkit2gtk-4.1`, `libudev` (gamepad input), Rust (1.80+), Node 20+ or Bun.
-- Optional: `gamescope` + `gamescope-session-plus` (for the 10-foot session tier);
-  `cage` (media-kiosk tier on GPU-less hosts); `playerctl` (live song/show titles in the
-  Now Playing card via MPRIS); `xorg-xprop` (needed inside a gamescope session).
+- Optional: `gamescope` (for the 10-foot **session** — install it with
+  `packaging/install-session.sh`, which runs a *plain* gamescope session; no
+  `gamescope-session-plus` required); `cage` (media-kiosk tier on GPU-less hosts);
+  `playerctl` (live song/show titles in the Now Playing card via MPRIS);
+  `xorg-xprop` (needed inside a gamescope session).
 
 ## Build & run (dev)
 
@@ -80,16 +82,19 @@ bun run tauri build --no-bundle    # release binary -> src-tauri/target/release/
 | Navigate (category ← →, items ↑ ↓) | Arrow keys | D-pad / left stick |
 | Launch / confirm | Enter | ✕ / A (South) |
 | Favorite (pin to Dashboard) | `F` | □ / X (West) |
-| Search | `/` | — |
+| Search | `/` | Select |
 | Add apps | `A` | △ / Y (North) |
 | Settings | `P` | Start / Options |
 | Back / close panel / cancel | Esc | ◯ / B (East) |
 
 Power (Exit / Suspend / Restart / Shut down) is in the **⏻** menu in the top bar.
 
+On a controller, **Select** opens search with an **on-screen keyboard** (D-pad to move,
+✕/A to type, bumpers to pick a result) — search and launch without a keyboard.
+
 ## Configuration
 
-`~/.config/omnideck/config.toml` (generated on first run):
+`~/.config/omnideck/config.toml` (or `$XDG_CONFIG_HOME/omnideck/`; generated on first run):
 
 ```toml
 [settings]
@@ -129,7 +134,7 @@ where OmniDeck's media tuning shines.
 
 ## Roadmap
 
-- Validate real gamescope **session boot** from the display manager on hardware (M2)
+- ✅ Real gamescope **session boot** validated on hardware (M2 — runs a *plain* gamescope session)
 - App/streaming **icons** (favicons + bundled icon set) for non-game tiles
 - Native/flatpak catalog expansion (verified Flathub IDs)
 - **Packaging** (AUR, Flatpak, AppImage)
