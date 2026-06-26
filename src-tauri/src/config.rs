@@ -64,6 +64,19 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// Clamp the hand-editable numeric fields to sane ranges so a bad value in config.toml
+    /// (e.g. `ui_scale_custom = 99`) can't break the UI. Called on load.
+    fn normalize(&mut self) {
+        self.ui_scale_custom = self.ui_scale_custom.clamp(0.8, 3.5);
+        self.bg_blur = self.bg_blur.clamp(0.0, 24.0);
+        self.bg_brightness = self.bg_brightness.clamp(0.3, 1.0);
+        self.sound_volume = self.sound_volume.clamp(0.0, 1.0);
+        self.grid_columns = self.grid_columns.clamp(1, 12);
+        self.dashboard_recents = self.dashboard_recents.min(50);
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -114,6 +127,7 @@ pub fn load_or_create() -> Config {
             Ok(text) => toml::from_str::<Config>(&text).unwrap_or_else(|_| defaults()),
             Err(_) => defaults(),
         };
+        cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
         cfg.config_path = path_str;
         return cfg;
     }
@@ -193,4 +207,27 @@ pub fn report(cfg: &Config) -> String {
         s.push_str(&format!("    - {} {}  ({})\n", a.icon, a.name, a.exec.join(" ")));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn normalize_clamps_out_of_range() {
+        let mut s = Settings {
+            ui_scale_custom: 99.0,
+            bg_brightness: -1.0,
+            sound_volume: 5.0,
+            grid_columns: 0,
+            dashboard_recents: 999,
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.ui_scale_custom, 3.5);
+        assert_eq!(s.bg_brightness, 0.3);
+        assert_eq!(s.sound_volume, 1.0);
+        assert_eq!(s.grid_columns, 1);
+        assert_eq!(s.dashboard_recents, 50);
+    }
 }
