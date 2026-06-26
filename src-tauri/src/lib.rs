@@ -318,12 +318,23 @@ fn get_library() -> library::Library {
 #[tauri::command]
 fn get_art(path: String) -> Option<String> {
     use base64::Engine;
-    let bytes = std::fs::read(&path).ok()?;
-    let mime = if path.ends_with(".png") {
+    // Only serve image files: this turns a local path into a data URL, so restrict the
+    // extensions (don't let a crafted config read e.g. ~/.ssh/id_rsa), and cap the size so a
+    // huge/unexpected file can't balloon into memory as base64.
+    let lower = path.to_ascii_lowercase();
+    let mime = if lower.ends_with(".png") {
         "image/png"
-    } else {
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
         "image/jpeg"
+    } else {
+        return None;
     };
+    if std::fs::metadata(&path).ok()?.len() > 32 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     Some(format!("data:{mime};base64,{b64}"))
 }
