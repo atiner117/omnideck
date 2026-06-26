@@ -553,9 +553,15 @@ fn ensure_gpu_env() {
     cmd.env("OMNIDECK_ENV_READY", "1");
     if capability::probe().nvidia_present {
         cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
-            .env("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
             .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
             .env("GDK_BACKEND", "x11");
+        // WEBKIT_DISABLE_COMPOSITING_MODE forces SOFTWARE paint on NVIDIA (the reliable-render
+        // workaround) — that's what caps animation smoothness (the category-switch fps dip). Set
+        // OMNIDECK_GPU_COMPOSITING=1 to try GPU compositing instead: much smoother *if* the driver +
+        // WebKitGTK render correctly without it. A/B test it; if the screen is blank, just unset it.
+        if std::env::var_os("OMNIDECK_GPU_COMPOSITING").is_none() {
+            cmd.env("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
     }
     use std::os::unix::process::CommandExt;
     let _ = cmd.exec(); // replaces this process; returns only on failure
