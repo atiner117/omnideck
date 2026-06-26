@@ -17,8 +17,12 @@ struct Grid {
 }
 
 fn cache_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".cache/omnideck/art"))
+    // XDG: prefer $XDG_CACHE_HOME (when absolute), else ~/.cache (unchanged for existing installs).
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    Some(base.join("omnideck/art"))
 }
 
 /// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy

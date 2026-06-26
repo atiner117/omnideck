@@ -81,8 +81,12 @@ pub struct Config {
 }
 
 fn config_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/omnideck/config.toml"))
+    // XDG: prefer $XDG_CONFIG_HOME (when absolute), else ~/.config (unchanged for existing installs).
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("omnideck/config.toml"))
 }
 
 fn defaults() -> Config {

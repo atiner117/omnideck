@@ -6,8 +6,12 @@
 use std::path::{Path, PathBuf};
 
 fn cache_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".cache/omnideck/icons"))
+    // XDG: prefer $XDG_CACHE_HOME (when absolute), else ~/.cache (unchanged for existing installs).
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    Some(base.join("omnideck/icons"))
 }
 
 /// Pull the host out of a URL (handles a leading `--app=` from our browser-PWA execs).
