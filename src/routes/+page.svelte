@@ -763,6 +763,7 @@
         accent = c.settings?.accent ?? "#b14cff";
         favorites = c.favorites ?? [];
         recentApps = c.recent_apps ?? [];
+        if (c.config_error) reportError(c.config_error, null); // config.toml didn't parse — warn, don't silently revert
         if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
       })
       .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"

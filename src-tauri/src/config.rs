@@ -91,6 +91,10 @@ pub struct Config {
     /// but never written into the TOML file (empty when serializing the on-disk default).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub config_path: String,
+    /// Set when config.toml exists but couldn't be parsed/read, so the UI can warn the user
+    /// ("syntax error — using defaults") instead of silently reverting. Never written to disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_error: Option<String>,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -112,7 +116,17 @@ fn defaults() -> Config {
         favorites: Vec::new(),
         recent_apps: Vec::new(),
         config_path: String::new(),
+        config_error: None,
     }
+}
+
+/// Defaults for when an existing config.toml can't be parsed/read: same as `defaults()`, but the
+/// user clearly already had a config, so keep them out of the onboarding wizard and flag the error.
+fn error_defaults(msg: String) -> Config {
+    let mut c = defaults();
+    c.settings.onboarded = true;
+    c.config_error = Some(msg);
+    c
 }
 
 pub fn load_or_create() -> Config {
@@ -124,8 +138,21 @@ pub fn load_or_create() -> Config {
 
     if path.exists() {
         let mut cfg = match fs::read_to_string(&path) {
-            Ok(text) => toml::from_str::<Config>(&text).unwrap_or_else(|_| defaults()),
-            Err(_) => defaults(),
+            Ok(text) => match toml::from_str::<Config>(&text) {
+                Ok(c) => c,
+                Err(e) => {
+                    // Don't clobber the user's file; report the error so the UI can warn instead
+                    // of looking like it ignored their edit. Full detail to the log, first line
+                    // (TOML's "parse error at line N, column M") to the toast.
+                    eprintln!("[omnideck] config.toml parse error — using defaults:\n{e}");
+                    let first = e.to_string().lines().next().unwrap_or("parse error").to_string();
+                    error_defaults(format!("config.toml: {first} — using defaults until fixed"))
+                }
+            },
+            Err(e) => {
+                eprintln!("[omnideck] could not read config.toml: {e} — using defaults");
+                error_defaults(format!("Couldn't read config.toml ({e}) — using defaults"))
+            }
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
         cfg.config_path = path_str;

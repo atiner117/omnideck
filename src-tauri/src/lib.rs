@@ -139,9 +139,12 @@ fn stamp_steam_atom_once() -> bool {
         .unwrap_or(false)
 }
 
-/// In a gamescope `--steam` session the window must carry the STEAM_GAME atom or it
-/// won't be shown. Best-effort: set it via `xprop` once our window exists. Verify in an
-/// actual session — if the screen is black, this is the thing to tune.
+/// Stamp STEAM_GAME=769 on our window once inside any gamescope session (best-effort, via
+/// xprop). install-session.sh runs a *plain* gamescope session (no `--steam`); there this
+/// atom drives the Steam-game focus-return path: when a launched game window is destroyed,
+/// gamescope re-shows the window tagged STEAM_GAME=769 ("main application") — i.e. us (see
+/// watch_steam_game + its ChimeraOS note). Load-bearing until a hardware session test proves
+/// focus-return works without it — see packaging/M2-RESULTS.md.
 fn set_steam_game_atom_if_gamescope() {
     // Only relevant inside a gamescope (steamcompmgr) session.
     if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none() {
@@ -297,11 +300,22 @@ fn power_action(action: String) -> Result<(), String> {
         "poweroff" => "poweroff",
         _ => return Err(format!("unknown power action: {action}")),
     };
-    std::process::Command::new("systemctl")
+    // `.status()` (not `.spawn()`): wait for systemctl's exit so a polkit denial — it execs,
+    // prints to stderr, then exits non-zero *after* logind decides — surfaces as Err (the UI
+    // toasts it) instead of resolving Ok the instant fork+exec succeeds. systemctl returns
+    // promptly once logind accepts the request, so blocking here is fine.
+    let status = std::process::Command::new("systemctl")
         .arg(verb)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        return Ok(());
+    }
+    let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
+    Err(format!(
+        "`systemctl {verb}` was denied (exit {code}). In a display-manager session this is \
+         usually polkit: the session may not be an active local seat."
+    ))
 }
 
 #[tauri::command]
@@ -547,10 +561,12 @@ async fn app_icon(url: String) -> Option<String> {
     icons::favicon(&url).await
 }
 
-/// Re-exec self once with GPU-appropriate WebKit/GDK env so the webview renders on any
-/// GPU. NVIDIA needs the dmabuf/compositing workarounds + Xwayland; AMD/Intel (Mesa)
-/// work best with hardware-accelerated defaults. Env must be set before the webview
-/// initializes, so we re-exec rather than set it in-process.
+/// Re-exec self once with GPU-appropriate WebKit env so the webview renders on any GPU. The
+/// NVIDIA WebKitGTK workaround is *session-specific* (2026): on X11/gamescope the dmabuf
+/// renderer is the bug; on Wayland the bug is a startup crash fixed by disabling explicit sync
+/// (no perf cost) — and `GDK_BACKEND=x11` must NOT be forced (it reintroduces the
+/// fractional-scaling/blur/input regressions Wayland users left X11 to escape). AMD/Intel
+/// (Mesa) need nothing. Env must be set before the webview initializes, so we re-exec.
 #[cfg(unix)]
 fn ensure_gpu_env() {
     if std::env::var_os("OMNIDECK_ENV_READY").is_some() {
@@ -564,13 +580,23 @@ fn ensure_gpu_env() {
     cmd.args(std::env::args_os().skip(1));
     cmd.env("OMNIDECK_ENV_READY", "1");
     if capability::probe().nvidia_present {
-        cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
-            .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
-            .env("GDK_BACKEND", "x11");
-        // WEBKIT_DISABLE_COMPOSITING_MODE forces SOFTWARE paint on NVIDIA (the reliable-render
-        // workaround) — that's what caps animation smoothness (the category-switch fps dip). Set
-        // OMNIDECK_GPU_COMPOSITING=1 to try GPU compositing instead: much smoother *if* the driver +
-        // WebKitGTK render correctly without it. A/B test it; if the screen is blank, just unset it.
+        let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
+        let in_gamescope = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
+            || std::env::var_os("STEAM_GAMESCOPE").is_some();
+        if in_gamescope || session == "x11" {
+            // X11/gamescope: the dmabuf renderer paints blank on NVIDIA — disable it.
+            cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        } else if session == "wayland" {
+            // Wayland: WebKitGTK won't start on NVIDIA without this (explicit-sync crash); keeps
+            // the hardware-accelerated fast path, unlike disabling dmabuf.
+            cmd.env("__NV_DISABLE_EXPLICIT_SYNC", "1");
+        } else {
+            // Unknown session type: take the conservative X11-style workaround.
+            cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // Last-resort: WEBKIT_DISABLE_COMPOSITING_MODE forces SOFTWARE paint (caps animation
+        // smoothness — the category-switch fps dip). Set OMNIDECK_GPU_COMPOSITING=1 to try GPU
+        // compositing instead: smoother *if* driver + WebKitGTK render correctly without it.
         if std::env::var_os("OMNIDECK_GPU_COMPOSITING").is_none() {
             cmd.env("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         }

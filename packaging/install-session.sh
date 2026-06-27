@@ -25,10 +25,11 @@ fi
 command -v gamescope >/dev/null || {
   echo "✗ gamescope not found. Install it (Arch: pacman -S gamescope)."; exit 1; }
 
-# Pick a wayland-sessions dir the display manager actually scans. /usr/share is the
-# standard (SDDM/GDM default); /usr/local/share is the fallback for immutable distros.
-WAYLAND_SESSIONS=/usr/share/wayland-sessions
-[ -w /usr ] || [ -d "$WAYLAND_SESSIONS" ] || WAYLAND_SESSIONS=/usr/local/share/wayland-sessions
+# Always install to /usr/local/share/wayland-sessions: SDDM and GDM scan it on every distro
+# (it's in the default XDG_DATA_DIRS), and unlike /usr/share it stays writable on immutable
+# distros (Bazzite/SteamOS), where the old "/usr/share unless read-only" heuristic silently
+# failed — /usr/share/wayland-sessions exists there but is read-only, so the fallback never fired.
+WAYLAND_SESSIONS=/usr/local/share/wayland-sessions
 LAUNCHER=/usr/local/bin/omnideck-session
 
 echo "Installing OmniDeck gamescope session"
