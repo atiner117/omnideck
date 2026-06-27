@@ -71,3 +71,23 @@ jobs:
 
       - name: Tauri build (no bundle)
         run: bun run tauri build --no-bundle
+
+  cargo-deny:
+    name: cargo-deny (advisories · licenses · bans · sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: ./src-tauri/Cargo.toml
+
+  cargo-audit:
+    name: cargo-audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - name: cargo audit
+        working-directory: src-tauri
+        run: cargo audit

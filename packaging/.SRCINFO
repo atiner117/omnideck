@@ -1,0 +1,24 @@
+pkgbase = omnideck
+	pkgdesc = 10-foot, controller-first media & game launcher for Linux
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/atiner117/omnideck
+	install = omnideck.install
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = rust
+	makedepends = cargo
+	makedepends = bun-bin
+	makedepends = pkgconf
+	depends = webkit2gtk-4.1
+	depends = hicolor-icon-theme
+	optdepends = gamescope: 10-foot gamescope session mode (run packaging/install-session.sh)
+	optdepends = steam: Steam library scanning + launching
+	optdepends = playerctl: live song/show titles in Now Playing (MPRIS)
+	optdepends = xorg-xprop: STEAM_GAME atom handling inside the gamescope session
+	optdepends = cage: media-kiosk tier on hosts without a usable GPU
+	options = !lto
+	source = omnideck-0.1.0.tar.gz::https://github.com/atiner117/omnideck/archive/refs/tags/v0.1.0.tar.gz
+	b2sums = 8fb7937af3ab4487ab1beb5d063a85e5fb99fb4b4b6706ddaee4fa938891395db178d67dfc514417c0dc0c78f96b351561bc16488353b424379b5511e7528a05
+
+pkgname = omnideck
