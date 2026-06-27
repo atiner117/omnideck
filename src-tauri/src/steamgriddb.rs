@@ -71,6 +71,11 @@ pub async fn box_art(appid: &str, key: &str) -> Option<String> {
     }
     let body: Resp = resp.json().await.ok()?;
     let img_url = body.data.first()?.url.clone();
+    // The asset URL comes straight from the API JSON — require https so a compromised/spoofed
+    // response can't redirect the fetch to an internal service or a non-TLS endpoint.
+    if !img_url.starts_with("https://") {
+        return None;
+    }
     let ext = if img_url.ends_with(".png") {
         "png"
     } else if img_url.ends_with(".webp") {

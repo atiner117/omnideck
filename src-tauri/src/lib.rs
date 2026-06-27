@@ -656,7 +656,6 @@ pub fn run() {
     ensure_gpu_env();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_capability,
             get_library,

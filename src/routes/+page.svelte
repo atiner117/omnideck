@@ -205,7 +205,7 @@
         const keepAccent = Math.abs(iconLum - hexLum(accent)) >= 0.12; // enough contrast → keep color
         iconBg = { ...iconBg, [id]: keepAccent ? accent : iconLum > 0.5 ? "#0d0f14" : "#f4f5f8" };
         iconColor = { ...iconColor, [id]: `${ar},${ag},${ab}` }; // dominant color for the app bg gradient
-      } catch {}
+      } catch { /* canvas getImageData can throw on an odd/tainted image — skip the color calc */ }
     };
     img.src = dataUrl;
   }
@@ -344,7 +344,7 @@
       g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
       o.connect(g).connect(actx.destination);
       o.start(); o.stop(actx.currentTime + dur);
-    } catch {}
+    } catch { /* AudioContext unavailable/blocked (autoplay policy) — nav sound is non-essential */ }
   }
   const sfxMove = () => blip(420, 0.04, 0.32, "triangle");
   const sfxEnter = () => { blip(620, 0.06, 0.42); setTimeout(() => blip(880, 0.07, 0.38), 45); };
@@ -371,13 +371,13 @@
   async function loadArt(g: Game) {
     if (!art[g.appid]) {
       const p = g.art_box || g.art_header || g.art_hero;
-      if (p) { try { const d = await api.getArt(p); if (d) art = { ...art, [g.appid]: d }; } catch {} }
+      if (p) { try { const d = await api.getArt(p); if (d) art = { ...art, [g.appid]: d }; } catch { /* art is best-effort; the emoji placeholder stays */ } }
     }
     if (!g.art_box && !gridBox[g.appid] && cfg?.settings?.steamgriddb_key) {
-      try { const d = await api.gridArt(g.appid); if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; } } catch {}
+      try { const d = await api.gridArt(g.appid); if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; } } catch { /* SteamGridDB best-effort (no key / network) */ }
     }
     if (g.art_hero && !heroes[g.appid]) {
-      try { const d = await api.getArt(g.art_hero); if (d) heroes = { ...heroes, [g.appid]: d }; } catch {}
+      try { const d = await api.getArt(g.art_hero); if (d) heroes = { ...heroes, [g.appid]: d }; } catch { /* hero art best-effort; background just stays plain */ }
     }
   }
 
@@ -543,7 +543,7 @@
   function mediaControl(action: string) {
     api.mediaControl(action).catch((e) => reportError("Media control failed", e));
     // re-poll so the play/pause glyph and title update promptly
-    setTimeout(() => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {}), 250);
+    setTimeout(() => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch((e) => console.debug("[omnideck] media re-poll failed", e)), 250);
   }
   function isFav(id: string) { return favorites.includes(id); }
   function favCurrent() {
@@ -755,7 +755,7 @@
   onMount(() => {
     window.addEventListener("keydown", onKey);
     api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
-    api.inGamescopeSession().then((v) => (inSession = v)).catch(() => {});
+    api.inGamescopeSession().then((v) => (inSession = v)).catch((e) => console.debug("[omnideck] inGamescopeSession probe failed", e));
     api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
     api.getConfig()
       .then((c) => {
@@ -802,7 +802,7 @@
     // the process/game exits — correlate by the launch id (the tile id), not the display name.
     api.onAppExited((e) => { const id = String(e.payload ?? ""); nowList = nowList.filter((x) => x.id !== id); }).then((u) => off.push(u));
     // Poll MPRIS for the current song/show (works for native players + browser PWAs).
-    const pollMedia = () => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {});
+    const pollMedia = () => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch((e) => console.debug("[omnideck] media poll failed", e));
     pollMedia();
     const mediaTimer = setInterval(pollMedia, 4000);
     api.onGamepad((e) => {
@@ -894,7 +894,7 @@
   // fetch the current web-search provider's favicon (shown on the search "web" row)
   $effect(() => {
     const prov = cfg?.settings?.search_provider;
-    if (prov) api.appIcon(prov).then((d) => { searchEngineIcon = d ?? ""; }).catch(() => {});
+    if (prov) api.appIcon(prov).then((d) => { searchEngineIcon = d ?? ""; }).catch((e) => console.debug("[omnideck] search-engine favicon fetch failed", e));
   });
 </script>
 
