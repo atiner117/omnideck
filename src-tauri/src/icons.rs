@@ -29,6 +29,24 @@ pub fn domain_of(url: &str) -> Option<String> {
     }
 }
 
+/// True if `host` (possibly `ip:port`) is a loopback/private/link-local address we must not
+/// probe — a crafted/imported config tile URL like `http://169.254.169.254` would otherwise
+/// turn the `/favicon.ico` fetch into an internal-service probe (SSRF). Only literal private IPs
+/// are caught (single-user import threat model; `domain_of` already drops dot-less hosts like
+/// `localhost`/`[::1]`, so the realistic vector is a dotted IPv4 literal).
+fn is_blocked_host(host: &str) -> bool {
+    let h = host.rsplit_once(':').map(|(a, _)| a).unwrap_or(host); // strip :port
+    if let Ok(ip) = h.parse::<std::net::Ipv4Addr>() {
+        return ip.is_loopback()
+            || ip.is_private()
+            || ip.is_link_local()
+            || ip.is_unspecified()
+            || ip.is_broadcast()
+            || ip.octets()[0] == 0;
+    }
+    matches!(h, "localhost" | "localhost.localdomain")
+}
+
 /// last-two-labels fallback (open.spotify.com -> spotify.com, listen.tidal.com -> tidal.com).
 /// Naive on multi-part TLDs (.co.uk) but fine for the mainstream services we ship.
 fn root_domain(host: &str) -> Option<String> {
@@ -44,6 +62,9 @@ fn root_domain(host: &str) -> Option<String> {
 /// real image. DuckDuckGo sometimes returns junk for a subdomain, so we also try the root.
 pub async fn favicon(url: &str) -> Option<String> {
     let host = domain_of(url)?;
+    if is_blocked_host(&host) {
+        return None; // don't probe internal/loopback services from a crafted tile URL (SSRF)
+    }
     let dir = cache_dir()?;
     let _ = std::fs::create_dir_all(&dir);
     let safe = host.replace(['/', ':'], "_");
@@ -160,7 +181,7 @@ fn to_data_url(p: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::domain_of;
+    use super::{domain_of, is_blocked_host};
     #[test]
     fn extracts_domain() {
         assert_eq!(domain_of("--app=https://www.netflix.com").as_deref(), Some("www.netflix.com"));
@@ -168,5 +189,19 @@ mod tests {
         assert_eq!(domain_of("https://app.plex.tv/desktop?foo=1").as_deref(), Some("app.plex.tv"));
         assert_eq!(domain_of("brave"), None); // bare binary, no domain
         assert_eq!(domain_of("--app=https://localhost"), None); // no dot
+    }
+
+    #[test]
+    fn blocks_private_and_loopback_hosts() {
+        assert!(is_blocked_host("169.254.169.254")); // cloud metadata
+        assert!(is_blocked_host("127.0.0.1"));
+        assert!(is_blocked_host("10.0.0.5:8080")); // with port
+        assert!(is_blocked_host("192.168.1.1"));
+        assert!(is_blocked_host("172.16.4.2"));
+        assert!(is_blocked_host("0.0.0.0"));
+        assert!(is_blocked_host("localhost"));
+        assert!(!is_blocked_host("spotify.com"));
+        assert!(!is_blocked_host("icons.duckduckgo.com"));
+        assert!(!is_blocked_host("8.8.8.8")); // public IP is fine
     }
 }

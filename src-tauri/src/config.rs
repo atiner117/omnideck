@@ -64,9 +64,17 @@ impl Default for Settings {
     }
 }
 
+/// True for a `#rrggbb` hex color — the only form the UI emits and CSS needs.
+fn is_hex6(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 7 && b[0] == b'#' && b[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
 impl Settings {
-    /// Clamp the hand-editable numeric fields to sane ranges so a bad value in config.toml
-    /// (e.g. `ui_scale_custom = 99`) can't break the UI. Called on load.
+    /// Sanitize the hand-editable fields on load so a bad value in config.toml can't break the
+    /// UI or inject anything. Numerics are clamped; colors/URLs/enums that don't match are reset
+    /// to a safe default (the colors flow straight into CSS on `<main>`; `search_provider` into a
+    /// browser launch — also defended at the use-site, this is belt-and-suspenders).
     fn normalize(&mut self) {
         self.ui_scale_custom = self.ui_scale_custom.clamp(0.8, 3.5);
         self.bg_blur = self.bg_blur.clamp(0.0, 24.0);
@@ -74,6 +82,36 @@ impl Settings {
         self.sound_volume = self.sound_volume.clamp(0.0, 1.0);
         self.grid_columns = self.grid_columns.clamp(1, 12);
         self.dashboard_recents = self.dashboard_recents.min(50);
+
+        if !is_hex6(&self.accent) {
+            self.accent = "#4cc2ff".into();
+        }
+        if !is_hex6(&self.background_color) {
+            self.background_color = "#05070b".into();
+        }
+        // A non-empty provider must be an http(s) URL; clear anything else (empty = "not set",
+        // and the UI/launch path falls back to DuckDuckGo).
+        if !self.search_provider.is_empty()
+            && !self.search_provider.starts_with("https://")
+            && !self.search_provider.starts_with("http://")
+        {
+            self.search_provider.clear();
+        }
+        if !matches!(self.sort.as_str(), "alpha" | "recent") {
+            self.sort = "alpha".into();
+        }
+        if !matches!(
+            self.search_mode.as_str(),
+            "duckduckgo" | "google" | "brave" | "bing" | "searxng" | "custom"
+        ) {
+            self.search_mode = "duckduckgo".into();
+        }
+        if !matches!(self.recents_show.as_str(), "both" | "games" | "apps") {
+            self.recents_show = "both".into();
+        }
+        if !matches!(self.background_default.as_str(), "color" | "image") {
+            self.background_default = "color".into();
+        }
     }
 }
 
@@ -256,5 +294,45 @@ mod tests {
         assert_eq!(s.sound_volume, 1.0);
         assert_eq!(s.grid_columns, 1);
         assert_eq!(s.dashboard_recents, 50);
+    }
+
+    #[test]
+    fn normalize_sanitizes_bad_strings() {
+        let mut s = Settings {
+            accent: "red; background:url(http://evil)".into(), // CSS-injection attempt
+            background_color: "#zzz".into(),
+            search_provider: "javascript:alert(1)".into(), // non-http scheme
+            sort: "bogus".into(),
+            search_mode: "hax".into(),
+            recents_show: "nope".into(),
+            background_default: "weird".into(),
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.accent, "#4cc2ff");
+        assert_eq!(s.background_color, "#05070b");
+        assert_eq!(s.search_provider, ""); // cleared -> UI falls back to DuckDuckGo
+        assert_eq!(s.sort, "alpha");
+        assert_eq!(s.search_mode, "duckduckgo");
+        assert_eq!(s.recents_show, "both");
+        assert_eq!(s.background_default, "color");
+    }
+
+    #[test]
+    fn normalize_keeps_valid_strings() {
+        let mut s = Settings {
+            accent: "#AABBCC".into(),
+            background_color: "#000000".into(),
+            search_provider: "https://searx.example/search?q=".into(),
+            sort: "recent".into(),
+            search_mode: "searxng".into(),
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.accent, "#AABBCC");
+        assert_eq!(s.background_color, "#000000");
+        assert_eq!(s.search_provider, "https://searx.example/search?q=");
+        assert_eq!(s.sort, "recent");
+        assert_eq!(s.search_mode, "searxng");
     }
 }
