@@ -1,6 +1,7 @@
 # Maintainer: atiner117 <130574030+atiner117@users.noreply.github.com>
-# AUR package — builds OmniDeck from the tagged source.
-# Note: builds the v$pkgver git tag; bump pkgver + retag a release to ship newer work.
+# AUR package — builds OmniDeck from the tagged release tarball.
+# Bump pkgver + retag a release, then regenerate checksums (updpkgsums) and .SRCINFO
+# (makepkg --printsrcinfo > .SRCINFO) to ship newer work.
 pkgname=omnideck
 pkgver=0.1.0
 pkgrel=1
@@ -8,38 +9,61 @@ pkgdesc="10-foot, controller-first media & game launcher for Linux"
 arch=('x86_64')
 url="https://github.com/atiner117/omnideck"
 license=('GPL-3.0-or-later')
-depends=('webkit2gtk-4.1' 'gtk3')
-optdepends=('gamescope: 10-foot gamescope session mode'
-            'gamescope-session-git: boot OmniDeck as a session from your display manager'
-            'cage: media-kiosk tier on hosts without a usable GPU'
+# Cargo manages LTO via its release profile; layering makepkg's C-level -flto on top is
+# redundant for a Rust package and breaks `ring`'s separately-compiled asm at link time on
+# LTO-forcing distros (CachyOS, etc.). No-op on stock Arch (LTO off by default).
+options=('!lto')
+# webkit2gtk-4.1 pulls gtk3/libsoup3/glib2 transitively; hicolor-icon-theme owns the icon dirs.
+depends=('webkit2gtk-4.1' 'hicolor-icon-theme')
+optdepends=('gamescope: 10-foot gamescope session mode (run packaging/install-session.sh)'
             'steam: Steam library scanning + launching'
             'playerctl: live song/show titles in Now Playing (MPRIS)'
-            'xorg-xprop: STEAM_GAME atom handling inside the gamescope session')
+            'xorg-xprop: STEAM_GAME atom handling inside the gamescope session'
+            'cage: media-kiosk tier on hosts without a usable GPU')
 makedepends=('rust' 'cargo' 'bun-bin' 'pkgconf')
-source=("git+https://github.com/atiner117/omnideck.git#tag=v$pkgver")
-sha256sums=('SKIP')
+install="$pkgname.install"
+source=("$pkgname-$pkgver.tar.gz::https://github.com/atiner117/omnideck/archive/refs/tags/v$pkgver.tar.gz")
+b2sums=('8fb7937af3ab4487ab1beb5d063a85e5fb99fb4b4b6706ddaee4fa938891395db178d67dfc514417c0dc0c78f96b351561bc16488353b424379b5511e7528a05')
 
 build() {
-  cd "$srcdir/$pkgname"
+  cd "$pkgname-$pkgver"
   bun install --frozen-lockfile
   bun run tauri build --no-bundle
 }
 
 package() {
-  cd "$srcdir/$pkgname"
+  cd "$pkgname-$pkgver"
   install -Dm755 "src-tauri/target/release/omnideck" "$pkgdir/usr/bin/omnideck"
-  install -Dm644 "src-tauri/icons/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/omnideck.png"
+
+  # hicolor icon set (raster sizes + scalable source)
+  install -Dm644 "src-tauri/icons/32x32.png"      "$pkgdir/usr/share/icons/hicolor/32x32/apps/omnideck.png"
+  install -Dm644 "src-tauri/icons/64x64.png"      "$pkgdir/usr/share/icons/hicolor/64x64/apps/omnideck.png"
+  install -Dm644 "src-tauri/icons/128x128.png"    "$pkgdir/usr/share/icons/hicolor/128x128/apps/omnideck.png"
+  install -Dm644 "src-tauri/icons/128x128@2x.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/omnideck.png"
+  install -Dm644 "src-tauri/icons/icon.png"       "$pkgdir/usr/share/icons/hicolor/512x512/apps/omnideck.png"
+  install -Dm644 "icon.svg"                        "$pkgdir/usr/share/icons/hicolor/scalable/apps/omnideck.svg"
+
+  # ship the session installer; the .install post_install message points users at it.
+  install -Dm755 "packaging/install-session.sh"   "$pkgdir/usr/share/omnideck/install-session.sh"
+
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
-  # Regular desktop-menu launcher. The 10-foot gamescope *session* is an opt-in extra:
-  # run packaging/install-session.sh after install to add it to your display manager.
+  # Regular desktop-menu launcher. The 10-foot gamescope *session* is opt-in (install-session.sh).
+  # X-Gamescope-Session/DesktopNames deliberately NOT set here — those belong only on the session
+  # entry that install-session.sh writes, not on the desktop app launcher.
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/omnideck.desktop" <<'EOF'
 [Desktop Entry]
+Type=Application
 Name=OmniDeck
-Comment=10-foot media & game launcher
+GenericName=Media & Game Launcher
+Comment=10-foot, controller-first launcher for games, streaming, and your own media
 Exec=omnideck
 Icon=omnideck
-Type=Application
+Terminal=false
 Categories=Game;AudioVideo;
+Keywords=launcher;gamescope;steam;htpc;couch;controller;10-foot;media;
+StartupNotify=true
+StartupWMClass=omnideck
+PrefersNonDefaultGPU=true
 EOF
 }

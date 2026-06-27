@@ -6,6 +6,7 @@
 mod apps;
 mod capability;
 mod config;
+mod http;
 mod icons;
 mod library;
 mod steamgriddb;

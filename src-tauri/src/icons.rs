@@ -82,7 +82,7 @@ fn google_url(domain: &str) -> String {
 /// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy
 /// response (content-length can be absent or lie, so we cap the actual byte stream).
 async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
-    let mut resp = reqwest::get(url).await.ok()?;
+    let mut resp = crate::http::client().get(url).send().await.ok()?;
     let mut buf = Vec::new();
     loop {
         match resp.chunk().await {

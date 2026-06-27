@@ -28,7 +28,7 @@ fn cache_dir() -> Option<PathBuf> {
 /// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy
 /// response (content-length can be absent or lie, so we cap the actual byte stream).
 async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
-    let mut resp = reqwest::get(url).await.ok()?;
+    let mut resp = crate::http::client().get(url).send().await.ok()?;
     let mut buf = Vec::new();
     loop {
         match resp.chunk().await {
@@ -62,11 +62,10 @@ pub async fn box_art(appid: &str, key: &str) -> Option<String> {
         }
     }
 
-    let client = reqwest::Client::new();
     let api = format!(
         "https://www.steamgriddb.com/api/v2/grids/steam/{appid}?dimensions=600x900&types=static&limit=8&nsfw=false"
     );
-    let resp = client.get(&api).bearer_auth(key).send().await.ok()?;
+    let resp = crate::http::client().get(&api).bearer_auth(key).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
