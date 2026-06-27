@@ -94,6 +94,7 @@ export type Config = {
   favorites: string[];
   recent_apps: string[];
   config_path: string;
+  config_error?: string | null; // set when config.toml failed to parse/read (UI warns)
 };
 
 export type MediaInfo = { status: string; title: string; artist: string; player: string };
