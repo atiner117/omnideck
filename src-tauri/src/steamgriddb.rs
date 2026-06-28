@@ -3,7 +3,7 @@
 // capsule (600x900) art that's often missing from Steam's local cache. Results are
 // cached on disk so each game is fetched at most once.
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Deserialize)]
 struct Resp {
@@ -16,7 +16,7 @@ struct Grid {
     url: String,
 }
 
-fn cache_dir() -> Option<PathBuf> {
+pub fn cache_dir() -> Option<PathBuf> {
     // XDG: prefer $XDG_CACHE_HOME (when absolute), else ~/.cache (unchanged for existing installs).
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -45,8 +45,8 @@ async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// Returns a data URL for the game's vertical box art (cached or freshly fetched),
-/// or None if no key, no result, or a network error.
+/// Returns the cache **file path** for the game's vertical box art (cached or freshly fetched),
+/// or None if no key, no result, or a network error. The `omnideck://` asset protocol serves it.
 pub async fn box_art(appid: &str, key: &str) -> Option<String> {
     if key.is_empty() {
         return None;
@@ -58,7 +58,7 @@ pub async fn box_art(appid: &str, key: &str) -> Option<String> {
     for ext in ["jpg", "png", "webp"] {
         let p = dir.join(format!("{appid}_box.{ext}"));
         if p.exists() {
-            return to_data_url(&p);
+            return Some(p.to_string_lossy().into_owned());
         }
     }
 
@@ -86,19 +86,5 @@ pub async fn box_art(appid: &str, key: &str) -> Option<String> {
     let bytes = fetch_capped(&img_url, 16 * 1024 * 1024).await?; // box art is ~KB–low MB; 16 MiB cap
     let path = dir.join(format!("{appid}_box.{ext}"));
     std::fs::write(&path, &bytes).ok()?;
-    to_data_url(&path)
-}
-
-fn to_data_url(p: &Path) -> Option<String> {
-    use base64::Engine;
-    let bytes = std::fs::read(p).ok()?;
-    let mime = match p.extension().and_then(|e| e.to_str()) {
-        Some("png") => "image/png",
-        Some("webp") => "image/webp",
-        _ => "image/jpeg",
-    };
-    Some(format!(
-        "data:{mime};base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+    Some(path.to_string_lossy().into_owned())
 }

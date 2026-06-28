@@ -68,6 +68,20 @@ struct AppManifest {
     last_played: String,
 }
 
+/// Discover the active Steam root — the first standard location with a
+/// `steamapps/libraryfolders.vdf`, or None if Steam isn't installed. Reused by the
+/// `omnideck://` asset allowlist (`asset.rs`) as well as the library scan.
+pub fn steam_root() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    [
+        format!("{home}/.steam/steam"),
+        format!("{home}/.local/share/Steam"),
+        format!("{home}/.steam/root"),
+    ]
+    .into_iter()
+    .find(|p| Path::new(&format!("{p}/steamapps/libraryfolders.vdf")).exists())
+}
+
 pub fn scan() -> Library {
     let mut lib = Library::default();
 
