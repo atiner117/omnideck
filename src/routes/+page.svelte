@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "$lib/backend";
-  import type { App, Game, Config, Capability, MediaInfo } from "$lib/backend";
+  import type { App, Game, Config, Capability, MediaInfo, Settings } from "$lib/backend";
 
   type Tile =
     | { kind: "game"; id: string; cat: string; game: Game }
@@ -367,6 +367,14 @@
     fn();
     heldDelay = setTimeout(() => { heldRepeat = setInterval(() => { if (heldCode === code) fn(); else holdStop(); }, 110); }, 360);
   }
+  // One-shot timers tracked so onMount cleanup can cancel any still pending — avoids reactive
+  // state writes after the component is gone (matters under HMR / any future routing).
+  const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+  function later(fn: () => void, ms: number) {
+    const t = setTimeout(() => { pendingTimers.delete(t); fn(); }, ms);
+    pendingTimers.add(t);
+    return t;
+  }
 
   async function loadArt(g: Game) {
     if (!art[g.appid]) {
@@ -385,19 +393,29 @@
   function moveCat(d: number) { const n = CATEGORIES.length; catSel = (catSel + d + n) % n; focus = 0; sfxMove(); }
   function moveItem(d: number) { settingsEditing = false; if (itemCount) { focus = (focus + d + itemCount) % itemCount; sfxMove(); } }
   function onWheel(e: WheelEvent) { e.preventDefault(); if (navGate()) moveItem(e.deltaY > 0 ? 1 : -1); }
+  // Apply a partial settings change by MUTATING the reactive cfg.settings in place. Svelte 5
+  // $state is fine-grained, so only the touched keys signal — this avoids the old cfg={...cfg}
+  // full-rebuild that re-ran every derived (games re-sort, etc.) and re-fetched the background
+  // image on every nudge. Snapshot before sending so Tauri serializes a plain object, not a proxy.
+  function patchSettings(patch: Partial<Settings>) {
+    if (!cfg) return;
+    Object.assign(cfg.settings, patch);
+    api.saveSettings($state.snapshot(cfg.settings)).catch((e) => reportError("Couldn't save settings", e));
+  }
   function adjustSetting(key: string, dir: number) {
     if (!cfg) return;
-    const s = { ...cfg.settings };
-    if (key === "recents") s.dashboard_recents = clamp((s.dashboard_recents ?? 8) + dir, 0, 20);
-    else if (key === "custom") s.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 3.5));
-    else if (key === "blur") s.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
-    else if (key === "bright") s.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
-    else if (key === "soundvol") { s.sound_volume = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); s.sound = s.sound_volume > 0; }
-    cfg = { ...cfg, settings: s };
-    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
+    const s = cfg.settings;
+    const patch: Partial<Settings> = {};
+    if (key === "recents") patch.dashboard_recents = clamp((s.dashboard_recents ?? 8) + dir, 0, 20);
+    else if (key === "custom") patch.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 3.5));
+    else if (key === "blur") patch.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
+    else if (key === "bright") patch.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
+    else if (key === "soundvol") { const v = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); patch.sound_volume = v; patch.sound = v > 0; }
+    patchSettings(patch);
     if (key === "soundvol") blip(620, 0.06, 0.42, "sine", true);
   }
   function doAction(key: string) {
+    holdStop(); // a held D-pad press that opens this modal must not keep auto-repeating behind it
     if (key === "addcustom") { formOpen = true; fName = ""; fExec = ""; fIcon = "🚀"; fCat = "apps"; }
   }
   // --- numeric settings: also typeable via a real <input> while editing ---
@@ -411,23 +429,21 @@
   function setNum(key: string, raw: number) {
     const m = NUM_META[key]; if (!cfg || !m || Number.isNaN(raw)) return;
     let v = clamp(raw, m.lo, m.hi); if (m.int) v = Math.round(v); else v = round2(v);
-    const s = { ...cfg.settings };
-    if (key === "recents") s.dashboard_recents = v;
-    else if (key === "custom") s.ui_scale_custom = v;
-    else if (key === "blur") s.bg_blur = v;
-    else if (key === "bright") s.bg_brightness = v;
-    else if (key === "soundvol") { s.sound_volume = v; s.sound = v > 0; }
-    cfg = { ...cfg, settings: s };
-    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
+    const patch: Partial<Settings> = {};
+    if (key === "recents") patch.dashboard_recents = v;
+    else if (key === "custom") patch.ui_scale_custom = v;
+    else if (key === "blur") patch.bg_blur = v;
+    else if (key === "bright") patch.bg_brightness = v;
+    else if (key === "soundvol") { patch.sound_volume = v; patch.sound = v > 0; }
+    patchSettings(patch);
   }
   // text settings (currently just the custom background image path)
   function setText(key: string, raw: string) {
     if (!cfg) return;
-    const s = { ...cfg.settings };
-    if (key === "bgimage") s.background_image = raw.trim();
-    else if (key === "searchurl") s.search_provider = raw.trim();
-    cfg = { ...cfg, settings: s };
-    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
+    const patch: Partial<Settings> = {};
+    if (key === "bgimage") patch.background_image = raw.trim();
+    else if (key === "searchurl") patch.search_provider = raw.trim();
+    patchSettings(patch);
   }
   function textValue(key: string): string {
     if (key === "bgimage") return cfg?.settings?.background_image ?? "";
@@ -435,11 +451,7 @@
     return "";
   }
   function onBgColor(e: Event) {
-    const v = (e.target as HTMLInputElement).value;
-    if (!cfg) return;
-    const s = { ...cfg.settings, background_color: v };
-    cfg = { ...cfg, settings: s };
-    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
+    patchSettings({ background_color: (e.target as HTMLInputElement).value });
   }
   function focusSelect(node: HTMLInputElement) { node.focus(); node.select(); }
   function isTyping() {
@@ -448,11 +460,8 @@
   }
   function onAccentColor(e: Event) {
     const v = (e.target as HTMLInputElement).value;
-    if (!cfg) return;
-    const s = { ...cfg.settings, accent: v };
-    cfg = { ...cfg, settings: s };
+    patchSettings({ accent: v });
     accent = v;
-    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
   }
   // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise always
   // switches category (so you can never get trapped in Settings).
@@ -481,7 +490,7 @@
       else { status = `▶ ${name}…`; await api.launchCommand(t.app.exec, name, id); recordRecentApp(t.app.id); }
       nowList = [{ id, kind: t.kind, name, category }, ...nowList.filter((e) => e.id !== id)].slice(0, 3);
     } catch (e) { status = `launch error: ${e}`; return; }
-    setTimeout(() => (status = ""), 3500);
+    later(() => (status = ""), 3500);
   }
   function recordRecentApp(id: string) {
     recentApps = [id, ...recentApps.filter((x) => x !== id)].slice(0, 20);
@@ -508,42 +517,42 @@
     const d = new Date(ts * 1000);
     return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
   }
-  async function cycleSetting(key: string) {
+  function cycleSetting(key: string) {
     if (!cfg) return;
-    const s = { ...cfg.settings };
-    if (key === "size") { const c = SIZE_MODES.indexOf(s.ui_scale ?? "medium"); s.ui_scale = SIZE_MODES[((c < 0 ? 1 : c) + 1) % SIZE_MODES.length]; }
-    else if (key === "sort") s.sort = s.sort === "recent" ? "alpha" : "recent";
-    else if (key === "runtimes") s.show_runtimes = !s.show_runtimes;
+    const s = cfg.settings;
+    const patch: Partial<Settings> = {};
+    if (key === "size") { const c = SIZE_MODES.indexOf(s.ui_scale ?? "medium"); patch.ui_scale = SIZE_MODES[((c < 0 ? 1 : c) + 1) % SIZE_MODES.length]; }
+    else if (key === "sort") patch.sort = s.sort === "recent" ? "alpha" : "recent";
+    else if (key === "runtimes") patch.show_runtimes = !s.show_runtimes;
     else if (key === "sound") {
       // cycle Off → Low → Medium → High (Custom is reached via the Sound volume row)
       const cur = soundLabel();
       const i = SOUND_PRESETS.findIndex((p) => p.label === cur);
       const next = SOUND_PRESETS[(i < 0 ? 0 : i + 1) % SOUND_PRESETS.length];
-      s.sound = next.on; s.sound_volume = next.vol;
+      patch.sound = next.on; patch.sound_volume = next.vol;
       if (next.on) blip(620, 0.06, 0.42, "sine", true);
     }
-    else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); s.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
-    else if (key === "gamebg") s.game_backgrounds = !s.game_backgrounds;
-    else if (key === "appbg") s.app_backgrounds = !s.app_backgrounds;
-    else if (key === "bgcolor") { const c = BG_COLORS.indexOf(s.background_color ?? BG_COLORS[0]); s.background_color = BG_COLORS[((c < 0 ? -1 : c) + 1) % BG_COLORS.length]; }
-    else if (key === "recents_show") { const c = RECENTS_MODES.indexOf(s.recents_show ?? "both"); s.recents_show = RECENTS_MODES[((c < 0 ? 0 : c) + 1) % RECENTS_MODES.length]; }
-    else if (key === "accent") { const c = ACCENTS.indexOf(s.accent ?? "#4cc2ff"); s.accent = ACCENTS[((c < 0 ? 0 : c) + 1) % ACCENTS.length]; }
+    else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); patch.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
+    else if (key === "gamebg") patch.game_backgrounds = !s.game_backgrounds;
+    else if (key === "appbg") patch.app_backgrounds = !s.app_backgrounds;
+    else if (key === "bgcolor") { const c = BG_COLORS.indexOf(s.background_color ?? BG_COLORS[0]); patch.background_color = BG_COLORS[((c < 0 ? -1 : c) + 1) % BG_COLORS.length]; }
+    else if (key === "recents_show") { const c = RECENTS_MODES.indexOf(s.recents_show ?? "both"); patch.recents_show = RECENTS_MODES[((c < 0 ? 0 : c) + 1) % RECENTS_MODES.length]; }
+    else if (key === "accent") { const c = ACCENTS.indexOf(s.accent ?? "#4cc2ff"); patch.accent = ACCENTS[((c < 0 ? 0 : c) + 1) % ACCENTS.length]; }
     else if (key === "search") {
       const c = SEARCH_MODES.findIndex((m) => m.mode === (s.search_mode ?? "duckduckgo"));
       const next = SEARCH_MODES[((c < 0 ? 0 : c) + 1) % SEARCH_MODES.length];
-      s.search_mode = next.mode;
-      if (next.url) s.search_provider = next.url; // preset
-      else if (SEARCH_MODES.some((m) => m.url === s.search_provider)) s.search_provider = ""; // entering searxng/custom from a preset → clear for the URL field
+      patch.search_mode = next.mode;
+      if (next.url) patch.search_provider = next.url; // preset
+      else if (SEARCH_MODES.some((m) => m.url === s.search_provider)) patch.search_provider = ""; // entering searxng/custom → clear for the URL field
     }
-    cfg = { ...cfg, settings: s };
-    accent = s.accent ?? "#4cc2ff";
-    api.saveSettings(s).catch((e) => reportError("Couldn't save settings", e));
+    patchSettings(patch);
+    if (patch.accent) accent = patch.accent;
   }
 
   function mediaControl(action: string) {
     api.mediaControl(action).catch((e) => reportError("Media control failed", e));
     // re-poll so the play/pause glyph and title update promptly
-    setTimeout(() => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch((e) => console.debug("[omnideck] media re-poll failed", e)), 250);
+    later(() => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch((e) => console.debug("[omnideck] media re-poll failed", e)), 250);
   }
   function isFav(id: string) { return favorites.includes(id); }
   function favCurrent() {
@@ -566,6 +575,7 @@
   function openPower() { holdStop(); powerOpen = true; powerFocus = 0; }
   function powerMove(d: number) { powerFocus = clamp(powerFocus + d, 0, POWER.length - 1); }
   function powerActivate() {
+    holdStop(); // stop any in-progress hold-repeat when moving to the confirm/exit step
     const key = POWER[powerFocus].key;
     powerOpen = false;
     if (key === "exit") api.quit().catch((e) => reportError("Couldn't exit", e));
@@ -581,15 +591,22 @@
     const name = fName.trim();
     const cmd = fExec.trim();
     if (!cfg || !name || !cmd) { formOpen = false; return; }
-    const id = "custom-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    // Slugify, trimming leading/trailing dashes so "My App!" and "My App?" don't both collapse
+    // to "custom-my-app-"; reject a name with no usable characters.
+    const base = "custom-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (base === "custom-") { reportError("Add a name with at least one letter or number", null); return; }
+    // De-dup with a numeric suffix instead of silently overwriting an existing same-slug launcher.
+    const collided = apps.some((a) => a.id === base);
+    let id = base; for (let n = 2; apps.some((a) => a.id === id); n++) id = `${base}-${n}`;
     // A bare URL (e.g. a SearXNG instance) is launched as a browser app so it opens in the
     // browser AND gets its site favicon; anything else is run as a normal argv command.
     const isUrl = /^https?:\/\//i.test(cmd);
     const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : cmd.split(/\s+/);
     const app = { id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat };
-    const next = [...apps.filter((a) => a.id !== id), app];
+    const next = [...apps, app];
     cfg = { ...cfg, apps: next };
     api.saveApps(next).catch((e) => reportError("Couldn't save apps", e));
+    if (collided) { status = `Added "${name}" (a similar name already existed)`; later(() => (status = ""), 3000); }
     formOpen = false;
   }
 
@@ -626,7 +643,7 @@
     api.launchCommand(["BROWSER", prov + encodeURIComponent(searchQuery)], "Search").catch((e) => reportError("Search failed", e));
     searchOpen = false;
     status = `🔎 ${searchQuery}`;
-    setTimeout(() => (status = ""), 2500);
+    later(() => (status = ""), 2500);
   }
   function searchActivate() {
     if (searchFocus < searchResults.length) { searchOpen = false; launchTile(searchResults[searchFocus]); }
@@ -673,10 +690,16 @@
   // ---- first-run wizard ----
   let wizardActive = $state(false);
   let wizardStep = $state(0);
-  async function finishWizard() { wizardActive = false; if (!cfg) return; const s = { ...cfg.settings, onboarded: true }; cfg = { ...cfg, settings: s }; try { await api.saveSettings(s); } catch (e) { reportError("Couldn't save settings", e); } }
+  function finishWizard() { wizardActive = false; patchSettings({ onboarded: true }); }
   function wizardNext() { if (wizardStep >= 2) finishWizard(); else wizardStep++; }
   function wizardPrev() { if (wizardStep > 0) wizardStep--; }
-  function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; cfg = { ...cfg, settings: { ...cfg.settings, accent: a } }; accent = a; api.saveSettings(cfg.settings).catch((e) => reportError("Couldn't save settings", e)); }
+  function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; patchSettings({ accent: a }); accent = a; }
+
+  // Single source of truth: is any modal/overlay open? Gates base navigation and stops
+  // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
+  const anyModal = $derived(
+    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen,
+  );
 
   function onKey(e: KeyboardEvent) {
     // A real <input>/<select> is focused (settings number field, custom-launcher form):
@@ -867,7 +890,7 @@
         // One deadzone (no 0.3–0.6 dead band) + the same hold-repeat the D-pad uses. Track the
         // active axis:direction so a held stick auto-repeats once, and recentering or any modal
         // opening stops it — fixes drift-stuck nav and phantom nav behind a modal.
-        if (wizardActive || catalogOpen || searchOpen || powerOpen || confirmAct || formOpen || infoOpen) { holdStop(); return; }
+        if (anyModal) { holdStop(); return; }
         const DZ = 0.6;
         const dir = p.value > DZ ? 1 : p.value < -DZ ? -1 : 0;
         const code = `${p.code}:${dir}`;
@@ -876,7 +899,16 @@
       }
     }).then((u) => off.push(u));
 
-    return () => { window.removeEventListener("keydown", onKey); cancelAnimationFrame(raf); clearInterval(mediaTimer); off.forEach((u) => u()); };
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
+      clearInterval(mediaTimer);
+      clearTimeout(toastErrTimer);
+      clearTimeout(bgTimer);
+      pendingTimers.forEach(clearTimeout);
+      holdStop();
+      off.forEach((u) => u());
+    };
   });
 
   $effect(() => { if (focus >= itemCount && itemCount) focus = itemCount - 1; });
@@ -885,16 +917,19 @@
   $effect(() => { for (const t of items) if (t.kind === "app") loadAppIcon(t.app); });
   $effect(() => { for (const c of displayedCatalog) loadAppIcon(c); });
   // load the custom background image (data URL) when that mode is selected
+  let bgSeq = 0;
   $effect(() => {
     const path = cfg?.settings?.background_image;
     if (cfg?.settings?.background_default === "image" && path) {
-      api.getArt(path).then((d) => { bgImageUrl = d ?? ""; }).catch(() => { bgImageUrl = ""; });
+      const seq = ++bgSeq; // drop a stale resolve if the path changed before this one returned
+      api.getArt(path).then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; }).catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
     } else { bgImageUrl = ""; }
   });
   // fetch the current web-search provider's favicon (shown on the search "web" row)
+  let provSeq = 0;
   $effect(() => {
     const prov = cfg?.settings?.search_provider;
-    if (prov) api.appIcon(prov).then((d) => { searchEngineIcon = d ?? ""; }).catch((e) => console.debug("[omnideck] search-engine favicon fetch failed", e));
+    if (prov) { const seq = ++provSeq; api.appIcon(prov).then((d) => { if (seq === provSeq) searchEngineIcon = d ?? ""; }).catch((e) => console.debug("[omnideck] search-engine favicon fetch failed", e)); }
   });
 </script>
 
