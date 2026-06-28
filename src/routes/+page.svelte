@@ -375,6 +375,15 @@
     pendingTimers.add(t);
     return t;
   }
+  // a11y: move focus into a dialog when it opens (so screen readers announce it), and restore
+  // focus to the opener when it closes. No Tab-trap on purpose — nav is controller-first via
+  // arrow keys (onKey), and the catalog binds Tab to its sort toggle; a hard trap would fight
+  // both. Applied to each modal/overlay container via use:dialogFocus.
+  function dialogFocus(node: HTMLElement) {
+    const prev = document.activeElement as HTMLElement | null;
+    node.focus();
+    return { destroy() { prev?.focus?.(); } };
+  }
 
   async function loadArt(g: Game) {
     if (!art[g.appid]) {
@@ -945,10 +954,10 @@
     <div class="brand">OMNIDECK</div>
     <div class="meta">
       <span class="clock">{clock}</span>
-      <button class="badge gear" onclick={openSearch} title="Search (/)">🔍</button>
-      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)">＋</button>
-      <button class="badge gear" onclick={gotoSettings} title="Settings (P)">⚙</button>
-      <button class="badge gear" onclick={openPower} title="Power">⏻</button>
+      <button class="badge gear" onclick={openSearch} title="Search (/)" aria-label="Search">🔍</button>
+      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)" aria-label="Add apps">＋</button>
+      <button class="badge gear" onclick={gotoSettings} title="Settings (P)" aria-label="Settings">⚙</button>
+      <button class="badge gear" onclick={openPower} title="Power" aria-label="Power menu">⏻</button>
     </div>
   </header>
 
@@ -1018,22 +1027,22 @@
 
   {#if searchOpen}
     <button class="prefs-backdrop" aria-label="Close search" onclick={() => (searchOpen = false)}></button>
-    <div class="prefs catalog">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (searchOpen = false)}>✕</button>
-      <h2>Search</h2>
+    <div class="prefs catalog" role="dialog" aria-modal="true" aria-labelledby="dlg-search" tabindex="-1" use:dialogFocus>
+      <button class="prefs-close" title="Close (Esc)" aria-label="Close search" onclick={() => (searchOpen = false)}>✕</button>
+      <h2 id="dlg-search">Search</h2>
       <div class="csearch active">{searchQuery ? `🔎 ${searchQuery}` : "Type to search your games, apps & the web…"}</div>
       <div class="catlist">
         {#each searchResults as t, i (t.id)}
-          <div class="crow" class:focused={i === searchFocus} data-sr={i} onmouseenter={() => (searchFocus = i)} onclick={() => { searchFocus = i; searchActivate(); }}>
+          <button type="button" class="crow" class:focused={i === searchFocus} data-sr={i} onmouseenter={() => (searchFocus = i)} onclick={() => { searchFocus = i; searchActivate(); }}>
             <span class="cicon" style="background:{t.kind === 'app' && appIcons[t.app.id] ? (iconBg[t.app.id] ?? '#f4f5f8') : t.kind === 'app' ? t.app.accent : '#22304a'}">{#if t.kind === "app" && appIcons[t.app.id]}<img class="appicon" src={appIcons[t.app.id]} alt="" />{:else}{t.kind === "app" ? t.app.icon : "🎮"}{/if}</span>
             <span class="cname">{t.kind === "app" ? t.app.name : t.game.name}</span>
             <span class="ccat">{t.cat}</span>
-          </div>
+          </button>
         {/each}
-        <div class="crow" class:focused={searchFocus === searchResults.length} data-sr={searchResults.length} onmouseenter={() => (searchFocus = searchResults.length)} onclick={() => webSearch()}>
+        <button type="button" class="crow" class:focused={searchFocus === searchResults.length} data-sr={searchResults.length} onmouseenter={() => (searchFocus = searchResults.length)} onclick={() => webSearch()}>
           <span class="cicon" style="background:#3a3f4a">{#if searchEngineIcon}<img class="appicon" src={searchEngineIcon} alt="" />{:else}🌐{/if}</span>
           <span class="cname">Search the web{searchQuery ? ` for “${searchQuery}”` : "…"}</span>
-        </div>
+        </button>
       </div>
       <div class="osk" role="group" aria-label="On-screen keyboard">
         {#each OSK_FLAT as k, i}
@@ -1047,21 +1056,21 @@
 
   {#if catalogOpen}
     <button class="prefs-backdrop" aria-label="Close add apps" onclick={() => (catalogOpen = false)}></button>
-    <div class="prefs catalog">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (catalogOpen = false)}>✕</button>
+    <div class="prefs catalog" role="dialog" aria-modal="true" aria-labelledby="dlg-catalog" tabindex="-1" use:dialogFocus>
+      <button class="prefs-close" title="Close (Esc)" aria-label="Close add apps" onclick={() => (catalogOpen = false)}>✕</button>
       <div class="chead">
-        <h2>Add apps &amp; media</h2>
+        <h2 id="dlg-catalog">Add apps &amp; media</h2>
         <button class="sortbtn" onclick={() => (catSort = catSort === "group" ? "alpha" : "group")}>{catSort === "group" ? "Grouped" : "A–Z"}</button>
       </div>
       <div class="csearch" class:active={catQuery}>{catQuery ? `🔎 ${catQuery}` : "Type to search…  ·  Tab: sort"}</div>
       <div class="catlist">
         {#each displayedCatalog as c, i (c.id)}
           {#if catSort === "group" && (i === 0 || displayedCatalog[i - 1].category !== c.category)}<div class="cgroup">{c.category ?? "apps"}</div>{/if}
-          <div class="crow" class:focused={i === catFocus} data-cat={i} onmouseenter={() => (catFocus = i)} onclick={() => { catFocus = i; catToggle(i); }}>
+          <button type="button" class="crow" class:focused={i === catFocus} data-cat={i} onmouseenter={() => (catFocus = i)} onclick={() => { catFocus = i; catToggle(i); }}>
             <span class="cicon" style="background:{appIcons[c.id] ? (iconBg[c.id] ?? '#f4f5f8') : c.accent}">{#if appIcons[c.id]}<img class="appicon" src={appIcons[c.id]} alt="" />{:else}{c.icon}{/if}</span>
             <span class="cname">{c.name}</span>
             <span class="cstate" class:on={isAdded(c.id)}>{isAdded(c.id) ? "✓ Added" : "+ Add"}</span>
-          </div>
+          </button>
         {/each}
         {#if !displayedCatalog.length}<div class="cgroup">no matches for “{catQuery}”</div>{/if}
       </div>
@@ -1071,10 +1080,10 @@
 
   {#if infoOpen && infoTile}
     <button class="prefs-backdrop" aria-label="Close info" onclick={() => (infoOpen = false)}></button>
-    <div class="prefs info">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (infoOpen = false)}>✕</button>
+    <div class="prefs info" role="dialog" aria-modal="true" aria-labelledby="dlg-info" tabindex="-1" use:dialogFocus>
+      <button class="prefs-close" title="Close (Esc)" aria-label="Close info" onclick={() => (infoOpen = false)}>✕</button>
       {#if infoTile.kind === "game"}
-        <h2>{infoTile.game.name}</h2>
+        <h2 id="dlg-info">{infoTile.game.name}</h2>
         <dl class="infogrid">
           <dt>Type</dt><dd>Steam game</dd>
           <dt>App ID</dt><dd>{infoTile.game.appid}</dd>
@@ -1088,7 +1097,7 @@
         </div>
         <p class="phint">Steam properties opens Steam (for launch options / verify). Esc/◯ close.</p>
       {:else}
-        <h2>{infoTile.app.name}</h2>
+        <h2 id="dlg-info">{infoTile.app.name}</h2>
         <dl class="infogrid">
           <dt>Category</dt><dd>{infoTile.cat}</dd>
           <dt>Source</dt><dd>{appSource(infoTile.app)}</dd>
@@ -1103,15 +1112,15 @@
 
   {#if powerOpen}
     <button class="prefs-backdrop" aria-label="Close power menu" onclick={() => (powerOpen = false)}></button>
-    <div class="prefs power">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (powerOpen = false)}>✕</button>
-      <h2>Power</h2>
+    <div class="prefs power" role="dialog" aria-modal="true" aria-labelledby="dlg-power" tabindex="-1" use:dialogFocus>
+      <button class="prefs-close" title="Close (Esc)" aria-label="Close power menu" onclick={() => (powerOpen = false)}>✕</button>
+      <h2 id="dlg-power">Power</h2>
       <div class="catlist">
         {#each POWER as p, i}
-          <div class="crow" class:focused={i === powerFocus} onmouseenter={() => (powerFocus = i)} onclick={() => { powerFocus = i; powerActivate(); }}>
+          <button type="button" class="crow" class:focused={i === powerFocus} onmouseenter={() => (powerFocus = i)} onclick={() => { powerFocus = i; powerActivate(); }}>
             <span class="cicon" style="background:#22304a">{p.icon}</span>
             <span class="cname">{p.key === "exit" && inSession ? "Log out" : p.label}</span>
-          </div>
+          </button>
         {/each}
       </div>
       <p class="phint">↑↓ select · Enter/✕ choose · Esc/◯ close</p>
@@ -1120,8 +1129,8 @@
 
   {#if confirmAct}
     <button class="prefs-backdrop" aria-label="Cancel" onclick={() => (confirmAct = null)}></button>
-    <div class="prefs confirm">
-      <h2>{confirmAct.label}?</h2>
+    <div class="prefs confirm" role="dialog" aria-modal="true" aria-labelledby="dlg-confirm" tabindex="-1" use:dialogFocus>
+      <h2 id="dlg-confirm">{confirmAct.label}?</h2>
       <p class="wlead">This will {confirmAct.key === "reboot" ? "restart" : "shut down"} the computer.</p>
       <div class="confirm-btns">
         <button class="cbtn" onclick={() => (confirmAct = null)}>Cancel</button>
@@ -1133,9 +1142,9 @@
 
   {#if formOpen}
     <button class="prefs-backdrop" aria-label="Close" onclick={() => (formOpen = false)}></button>
-    <div class="prefs">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (formOpen = false)}>✕</button>
-      <h2>Add custom launcher</h2>
+    <div class="prefs" role="dialog" aria-modal="true" aria-labelledby="dlg-form" tabindex="-1" use:dialogFocus>
+      <button class="prefs-close" title="Close (Esc)" aria-label="Close" onclick={() => (formOpen = false)}>✕</button>
+      <h2 id="dlg-form">Add custom launcher</h2>
       <div class="frow"><label for="f-name">Name</label><input id="f-name" bind:value={fName} placeholder="My App" /></div>
       <div class="frow"><label for="f-exec">Command</label><input id="f-exec" bind:value={fExec} placeholder="/usr/bin/foo --flag" /></div>
       <div class="frow"><label for="f-icon">Icon</label><input id="f-icon" bind:value={fIcon} placeholder="🚀" /></div>
@@ -1156,7 +1165,7 @@
   {/if}
 
   {#if wizardActive && cfg}
-    <div class="wizard">
+    <div class="wizard" role="dialog" aria-modal="true" aria-label="OmniDeck setup" tabindex="-1" use:dialogFocus>
       {#if wizardStep === 0}
         <div class="wstep">
           <div class="wlogo">OMNIDECK</div><h2>Welcome 👋</h2>
@@ -1194,13 +1203,13 @@
           </span>
           {#if c.media}
             <span class="np-controls">
-              <button class="np-c" title="Previous" onclick={() => mediaControl("previous")}>⏮</button>
-              <button class="np-c" title="Play / Pause" onclick={() => mediaControl("play-pause")}>{c.media.status === "Playing" ? "⏸" : "▶"}</button>
-              <button class="np-c" title="Next" onclick={() => mediaControl("next")}>⏭</button>
+              <button class="np-c" title="Previous" aria-label="Previous track" onclick={() => mediaControl("previous")}>⏮</button>
+              <button class="np-c" title="Play / Pause" aria-label="Play or pause" onclick={() => mediaControl("play-pause")}>{c.media.status === "Playing" ? "⏸" : "▶"}</button>
+              <button class="np-c" title="Next" aria-label="Next track" onclick={() => mediaControl("next")}>⏭</button>
             </span>
           {/if}
-          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (or press the Guide button)" onclick={() => api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e))}>↩</button>{/if}
-          {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" onclick={() => (nowList = nowList.filter((x) => x.id !== c.id))}>✕</button>{/if}
+          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (or press the Guide button)" aria-label="Close app and return" onclick={() => api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e))}>↩</button>{/if}
+          {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" aria-label="Dismiss card" onclick={() => (nowList = nowList.filter((x) => x.id !== c.id))}>✕</button>{/if}
         </div>
       {/each}
     </div>
@@ -1275,7 +1284,16 @@
   .swatch { width: 30px; height: 18px; border-radius: 5px; display: inline-block; border: 1px solid #ffffff44; }
   .numedit { width: 5em; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
   .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
-  .numedit:focus, .textedit:focus { outline: none; }
+  /* Suppress the default focus ring on elements that already show focus another way (inputs'
+     accent border, the in-app .focused highlight used by controller/mouse nav)... */
+  .numedit:focus, .textedit:focus, .crow:focus, .cbtn:focus, .oskkey:focus, .sortbtn:focus,
+  .prefs-close:focus, .badge:focus, .np-c:focus, .np-x:focus, .fpsbtn:focus,
+  .xcat:focus, .xitem:focus { outline: none; }
+  /* ...but show a clear accent ring for keyboard users (:focus-visible only). */
+  .numedit:focus-visible, .textedit:focus-visible, .crow:focus-visible, .cbtn:focus-visible,
+  .oskkey:focus-visible, .sortbtn:focus-visible, .prefs-close:focus-visible, .badge:focus-visible,
+  .np-c:focus-visible, .np-x:focus-visible, .fpsbtn:focus-visible,
+  .xcat:focus-visible, .xitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
 
@@ -1306,7 +1324,7 @@
   .prefs-close { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 9px; background: #1b2540; border: 1px solid #2c3a5c; color: #9fb0c8; cursor: pointer; font-size: 15px; line-height: 1; }
   .prefs-close:hover { border-color: var(--accent); color: #fff; }
   .catlist { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
-  .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; }
+  .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: none; color: inherit; font: inherit; width: 100%; text-align: left; }
   .crow.focused { background: #1b2540; border-color: var(--accent); }
   .cicon { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; font-size: 20px; flex: 0 0 auto; }
   .cname { flex: 1; font-size: clamp(14px, 1.5vw, 18px); font-weight: 600; }
@@ -1354,8 +1372,15 @@
   .wnav { margin-top: 14px; color: #7e8aa0; font-size: clamp(13px, 1.4vw, 17px); }
   .wnav b { color: var(--accent); }
 
-  footer { padding: 7px 2.4vw; color: #5b6678; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
+  footer { padding: 7px 2.4vw; color: #8a96ab; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
   footer b { color: #93a0b6; font-weight: 600; }
   .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
   .fpsbtn:hover { color: var(--accent); }
+
+  /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
+     transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
+  @media (prefers-reduced-motion: reduce) {
+    .np-spinner, .np-eq i { animation: none; }
+    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon { transition: none !important; }
+  }
 </style>
