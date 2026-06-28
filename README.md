@@ -122,8 +122,8 @@ category = "games"                      # games | video | music | apps
 Most of these are also editable in-app (**Settings**), including an **Add custom launcher**
 form for your own commands.
 
-Debug helpers (headless, no window): `omnideck --probe`, `--scan`, `--config`,
-`--catalog`, `--gridart <appid>`.
+Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
+`catalog`, `gridart <appid>` (and `omnideck --help` / `--version`).
 
 ## A note on streaming quality
 

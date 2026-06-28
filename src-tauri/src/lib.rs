@@ -11,6 +11,7 @@ mod icons;
 mod library;
 mod steamgriddb;
 
+use clap::Parser;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::Emitter;
@@ -43,9 +44,11 @@ fn return_home() -> bool {
     // behind; the child is spawned as its own group leader (process_group(0) in launch),
     // so -pid reaches every forked helper. Fall back to the bare pid if that misses.
     let grp = format!("-{pid}");
-    let _ = std::process::Command::new("kill").args(["-TERM", &grp]).status();
-    let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status();
-    true
+    let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
+    let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
+    // Only report success if a signal actually reached something — otherwise the caller would
+    // emit "app-closed" / swallow the Guide press while the window is still on screen.
+    grp_ok || pid_ok
 }
 
 fn gamepad_loop(handle: tauri::AppHandle) {
@@ -68,6 +71,13 @@ fn gamepad_loop(handle: tauri::AppHandle) {
         format!("gilrs ready — {} pad(s) connected: {pads:?}", pads.len()),
     );
 
+    // Coalesce noisy AxisChanged: a jittery resting stick streams ~125 events/s/axis; the
+    // frontend only needs coarse values for its 0.6 deadband. Emit only when an axis has moved
+    // at least AXIS_EPS from its last EMITTED value (cuts IPC volume ~10x on drifty sticks).
+    let mut last_axis: std::collections::HashMap<(gilrs::GamepadId, gilrs::Axis), f32> =
+        std::collections::HashMap::new();
+    const AXIS_EPS: f32 = 0.05;
+
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
@@ -78,6 +88,14 @@ fn gamepad_loop(handle: tauri::AppHandle) {
                     let _ = handle.emit("app-closed", ());
                     continue; // swallow the press; don't also forward it as a UI event
                 }
+            }
+            // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
+            if let gilrs::EventType::AxisChanged(a, v, _) = &event {
+                let key = (id, *a);
+                if last_axis.get(&key).is_some_and(|p| (*p - *v).abs() < AXIS_EPS) {
+                    continue;
+                }
+                last_axis.insert(key, *v);
             }
             let (kind, code, value) = match event {
                 gilrs::EventType::ButtonPressed(b, _) => {
@@ -278,8 +296,23 @@ fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: Opti
             return;
         }
         eprintln!("[omnideck] watchdog: '{name}' is running");
-        // Phase 2: wait for exit.
-        while running(&reg) != Some(false) {
+        // Phase 2: wait for exit. running()==None means "unknown" (registry momentarily
+        // unreadable, or the appid block vanished after a Steam restart). Tolerate brief None
+        // runs, but give up after a long stretch so a Steam crash mid-game can't spin this
+        // thread at 1 Hz forever.
+        let mut unknown = 0u32;
+        loop {
+            match running(&reg) {
+                Some(false) => break,      // confirmed stopped
+                Some(true) => unknown = 0, // confirmed running — reset the unknown counter
+                None => {
+                    unknown += 1;
+                    if unknown >= 900 {
+                        eprintln!("[omnideck] watchdog: '{name}' state unknown for ~15 min; giving up");
+                        break;
+                    }
+                }
+            }
             std::thread::sleep(std::time::Duration::from_millis(1000));
         }
         eprintln!("[omnideck] watchdog: '{name}' exited — refocusing OmniDeck");
@@ -608,48 +641,77 @@ fn ensure_gpu_env() {
 #[cfg(not(unix))]
 fn ensure_gpu_env() {}
 
+/// Headless CLI surface. With no subcommand, OmniDeck launches its GUI; the subcommands are
+/// debug/inspection helpers. `--version` and `--help` come for free from clap.
+#[derive(Parser)]
+#[command(name = "omnideck", version, about = "10-foot, controller-first media & game launcher for Linux")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(clap::Subcommand)]
+enum CliCommand {
+    /// Capability probe: tier + GPU/KMS/Vulkan detection (human-readable + JSON)
+    Probe,
+    /// Scan the Steam library
+    Scan,
+    /// Print the resolved config (path + settings + apps)
+    Config,
+    /// Fetch + cache SteamGridDB box art for an appid (needs steamgriddb_key in config)
+    Gridart {
+        /// Steam appid, e.g. 570
+        appid: String,
+    },
+    /// List the bundled app/media catalog
+    Catalog,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Headless checks: `omnideck --probe` (tier) and `omnideck --scan` (Steam library).
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--probe") {
-        let cap = capability::probe();
-        print!("{}", capability::report(&cap));
-        println!(
-            "\n--- json ---\n{}",
-            serde_json::to_string_pretty(&cap).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
-        );
-        return;
-    }
-    if args.iter().any(|a| a == "--scan") {
-        let lib = library::scan();
-        print!("{}", library::report(&lib));
-        return;
-    }
-    if args.iter().any(|a| a == "--config") {
-        let cfg = config::load_or_create();
-        print!("{}", config::report(&cfg));
-        return;
-    }
-    if let Some(i) = args.iter().position(|a| a == "--gridart") {
-        let appid = args.get(i + 1).cloned().unwrap_or_default();
-        let key = config::load_or_create().settings.steamgriddb_key;
-        if key.is_empty() {
-            println!("--gridart: no steamgriddb_key set in config.toml [settings]");
-        } else {
-            let got = tauri::async_runtime::block_on(steamgriddb::box_art(&appid, &key)).is_some();
+    // Headless subcommands; no subcommand = launch the GUI. Parsed BEFORE ensure_gpu_env so a
+    // CLI invocation never triggers the GPU re-exec. clap gives --version/--help and rejects
+    // unknown flags (the old hand-rolled chain silently ignored them and ran only the first).
+    match Cli::parse().command {
+        Some(CliCommand::Probe) => {
+            let cap = capability::probe();
+            print!("{}", capability::report(&cap));
             println!(
-                "--gridart {appid}: {}",
-                if got { "OK (box art cached)" } else { "no result / network error" }
+                "\n--- json ---\n{}",
+                serde_json::to_string_pretty(&cap).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
             );
+            return;
         }
-        return;
-    }
-    if args.iter().any(|a| a == "--catalog") {
-        for a in apps::catalog() {
-            println!("{} {}  [{}]", a.icon, a.name, a.exec.join(" "));
+        Some(CliCommand::Scan) => {
+            let lib = library::scan();
+            print!("{}", library::report(&lib));
+            return;
         }
-        return;
+        Some(CliCommand::Config) => {
+            let cfg = config::load_or_create();
+            print!("{}", config::report(&cfg));
+            return;
+        }
+        Some(CliCommand::Gridart { appid }) => {
+            let key = config::load_or_create().settings.steamgriddb_key;
+            if key.is_empty() {
+                println!("gridart: no steamgriddb_key set in config.toml [settings]");
+            } else {
+                let got = tauri::async_runtime::block_on(steamgriddb::box_art(&appid, &key)).is_some();
+                println!(
+                    "gridart {appid}: {}",
+                    if got { "OK (box art cached)" } else { "no result / network error" }
+                );
+            }
+            return;
+        }
+        Some(CliCommand::Catalog) => {
+            for a in apps::catalog() {
+                println!("{} {}  [{}]", a.icon, a.name, a.exec.join(" "));
+            }
+            return;
+        }
+        None => {}
     }
 
     // Re-exec once with GPU-appropriate webview env (NVIDIA needs workarounds; Mesa doesn't).

@@ -32,4 +32,6 @@ base64 = "0.22"
 toml = "0.8"
 # SteamGridDB: fetch missing box art over HTTPS
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# headless CLI surface (omnideck probe|scan|gridart|catalog|config + --version/--help)
+clap = { version = "4", features = ["derive"] }
 
