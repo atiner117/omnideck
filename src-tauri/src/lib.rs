@@ -4,6 +4,7 @@
 // ship: gilrs reads evdev on a dedicated std thread (gilrs is !Send, so it cannot
 // live in a tokio task) and forwards typed events to the webview via Tauri events.
 mod apps;
+mod asset;
 mod capability;
 mod config;
 mod http;
@@ -718,6 +719,12 @@ pub fn run() {
     ensure_gpu_env();
 
     tauri::Builder::default()
+        // omnideck:// serves on-disk art files (Steam librarycache + our art cache) as URLs
+        // instead of base64 data URLs pinned in reactive state — see asset.rs / NOTES-PERFORMANCE.
+        .register_asynchronous_uri_scheme_protocol("omnideck", |_ctx, request, responder| {
+            let path = request.uri().path().to_string();
+            std::thread::spawn(move || responder.respond(asset::respond(&path)));
+        })
         .invoke_handler(tauri::generate_handler![
             get_capability,
             get_library,

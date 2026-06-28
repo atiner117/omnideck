@@ -385,17 +385,23 @@
     return { destroy() { prev?.focus?.(); } };
   }
 
+  // Build an omnideck:// URL for an on-disk art file (Steam librarycache / our art cache). The
+  // webview holds the URL and decodes the file to GPU on paint — vs a base64 data URL pinned and
+  // re-diffed in reactive state. Each path segment is percent-encoded; the backend (asset.rs)
+  // canonicalizes + allowlists before reading. Favicons + the bg image stay on data: for now.
+  function artUrl(path: string): string {
+    return "omnideck://localhost" + path.split("/").map(encodeURIComponent).join("/");
+  }
+
   async function loadArt(g: Game) {
     if (!art[g.appid]) {
       const p = g.art_box || g.art_header || g.art_hero;
-      if (p) { try { const d = await api.getArt(p); if (d) art = { ...art, [g.appid]: d }; } catch { /* art is best-effort; the emoji placeholder stays */ } }
+      if (p) art = { ...art, [g.appid]: artUrl(p) }; // local art: serve the file directly (no IPC)
     }
     if (!g.art_box && !gridBox[g.appid] && cfg?.settings?.steamgriddb_key) {
-      try { const d = await api.gridArt(g.appid); if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; } } catch { /* SteamGridDB best-effort (no key / network) */ }
+      try { const path = await api.gridArt(g.appid); if (path) { art = { ...art, [g.appid]: artUrl(path) }; gridBox = { ...gridBox, [g.appid]: true }; } } catch { /* SteamGridDB best-effort (no key / network) */ }
     }
-    if (g.art_hero && !heroes[g.appid]) {
-      try { const d = await api.getArt(g.art_hero); if (d) heroes = { ...heroes, [g.appid]: d }; } catch { /* hero art best-effort; background just stays plain */ }
-    }
+    if (g.art_hero && !heroes[g.appid]) heroes = { ...heroes, [g.appid]: artUrl(g.art_hero) }; // hero bg: serve directly
   }
 
   // ---- navigation (XMB: left/right = category, up/down = item) ----
