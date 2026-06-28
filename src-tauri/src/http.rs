@@ -3,7 +3,7 @@
 // the timeout policy so a slow/hung CDN edge or a captive portal — one that accepts the TCP
 // connection but never sends or closes — can't wedge an async Tauri command (`grid_art`/
 // `app_icon` stay inflight forever, pinning the FE spinner) or freeze the whole process on the
-// `--gridart` CLI path (`block_on`). Reusing one client also pools connections.
+// `gridart` CLI path (`block_on`). Reusing one client also pools connections.
 use std::sync::OnceLock;
 use std::time::Duration;
 
