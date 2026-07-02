@@ -63,8 +63,8 @@ profiles when the hardware can handle it.
 - Optional: `gamescope` (for the 10-foot **session** — install it with
   `packaging/install-session.sh`, which runs a *plain* gamescope session; no
   `gamescope-session-plus` required); `cage` (media-kiosk tier on GPU-less hosts);
-  `playerctl` (live song/show titles in the Now Playing card via MPRIS);
-  `xorg-xprop` (needed inside a gamescope session).
+  `xorg-xprop` (needed inside a gamescope session). Now Playing titles come straight
+  from MPRIS over D-Bus — `playerctl` is no longer needed.
 
 ## Build & run (dev)
 
@@ -123,7 +123,7 @@ Most of these are also editable in-app (**Settings**), including an **Add custom
 form for your own commands.
 
 Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
-`catalog`, `gridart <appid>` (and `omnideck --help` / `--version`).
+`catalog`, `gridart <appid>`, `media` (and `omnideck --help` / `--version`).
 
 ## A note on streaming quality
 

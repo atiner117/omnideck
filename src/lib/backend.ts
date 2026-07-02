@@ -131,3 +131,6 @@ export type GamepadEvent = { kind: string; code: string; value: number };
 export const onAppExited = (cb: EventCallback<string>): Promise<UnlistenFn> => listen<string>("app-exited", cb);
 export const onGamepad = (cb: EventCallback<GamepadEvent>): Promise<UnlistenFn> =>
   listen<GamepadEvent>("gamepad-event", cb);
+/** MPRIS state changed (track/status/player) — pushed by the backend watcher, no polling. */
+export const onMediaChanged = (cb: EventCallback<MediaInfo | null>): Promise<UnlistenFn> =>
+  listen<MediaInfo | null>("media-changed", cb);

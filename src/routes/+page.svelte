@@ -575,9 +575,8 @@
   }
 
   function mediaControl(action: string) {
+    // no re-poll needed: the player's PropertiesChanged fires a `media-changed` event
     api.mediaControl(action).catch((e) => reportError("Media control failed", e));
-    // re-poll so the play/pause glyph and title update promptly
-    later(() => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch((e) => console.debug("[omnideck] media re-poll failed", e)), 250);
   }
   function isFav(id: string) { return favorites.includes(id); }
   function favCurrent() {
@@ -851,10 +850,12 @@
     // We add to nowList when we launch (we know game vs app there); the backend tells us when
     // the process/game exits — correlate by the launch id (the tile id), not the display name.
     api.onAppExited((e) => { const id = String(e.payload ?? ""); nowList = nowList.filter((x) => x.id !== id); }).then((u) => off.push(u));
-    // Poll MPRIS for the current song/show (works for native players + browser PWAs).
-    const pollMedia = () => api.mediaNowPlaying().then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch((e) => console.debug("[omnideck] media poll failed", e));
-    pollMedia();
-    const mediaTimer = setInterval(pollMedia, 4000);
+    // MPRIS Now Playing is event-driven (backend zbus watcher). One initial fetch covers the
+    // window between mount and the listener attaching; after that, `media-changed` pushes
+    // every track/status change in ms (works for native players + browser PWAs).
+    const applyMedia = (m: MediaInfo | null) => { media = m && m.status !== "Stopped" ? m : null; };
+    api.mediaNowPlaying().then(applyMedia).catch((e) => console.debug("[omnideck] media fetch failed", e));
+    api.onMediaChanged((e) => applyMedia(e.payload)).then((u) => off.push(u));
     api.onGamepad((e) => {
       const p = e.payload;
       if (p.kind === "button_pressed") {
@@ -929,7 +930,6 @@
     return () => {
       window.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
-      clearInterval(mediaTimer);
       clearTimeout(toastErrTimer);
       clearTimeout(bgTimer);
       pendingTimers.forEach(clearTimeout);

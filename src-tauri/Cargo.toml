@@ -34,4 +34,7 @@ toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # headless CLI surface (omnideck probe|scan|gridart|catalog|config + --version/--help)
 clap = { version = "4", features = ["derive"] }
+# event-driven MPRIS Now Playing (replaces the 4 s `playerctl` fork+exec poll)
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false }
 
