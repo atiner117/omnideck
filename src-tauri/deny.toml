@@ -12,7 +12,14 @@ version = 2
 # as ignores would just rot. Real vulnerabilities still fail regardless of depth
 # (cargo-audit caught quinn-proto RUSTSEC-2026-0185 on this gate's first CI run).
 unmaintained = "workspace"
-ignore = []
+# quick-xml 0.39 DoS advisories (2026-06-29): pulled only via plist (tauri-utils' macOS
+# Info.plist parser) — no untrusted XML reaches it in a Linux launcher. No fixed release
+# exists yet on our tree (needs plist > 1.9.0 to allow quick-xml 0.41). Mirror of
+# .cargo/audit.toml — DROP BOTH when `cargo update -p plist` moves quick-xml to >= 0.41.
+ignore = [
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via plist: unreachable with untrusted input; awaiting plist release with quick-xml 0.41" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via plist: unreachable with untrusted input; awaiting plist release with quick-xml 0.41" },
+]
 
 [licenses]
 version = 2

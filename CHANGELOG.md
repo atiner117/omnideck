@@ -74,6 +74,9 @@ All notable changes to OmniDeck are documented here. Format follows
   overwriting a same-named entry; empty/symbol-only names are rejected.
 
 ### Security
+- `quick-xml` RUSTSEC-2026-0194/0195 (DoS, via `plist`/`tauri-utils`): documented ignores
+  in the audit gates — the parser never sees untrusted XML in a Linux launcher, and no
+  fixed release exists on our tree yet (drop the ignores when `plist` adopts quick-xml 0.41).
 - Tauri capabilities scoped to exactly what the frontend uses (dropped `core:default` and
   the unused `opener` plugin + its dependency tree).
 - Config values are sanitized on load: accent/background colors must be `#rrggbb` (they
