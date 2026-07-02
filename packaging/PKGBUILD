@@ -12,7 +12,9 @@ license=('GPL-3.0-or-later')
 # Cargo manages LTO via its release profile; layering makepkg's C-level -flto on top is
 # redundant for a Rust package and breaks `ring`'s separately-compiled asm at link time on
 # LTO-forcing distros (CachyOS, etc.). No-op on stock Arch (LTO off by default).
-options=('!lto')
+# !debug: no -debug split package (release cargo builds carry no useful symbols, and the
+# auto-split's build-id symlink trips namcap when the debug pkg is inspected standalone).
+options=('!lto' '!debug')
 # webkit2gtk-4.1 pulls gtk3/libsoup3/glib2 transitively; hicolor-icon-theme owns the icon dirs.
 depends=('webkit2gtk-4.1' 'hicolor-icon-theme')
 optdepends=('gamescope: 10-foot gamescope session mode (run packaging/install-session.sh)'
