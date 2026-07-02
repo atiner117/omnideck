@@ -63,6 +63,7 @@ pub fn run() {
             commands::media_control,
             commands::quit,
             commands::close_current_app,
+            commands::switch_app,
             commands::in_gamescope_session,
             commands::power_action,
             commands::app_icon

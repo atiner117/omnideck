@@ -43,6 +43,8 @@ export const saveRecentApps = (recentApps: string[]) => invoke<void>("save_recen
 export const gameProperties = (appid: string) => invoke<void>("game_properties", { appid });
 export const powerAction = (action: string) => invoke<void>("power_action", { action });
 export const closeCurrentApp = () => invoke<boolean>("close_current_app");
+/** Hide/show the launched app without closing it (session app switcher). */
+export const switchApp = () => invoke<boolean>("switch_app");
 export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
 
