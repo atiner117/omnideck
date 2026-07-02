@@ -209,11 +209,18 @@ pub fn load_or_create() -> Config {
     cfg
 }
 
-/// Persist new settings, preserving the apps list and not writing internal fields.
-pub fn save_settings(settings: Settings) -> Result<(), String> {
+/// Shared save path: reload the on-disk config, apply `mutate`, write it back. Refuses to
+/// write while the file is in the parse/read-error state — otherwise any save (recent apps
+/// fire automatically on every launch) would replace the user's config with the in-memory
+/// defaults, exactly the clobber the load path promises not to do. Internal IPC-only fields
+/// (`config_path`, `config_error`) are stripped before serializing.
+fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
     let path = config_path().ok_or("no config path")?;
     let mut cfg = load_or_create();
-    cfg.settings = settings;
+    if let Some(err) = cfg.config_error.take() {
+        return Err(format!("not saving over a broken config.toml — {err}"));
+    }
+    mutate(&mut cfg);
     cfg.config_path = String::new(); // never written to disk
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -222,43 +229,24 @@ pub fn save_settings(settings: Settings) -> Result<(), String> {
     fs::write(&path, text).map_err(|e| e.to_string())
 }
 
+/// Persist new settings, preserving the apps list and not writing internal fields.
+pub fn save_settings(settings: Settings) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.settings = settings)
+}
+
 /// Persist a new apps list (used by the in-app "Add apps" catalog screen).
 pub fn save_apps(new_apps: Vec<apps::App>) -> Result<(), String> {
-    let path = config_path().ok_or("no config path")?;
-    let mut cfg = load_or_create();
-    cfg.apps = new_apps;
-    cfg.config_path = String::new();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    mutate_and_save(|cfg| cfg.apps = new_apps)
 }
 
 /// Persist the favorites list (used by the Home ⭐ toggle).
 pub fn save_favorites(favorites: Vec<String>) -> Result<(), String> {
-    let path = config_path().ok_or("no config path")?;
-    let mut cfg = load_or_create();
-    cfg.favorites = favorites;
-    cfg.config_path = String::new();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    mutate_and_save(|cfg| cfg.favorites = favorites)
 }
 
 /// Persist the recently-launched app ids (Home "recent apps").
 pub fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
-    let path = config_path().ok_or("no config path")?;
-    let mut cfg = load_or_create();
-    cfg.recent_apps = recent_apps;
-    cfg.config_path = String::new();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    mutate_and_save(|cfg| cfg.recent_apps = recent_apps)
 }
 
 pub fn report(cfg: &Config) -> String {

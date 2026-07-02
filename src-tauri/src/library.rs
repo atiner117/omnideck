@@ -85,27 +85,11 @@ pub fn steam_root() -> Option<String> {
 pub fn scan() -> Library {
     let mut lib = Library::default();
 
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => {
-            lib.errors.push("HOME is not set".into());
-            return lib;
-        }
-    };
-
-    let steam_root = [
-        format!("{home}/.steam/steam"),
-        format!("{home}/.local/share/Steam"),
-        format!("{home}/.steam/root"),
-    ]
-    .into_iter()
-    .find(|p| Path::new(&format!("{p}/steamapps/libraryfolders.vdf")).exists());
-
-    let steam_root = match steam_root {
+    let steam_root = match steam_root() {
         Some(r) => r,
         None => {
             lib.errors
-                .push("Steam not found (no steamapps/libraryfolders.vdf)".into());
+                .push("Steam not found (HOME unset or no steamapps/libraryfolders.vdf)".into());
             return lib;
         }
     };
