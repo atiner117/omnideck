@@ -43,6 +43,10 @@ All notable changes to OmniDeck are documented here. Format follows
 - **First-run wizard & a11y baseline**: dialog semantics (`role="dialog"`, focus
   management), keyboard-focusable rows, `:focus-visible` rings, `aria-label`s on icon
   buttons, `prefers-reduced-motion` support, footer contrast fix.
+- **Session display-mode override**: the generated `omnideck-session` launcher sources
+  `~/.config/omnideck/session.conf` (`GAMESCOPE_FLAGS="-W 2560 -H 1440 -r 165 -O DP-3"`)
+  so high-refresh panels aren't stuck at the EDID-preferred 60 Hz, and enables
+  `--adaptive-sync` (VRR) by default.
 - **Config error surfacing**: a `config.toml` that fails to parse now shows a toast with
   the parse error ("using defaults until fixed") instead of silently reverting — and the
   app **refuses to overwrite** the broken file until it's fixed.
