@@ -6,6 +6,12 @@
 [advisories]
 version = 2
 # RustSec vulnerabilities + unsound advisories error by default in v2.
+# Unmaintained: only fail for OUR direct dependencies. The transitive tree is pinned by
+# Tauri v2's Linux stack (gtk-rs GTK3 bindings ×10, unic-* via tauri's templating,
+# proc-macro-error) — unfixable until Tauri moves to GTK4; enumerating those advisories
+# as ignores would just rot. Real vulnerabilities still fail regardless of depth
+# (cargo-audit caught quinn-proto RUSTSEC-2026-0185 on this gate's first CI run).
+unmaintained = "workspace"
 ignore = []
 
 [licenses]
