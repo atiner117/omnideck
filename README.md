@@ -66,6 +66,14 @@ profiles when the hardware can handle it.
   `xorg-xprop` (needed inside a gamescope session). Now Playing titles come straight
   from MPRIS over D-Bus — `playerctl` is no longer needed.
 
+  The session uses the display's EDID-*preferred* mode, which on many gaming monitors
+  is 60 Hz even when the panel does 144/165. To force the real mode (and pick the right
+  monitor on multi-head setups), create `~/.config/omnideck/session.conf`:
+
+  ```bash
+  GAMESCOPE_FLAGS="-W 2560 -H 1440 -r 165 -O DP-3"   # connector names: ls /sys/class/drm
+  ```
+
 ## Build & run (dev)
 
 ```bash
