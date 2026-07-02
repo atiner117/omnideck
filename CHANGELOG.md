@@ -29,6 +29,10 @@ All notable changes to OmniDeck are documented here. Format follows
 - **Generated IPC types** (ts-rs): the TypeScript side of the Rust↔JS contract is generated
   from the Rust structs into `src/lib/bindings/`; CI fails if they drift, so a Rust field
   rename breaks the build instead of silently becoming `undefined` in the frontend.
+- **`Ctrl+Alt+Home` returns home from any launched app** (session): a global X key grab —
+  the keyboard twin of the controller Guide button — closes the focused fullscreen app and
+  returns to OmniDeck, even though the app owns keyboard focus. Found during the first real
+  M2 hardware session run, which is now recorded in `packaging/M2-RESULTS.md`.
 - **First-run wizard & a11y baseline**: dialog semantics (`role="dialog"`, focus
   management), keyboard-focusable rows, `:focus-visible` rings, `aria-label`s on icon
   buttons, `prefers-reduced-motion` support, footer contrast fix.

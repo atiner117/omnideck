@@ -17,6 +17,7 @@ mod commands;
 mod config;
 mod gamepad;
 mod gpu;
+mod hotkey;
 mod http;
 mod icons;
 mod library;
@@ -70,6 +71,8 @@ pub fn run() {
             std::thread::spawn(move || gamepad::gamepad_loop(handle));
             // Event-driven Now Playing: one session-bus watcher pushes `media-changed` events.
             tauri::async_runtime::spawn(mpris::watch(app.handle().clone()));
+            // Session-only: global Ctrl+Alt+Home returns home while a launched app has focus.
+            hotkey::spawn_if_session(app.handle().clone());
             watchdog::set_steam_game_atom_if_gamescope();
             // In a gamescope session take the whole output: a windowed (e.g. 1280x720)
             // toplevel gets scaled/letterboxed by gamescope, so request real fullscreen
