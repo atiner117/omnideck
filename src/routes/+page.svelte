@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import * as api from "$lib/backend";
   import type { App, Game, Config, Capability, MediaInfo, Settings } from "$lib/backend";
+  import Modal from "$lib/Modal.svelte";
+  import { dialogFocus } from "$lib/dialog";
 
   type Tile =
     | { kind: "game"; id: string; cat: string; game: Game }
@@ -386,16 +388,6 @@
     pendingTimers.add(t);
     return t;
   }
-  // a11y: move focus into a dialog when it opens (so screen readers announce it), and restore
-  // focus to the opener when it closes. No Tab-trap on purpose — nav is controller-first via
-  // arrow keys (onKey), and the catalog binds Tab to its sort toggle; a hard trap would fight
-  // both. Applied to each modal/overlay container via use:dialogFocus.
-  function dialogFocus(node: HTMLElement) {
-    const prev = document.activeElement as HTMLElement | null;
-    node.focus();
-    return { destroy() { prev?.focus?.(); } };
-  }
-
   // Build an omnideck:// URL for an on-disk art file (Steam librarycache / our art cache). The
   // webview holds the URL and decodes the file to GPU on paint — vs a base64 data URL pinned and
   // re-diffed in reactive state. Each path segment is percent-encoded; the backend (asset.rs)
@@ -1059,9 +1051,7 @@
   </div>
 
   {#if searchOpen}
-    <button class="prefs-backdrop" aria-label="Close search" onclick={() => (searchOpen = false)}></button>
-    <div class="prefs catalog" role="dialog" aria-modal="true" aria-labelledby="dlg-search" tabindex="-1" use:dialogFocus>
-      <button class="prefs-close" title="Close (Esc)" aria-label="Close search" onclick={() => (searchOpen = false)}>✕</button>
+    <Modal labelledby="dlg-search" backdropLabel="Close search" closeLabel="Close search" onclose={() => (searchOpen = false)}>
       <h2 id="dlg-search">Search</h2>
       <div class="csearch active">{searchQuery ? `🔎 ${searchQuery}` : "Type to search your games, apps & the web…"}</div>
       <div class="catlist">
@@ -1084,13 +1074,11 @@
         {/each}
       </div>
       <p class="phint">keyboard: type · ↑↓ select · Enter open — controller: D-pad + ✕ to type · bumpers pick result · ⏎ go · ◯ clear/close</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if catalogOpen}
-    <button class="prefs-backdrop" aria-label="Close add apps" onclick={() => (catalogOpen = false)}></button>
-    <div class="prefs catalog" role="dialog" aria-modal="true" aria-labelledby="dlg-catalog" tabindex="-1" use:dialogFocus>
-      <button class="prefs-close" title="Close (Esc)" aria-label="Close add apps" onclick={() => (catalogOpen = false)}>✕</button>
+    <Modal labelledby="dlg-catalog" backdropLabel="Close add apps" closeLabel="Close add apps" onclose={() => (catalogOpen = false)}>
       <div class="chead">
         <h2 id="dlg-catalog">Add apps &amp; media</h2>
         <button class="sortbtn" onclick={() => (catSort = catSort === "group" ? "alpha" : "group")}>{catSort === "group" ? "Grouped" : "A–Z"}</button>
@@ -1108,13 +1096,11 @@
         {#if !displayedCatalog.length}<div class="cgroup">no matches for “{catQuery}”</div>{/if}
       </div>
       <p class="phint">type to search · Tab sort · ↑↓ select · Enter/✕ toggle · Esc clear/close</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if infoOpen && infoTile}
-    <button class="prefs-backdrop" aria-label="Close info" onclick={() => (infoOpen = false)}></button>
-    <div class="prefs info" role="dialog" aria-modal="true" aria-labelledby="dlg-info" tabindex="-1" use:dialogFocus>
-      <button class="prefs-close" title="Close (Esc)" aria-label="Close info" onclick={() => (infoOpen = false)}>✕</button>
+    <Modal labelledby="dlg-info" backdropLabel="Close info" closeLabel="Close info" onclose={() => (infoOpen = false)}>
       {#if infoTile.kind === "game"}
         <h2 id="dlg-info">{infoTile.game.name}</h2>
         <dl class="infogrid">
@@ -1140,13 +1126,11 @@
         </div>
         <p class="phint">Esc/◯ close · □/F favorite</p>
       {/if}
-    </div>
+    </Modal>
   {/if}
 
   {#if powerOpen}
-    <button class="prefs-backdrop" aria-label="Close power menu" onclick={() => (powerOpen = false)}></button>
-    <div class="prefs power" role="dialog" aria-modal="true" aria-labelledby="dlg-power" tabindex="-1" use:dialogFocus>
-      <button class="prefs-close" title="Close (Esc)" aria-label="Close power menu" onclick={() => (powerOpen = false)}>✕</button>
+    <Modal labelledby="dlg-power" backdropLabel="Close power menu" closeLabel="Close power menu" onclose={() => (powerOpen = false)}>
       <h2 id="dlg-power">Power</h2>
       <div class="catlist">
         {#each POWER as p, i}
@@ -1157,12 +1141,11 @@
         {/each}
       </div>
       <p class="phint">↑↓ select · Enter/✕ choose · Esc/◯ close</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if confirmAct}
-    <button class="prefs-backdrop" aria-label="Cancel" onclick={() => (confirmAct = null)}></button>
-    <div class="prefs confirm" role="dialog" aria-modal="true" aria-labelledby="dlg-confirm" tabindex="-1" use:dialogFocus>
+    <Modal labelledby="dlg-confirm" backdropLabel="Cancel" showClose={false} onclose={() => (confirmAct = null)}>
       <h2 id="dlg-confirm">{confirmAct.label}?</h2>
       <p class="wlead">This will {confirmAct.key === "reboot" ? "restart" : "shut down"} the computer.</p>
       <div class="confirm-btns">
@@ -1170,13 +1153,11 @@
         <button class="cbtn danger" onclick={doConfirm}>{confirmAct.label}</button>
       </div>
       <p class="phint">Enter/✕ confirm · Esc/◯ cancel</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if formOpen}
-    <button class="prefs-backdrop" aria-label="Close" onclick={() => (formOpen = false)}></button>
-    <div class="prefs" role="dialog" aria-modal="true" aria-labelledby="dlg-form" tabindex="-1" use:dialogFocus>
-      <button class="prefs-close" title="Close (Esc)" aria-label="Close" onclick={() => (formOpen = false)}>✕</button>
+    <Modal labelledby="dlg-form" backdropLabel="Close" onclose={() => (formOpen = false)}>
       <h2 id="dlg-form">Add custom launcher</h2>
       <div class="frow"><label for="f-name">Name</label><input id="f-name" bind:value={fName} placeholder="My App" /></div>
       <div class="frow"><label for="f-exec">Command</label><input id="f-exec" bind:value={fExec} placeholder="/usr/bin/foo --flag" /></div>
@@ -1194,7 +1175,7 @@
         <button class="cbtn danger" onclick={addCustom}>Add</button>
       </div>
       <p class="phint">Command is split on spaces. Use the full path if it isn't on PATH. Esc to close.</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if wizardActive && cfg}
@@ -1321,11 +1302,11 @@
   /* Suppress the default focus ring on elements that already show focus another way (inputs'
      accent border, the in-app .focused highlight used by controller/mouse nav)... */
   .numedit:focus, .textedit:focus, .crow:focus, .cbtn:focus, .oskkey:focus, .sortbtn:focus,
-  .prefs-close:focus, .badge:focus, .np-c:focus, .np-x:focus, .fpsbtn:focus,
+  .badge:focus, .np-c:focus, .np-x:focus, .fpsbtn:focus,
   .xcat:focus, .xitem:focus { outline: none; }
   /* ...but show a clear accent ring for keyboard users (:focus-visible only). */
   .numedit:focus-visible, .textedit:focus-visible, .crow:focus-visible, .cbtn:focus-visible,
-  .oskkey:focus-visible, .sortbtn:focus-visible, .prefs-close:focus-visible, .badge:focus-visible,
+  .oskkey:focus-visible, .sortbtn:focus-visible, .badge:focus-visible,
   .np-c:focus-visible, .np-x:focus-visible, .fpsbtn:focus-visible,
   .xcat:focus-visible, .xitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
@@ -1352,11 +1333,7 @@
   .np-c { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 8px; width: 32px; height: 32px; cursor: pointer; font-size: 14px; }
   .np-c:hover { border-color: var(--accent); color: #fff; }
 
-  .prefs-backdrop { position: fixed; inset: 0; background: rgba(4,6,10,.6); border: 0; padding: 0; cursor: pointer; z-index: 10; }
-  .prefs { position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(620px, 92vw); background: #121826; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 18px; padding: 22px 26px; box-shadow: 0 30px 80px #000c; display: flex; flex-direction: column; gap: 4px; }
-  .prefs h2 { margin: 0 0 10px; font-size: clamp(20px, 2.2vw, 26px); }
-  .prefs-close { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 9px; background: #1b2540; border: 1px solid #2c3a5c; color: #9fb0c8; cursor: pointer; font-size: 15px; line-height: 1; }
-  .prefs-close:hover { border-color: var(--accent); color: #fff; }
+  /* modal shell styles (.prefs*, backdrop, close) live in $lib/Modal.svelte */
   .catlist { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
   .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: none; color: inherit; font: inherit; width: 100%; text-align: left; }
   .crow.focused { background: #1b2540; border-color: var(--accent); }
