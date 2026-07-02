@@ -27,7 +27,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/repo:ro" archlinux:latest bash -euo pipefail -c '
             pacman -Syu --noconfirm --needed \
-              base-devel sudo rust pkgconf webkit2gtk-4.1 hicolor-icon-theme namcap curl ca-certificates
+              base-devel sudo rust pkgconf webkit2gtk-4.1 hicolor-icon-theme namcap curl ca-certificates unzip
             # bun is declared as the AUR makedep bun-bin; install the official binary for CI.
             curl -fsSL https://bun.sh/install | bash
             install -m755 /root/.bun/bin/bun /usr/local/bin/bun
