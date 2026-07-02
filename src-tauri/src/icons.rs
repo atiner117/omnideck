@@ -3,6 +3,7 @@
 // in the real brand icon at runtime from DuckDuckGo's favicon service (privacy-friendly,
 // normalized PNGs). Results are cached on disk so each domain is fetched at most once.
 // We never bundle trademarked logos — icons are fetched on the user's machine on demand.
+use crate::http::is_blocked_host;
 use std::path::{Path, PathBuf};
 
 fn cache_dir() -> Option<PathBuf> {
@@ -27,24 +28,6 @@ pub fn domain_of(url: &str) -> Option<String> {
     } else {
         Some(host.to_string())
     }
-}
-
-/// True if `host` (possibly `ip:port`) is a loopback/private/link-local address we must not
-/// probe — a crafted/imported config tile URL like `http://169.254.169.254` would otherwise
-/// turn the `/favicon.ico` fetch into an internal-service probe (SSRF). Only literal private IPs
-/// are caught (single-user import threat model; `domain_of` already drops dot-less hosts like
-/// `localhost`/`[::1]`, so the realistic vector is a dotted IPv4 literal).
-fn is_blocked_host(host: &str) -> bool {
-    let h = host.rsplit_once(':').map(|(a, _)| a).unwrap_or(host); // strip :port
-    if let Ok(ip) = h.parse::<std::net::Ipv4Addr>() {
-        return ip.is_loopback()
-            || ip.is_private()
-            || ip.is_link_local()
-            || ip.is_unspecified()
-            || ip.is_broadcast()
-            || ip.octets()[0] == 0;
-    }
-    matches!(h, "localhost" | "localhost.localdomain")
 }
 
 /// last-two-labels fallback (open.spotify.com -> spotify.com, listen.tidal.com -> tidal.com).

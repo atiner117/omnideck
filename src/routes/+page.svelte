@@ -139,6 +139,7 @@
   let iconColor = $state<Record<string, string>>({}); // dominant "r,g,b" per fetched icon (app bg gradient)
   let searchEngineIcon = $state(""); // favicon of the configured web-search provider
   const iconTried = new Set<string>();
+  const artFailed = new Set<string>(); // appids whose local art file 404'd (don't re-request)
   const iconInflight = new Set<string>(); // ids with an in-flight fetch (avoid duplicate IPC calls)
   // native apps with no launch URL but a known site to pull an icon from
   const ICON_DOMAIN: Record<string, string> = {
@@ -393,8 +394,17 @@
     return "omnideck://localhost" + path.split("/").map(encodeURIComponent).join("/");
   }
 
+  // The manifest's art path can go stale (Steam moved/GC'd its librarycache): drop the 404'd
+  // URL so the styled name-tile fallback shows, and tombstone the id so loadArt doesn't loop.
+  function artError(appid: string) {
+    artFailed.add(appid);
+    const rest = { ...art };
+    delete rest[appid];
+    art = rest;
+  }
+
   async function loadArt(g: Game) {
-    if (!art[g.appid]) {
+    if (!art[g.appid] && !artFailed.has(g.appid)) {
       const p = g.art_box || g.art_header || g.art_hero;
       if (p) art = { ...art, [g.appid]: artUrl(p) }; // local art: serve the file directly (no IPC)
     }
@@ -764,7 +774,8 @@
       else if (e.key === "Enter") searchActivate();
       else if (e.key === "Escape") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
       else if (e.key === "Backspace") searchQuery = searchQuery.slice(0, -1);
-      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) searchQuery += e.key;
+      // preventDefault so Space can't ALSO natively re-activate a mouse-focused result row
+      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) { e.preventDefault(); searchQuery += e.key; }
       return;
     }
     if ((e.key === "a" || e.key === "A") && !catalogOpen) { toggleCatalog(); return; }
@@ -775,7 +786,8 @@
       else if (e.key === "Tab") { e.preventDefault(); catSort = catSort === "group" ? "alpha" : "group"; }
       else if (e.key === "Escape") { if (catQuery) catQuery = ""; else catalogOpen = false; }
       else if (e.key === "Backspace") catQuery = catQuery.slice(0, -1);
-      else if (e.key.length === 1 && /^[a-z0-9 ]$/i.test(e.key)) catQuery += e.key;
+      // preventDefault so Space can't ALSO natively re-toggle a mouse-focused catalog row
+      else if (e.key.length === 1 && /^[a-z0-9 ]$/i.test(e.key)) { e.preventDefault(); catQuery += e.key; }
       return;
     }
     if (e.key === "p" || e.key === "P") { gotoSettings(); return; }
@@ -1016,7 +1028,7 @@
               onclick={() => { focus = i; launchTile(t); }}>
               <span class="xthumb" style={t.kind === "app" ? `background:${appIcons[t.app.id] ? (iconBg[t.app.id] ?? "#f4f5f8") : t.app.accent}` : ""}>
                 {#if t.kind === "game" && art[t.game.appid] && Math.abs(i - focus) <= 8}
-                  <img src={art[t.game.appid]} alt="" decoding="async" />
+                  <img src={art[t.game.appid]} alt="" decoding="async" onerror={() => artError(t.game.appid)} />
                 {:else if t.kind === "app" && appIcons[t.app.id]}
                   <img class="appicon" src={appIcons[t.app.id]} alt="" decoding="async" />
                 {:else}

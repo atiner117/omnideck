@@ -723,7 +723,8 @@ pub fn run() {
         // instead of base64 data URLs pinned in reactive state — see asset.rs / NOTES-PERFORMANCE.
         .register_asynchronous_uri_scheme_protocol("omnideck", |_ctx, request, responder| {
             let path = request.uri().path().to_string();
-            std::thread::spawn(move || responder.respond(asset::respond(&path)));
+            // blocking pool (reused threads) — a fast scroll fires dozens of these at once
+            drop(tauri::async_runtime::spawn_blocking(move || responder.respond(asset::respond(&path))));
         })
         .invoke_handler(tauri::generate_handler![
             get_capability,
