@@ -26,6 +26,9 @@ All notable changes to OmniDeck are documented here. Format follows
   just ahead of visibility instead of all at once at startup.
 - **Proper CLI** (clap): `omnideck probe | scan | config | catalog | gridart <appid> |
   media`, plus `--help`/`--version`; unknown flags are rejected instead of ignored.
+- **Generated IPC types** (ts-rs): the TypeScript side of the Rust↔JS contract is generated
+  from the Rust structs into `src/lib/bindings/`; CI fails if they drift, so a Rust field
+  rename breaks the build instead of silently becoming `undefined` in the frontend.
 - **First-run wizard & a11y baseline**: dialog semantics (`role="dialog"`, focus
   management), keyboard-focusable rows, `:focus-visible` rings, `aria-label`s on icon
   buttons, `prefers-reduced-motion` support, footer contrast fix.
@@ -62,6 +65,8 @@ All notable changes to OmniDeck are documented here. Format follows
   SteamGridDB image URLs must be https.
 - Byte-capped downloads everywhere (content-length can lie); image responses are
   magic-byte sniffed.
+- `quinn-proto` bumped past RUSTSEC-2026-0185 (remote memory exhaustion, 7.5 high) —
+  caught by the new supply-chain gate on its first CI run.
 
 ### Fixed
 - A broken `config.toml` can no longer be clobbered by automatic saves (recent-apps
