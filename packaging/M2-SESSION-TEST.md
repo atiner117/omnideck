@@ -3,10 +3,11 @@
 Goal: confirm OmniDeck boots as a real 10‑foot **gamescope session**, shows its UI, launches
 a game, and returns cleanly. This is the milestone that proves the whole concept.
 
-## 0. Prereqs (already true on the dev host)
-- `gamescope` + `gamescope-session-plus` installed (`paru -S gamescope-session-git`). ✓
+## 0. Prereqs
+- `gamescope` installed (`pacman -S gamescope`). OmniDeck runs a **plain** gamescope session —
+  `gamescope-session-plus` / `--steam` is **not** used or required (see install-session.sh).
 - A built binary: `cd ~/Projects/omnideck && bun run tauri build --no-bundle`.
-- KMS active (NVIDIA modeset on — confirmed via `/sys/class/drm/card*-*` connectors). ✓
+- KMS active (NVIDIA modeset on — confirmed via `/sys/class/drm/card*-*` connectors).
 
 ## 1. Install the session
 ```bash
@@ -25,7 +26,8 @@ Steam the first time (slow) and *may* not stamp the window. For a clean test, ei
 
 ## 4. What to observe (report back each)
 1. **Does the OmniDeck UI appear, or BLACK SCREEN?**
-   - Black = the `STEAM_GAME` atom didn't take. The binary tries `xprop -name omnideck -f STEAM_GAME 32c -set STEAM_GAME 769` automatically; if it failed, see §6.
+   - In **plain** gamescope mode a black screen is almost always a **GPU/render** issue, *not*
+     the atom (the atom drives focus-*return* after a game exits, not first paint). See §6.
 2. **Controller + keyboard** navigate the XMB?
 3. **Launch a game** (Games → Enter/✕): does it appear fullscreen?
    - OmniDeck should show a **"Now playing"** card (bottom-right) once Steam reports the
@@ -40,22 +42,27 @@ Steam the first time (slow) and *may* not stamp the window. For a clean test, ei
    SDDM. **Suspend** works without confirm; **Restart/Shut down** ask to confirm first.
 
 ## 5. Getting out / safety
+- **A launched app holds the screen** (PWA/native): press the controller **Guide** button or
+  **Ctrl+Alt+Home** — both close the app and return to OmniDeck (the chord is a global X grab,
+  so it works even while the app has keyboard focus).
 - **Exit OmniDeck** (Settings) quits → back to SDDM.
 - If stuck: `Ctrl+Alt+F3` → log in on the TTY → `loginctl terminate-user $USER` or `sudo systemctl restart sddm`.
-- Uninstall the session entirely:
+- Uninstall the session entirely (matches what install-session.sh creates):
   ```bash
-  sudo rm /usr/local/share/gamescope-session-plus/sessions.d/omnideck \
-          /usr/local/share/wayland-sessions/gamescope-session-omnideck.desktop
+  sudo rm /usr/local/share/wayland-sessions/omnideck.desktop /usr/local/bin/omnideck-session
   ```
 
-## 6. If black screen — the STEAM_GAME atom
-From a TTY (`Ctrl+Alt+F3`) while the session runs, or note for next iteration:
-- The window must carry `STEAM_GAME`. Manual set (find the gamescope X display, often `:1`):
-  ```bash
-  DISPLAY=:1 xprop -name omnideck -f STEAM_GAME 32c -set STEAM_GAME 769
-  ```
-- Report whether that makes it appear — that tells us if it's an atom-timing/name issue (then we
-  fix the in‑app setter: match window class, retry longer, or set before map).
+## 6. If black screen — it's almost certainly GPU/render (not the atom)
+In **plain** gamescope mode the window doesn't need `STEAM_GAME` to be *shown* — that atom drives
+focus-*return* after a game exits (§4.4), not first paint. A black screen is a WebKitGTK/NVIDIA
+render problem:
+- Capture logs first: `journalctl --user -b | grep -iE 'omnideck|gamescope|webkit'`.
+- A/B the compositing mode: software paint is the default on NVIDIA; if the screen is blank, try
+  GPU compositing by launching with `OMNIDECK_GPU_COMPOSITING=1` (and vice-versa). See
+  `ensure_gpu_env` in `src-tauri/src/lib.rs`.
+- The session-aware NVIDIA env is applied automatically (dmabuf-disable on X11/gamescope;
+  `__NV_DISABLE_EXPLICIT_SYNC` on Wayland). If still black, record your `XDG_SESSION_TYPE`, GPU
+  vendor, and driver in `M2-RESULTS.md` — that's the data that pins the fix.
 
 ## 7. Logs
 - Session/client stderr → the systemd journal: `journalctl --user -b | grep -iE 'omnideck|gamescope'`

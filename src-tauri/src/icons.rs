@@ -3,11 +3,16 @@
 // in the real brand icon at runtime from DuckDuckGo's favicon service (privacy-friendly,
 // normalized PNGs). Results are cached on disk so each domain is fetched at most once.
 // We never bundle trademarked logos — icons are fetched on the user's machine on demand.
+use crate::http::is_blocked_host;
 use std::path::{Path, PathBuf};
 
 fn cache_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".cache/omnideck/icons"))
+    // XDG: prefer $XDG_CACHE_HOME (when absolute), else ~/.cache (unchanged for existing installs).
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    Some(base.join("omnideck/icons"))
 }
 
 /// Pull the host out of a URL (handles a leading `--app=` from our browser-PWA execs).
@@ -40,6 +45,9 @@ fn root_domain(host: &str) -> Option<String> {
 /// real image. DuckDuckGo sometimes returns junk for a subdomain, so we also try the root.
 pub async fn favicon(url: &str) -> Option<String> {
     let host = domain_of(url)?;
+    if is_blocked_host(&host) {
+        return None; // don't probe internal/loopback services from a crafted tile URL (SSRF)
+    }
     let dir = cache_dir()?;
     let _ = std::fs::create_dir_all(&dir);
     let safe = host.replace(['/', ':'], "_");
@@ -78,7 +86,7 @@ fn google_url(domain: &str) -> String {
 /// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy
 /// response (content-length can be absent or lie, so we cap the actual byte stream).
 async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
-    let mut resp = reqwest::get(url).await.ok()?;
+    let mut resp = crate::http::client().get(url).send().await.ok()?;
     let mut buf = Vec::new();
     loop {
         match resp.chunk().await {
@@ -156,7 +164,7 @@ fn to_data_url(p: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::domain_of;
+    use super::{domain_of, is_blocked_host};
     #[test]
     fn extracts_domain() {
         assert_eq!(domain_of("--app=https://www.netflix.com").as_deref(), Some("www.netflix.com"));
@@ -164,5 +172,19 @@ mod tests {
         assert_eq!(domain_of("https://app.plex.tv/desktop?foo=1").as_deref(), Some("app.plex.tv"));
         assert_eq!(domain_of("brave"), None); // bare binary, no domain
         assert_eq!(domain_of("--app=https://localhost"), None); // no dot
+    }
+
+    #[test]
+    fn blocks_private_and_loopback_hosts() {
+        assert!(is_blocked_host("169.254.169.254")); // cloud metadata
+        assert!(is_blocked_host("127.0.0.1"));
+        assert!(is_blocked_host("10.0.0.5:8080")); // with port
+        assert!(is_blocked_host("192.168.1.1"));
+        assert!(is_blocked_host("172.16.4.2"));
+        assert!(is_blocked_host("0.0.0.0"));
+        assert!(is_blocked_host("localhost"));
+        assert!(!is_blocked_host("spotify.com"));
+        assert!(!is_blocked_host("icons.duckduckgo.com"));
+        assert!(!is_blocked_host("8.8.8.8")); // public IP is fine
     }
 }

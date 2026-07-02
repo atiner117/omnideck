@@ -16,6 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Game {
     pub appid: String,
     pub name: String,
@@ -23,6 +24,8 @@ pub struct Game {
     pub library_path: String,
     pub installed: bool,
     pub is_tool: bool,
+    // serde_json emits a plain JSON number (ts-rs would otherwise type u64 as bigint)
+    #[cfg_attr(test, ts(type = "number"))]
     pub last_played: u64,
     pub art_box: Option<String>,
     pub art_header: Option<String>,
@@ -31,14 +34,17 @@ pub struct Game {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct LibrarySummary {
     pub path: String,
     pub label: String,
     pub available: bool,
+    #[cfg_attr(test, ts(type = "number"))]
     pub app_count: usize,
 }
 
 #[derive(Clone, Serialize, Debug, Default)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Library {
     pub steam_root: Option<String>,
     pub games: Vec<Game>,
@@ -68,30 +74,28 @@ struct AppManifest {
     last_played: String,
 }
 
-pub fn scan() -> Library {
-    let mut lib = Library::default();
-
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => {
-            lib.errors.push("HOME is not set".into());
-            return lib;
-        }
-    };
-
-    let steam_root = [
+/// Discover the active Steam root — the first standard location with a
+/// `steamapps/libraryfolders.vdf`, or None if Steam isn't installed. Reused by the
+/// `omnideck://` asset allowlist (`asset.rs`) as well as the library scan.
+pub fn steam_root() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    [
         format!("{home}/.steam/steam"),
         format!("{home}/.local/share/Steam"),
         format!("{home}/.steam/root"),
     ]
     .into_iter()
-    .find(|p| Path::new(&format!("{p}/steamapps/libraryfolders.vdf")).exists());
+    .find(|p| Path::new(&format!("{p}/steamapps/libraryfolders.vdf")).exists())
+}
 
-    let steam_root = match steam_root {
+pub fn scan() -> Library {
+    let mut lib = Library::default();
+
+    let steam_root = match steam_root() {
         Some(r) => r,
         None => {
             lib.errors
-                .push("Steam not found (no steamapps/libraryfolders.vdf)".into());
+                .push("Steam not found (HOME unset or no steamapps/libraryfolders.vdf)".into());
             return lib;
         }
     };

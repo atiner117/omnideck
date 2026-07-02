@@ -1,14 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
-  import { invoke } from "@tauri-apps/api/core";
+  import * as api from "$lib/backend";
+  import type { App, Game, Config, Capability, MediaInfo, Settings } from "$lib/backend";
+  import Modal from "$lib/Modal.svelte";
+  import NowPlaying from "$lib/NowPlaying.svelte";
+  import Wizard from "$lib/Wizard.svelte";
+  import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
 
-  type App = { id: string; name: string; icon: string; exec: string[]; accent: string; category?: string };
-  type Game = {
-    appid: string; name: string; installed: boolean; is_tool: boolean; last_played?: number;
-    installdir?: string; library_path?: string;
-    art_box?: string | null; art_header?: string | null; art_hero?: string | null; art_logo?: string | null;
-  };
   type Tile =
     | { kind: "game"; id: string; cat: string; game: Game }
     | { kind: "app"; id: string; cat: string; app: App };
@@ -75,7 +73,7 @@
     if (key === "recents_show") return cap1(s.recents_show ?? "both");
     if (key === "bgdefault") return { color: "Solid color", image: "Custom image" }[s.background_default as string] ?? "Solid color";
     if (key === "bgcolor") return s.background_color ?? "#05070b";
-    if (key === "bgimage") return s.background_image ? s.background_image.split("/").pop() : "(none)";
+    if (key === "bgimage") return s.background_image ? (s.background_image.split("/").pop() ?? "(none)") : "(none)";
     if (key === "gamebg") return s.game_backgrounds ? "on" : "off";
     if (key === "appbg") return s.app_backgrounds ? "on" : "off";
     if (key === "sort") return s.sort;
@@ -87,16 +85,15 @@
     return "";
   }
 
-  let cap = $state<any>(null);
-  let cfg = $state<any>(null);
+  let cap = $state<Capability | null>(null);
+  let cfg = $state<Config | null>(null);
   let inSession = $state(false); // true when running as a gamescope session (vs desktop window)
   let accent = $state("#b14cff");
   let clock = $state("");
   // Now Playing: launch-tracked entries (games + non-media apps), each cleared when the
   // backend reports that process/game exited. Media apps are enriched with live MPRIS
   // metadata (song/artist) from the `media` poll below.
-  type NowEntry = { kind: string; name: string; category: string };
-  type MediaInfo = { status: string; title: string; artist: string; player: string };
+  type NowEntry = { id: string; kind: string; name: string; category: string };
   let nowList = $state<NowEntry[]>([]);
   let media = $state<MediaInfo | null>(null);
   // One card per launch entry; a media app's card shows its song. If something is playing
@@ -111,7 +108,7 @@
     }
     // standalone card for media we didn't launch (phone via KDE Connect, etc.): only while
     // actively playing, so a paused background player doesn't leave a card lingering.
-    if (media && media.status === "Playing" && !mediaShown) out.push({ kind: "media", name: media.player || "Media", category: "music", media });
+    if (media && media.status === "Playing" && !mediaShown) out.push({ id: "media", kind: "media", name: media.player || "Media", category: "music", media });
     return out.slice(0, 3);
   });
 
@@ -121,8 +118,21 @@
   let catSel = $state(1);
   let focus = $state(0);
   let status = $state("Loading…");
-  let fps = $state(0);
+  let fps = $state(0); // current (500ms window) frame rate
+  let fpsAvg = $state(0); // smoothed average
+  let fpsLo = $state(9999); // worst frame since reset (the dips)
+  let fpsHi = $state(0); // best frame since reset
+  function resetFpsStats() { fpsAvg = 0; fpsLo = 9999; fpsHi = 0; }
   let lastInput = $state("—");
+  // user-facing error channel (separate from the transient `status` launch toast)
+  let toastErr = $state("");
+  let toastErrTimer: ReturnType<typeof setTimeout> | undefined;
+  function reportError(ctx: string, e: unknown) {
+    console.warn(`[omnideck] ${ctx}:`, e);
+    toastErr = ctx;
+    clearTimeout(toastErrTimer);
+    toastErrTimer = setTimeout(() => (toastErr = ""), 5000);
+  }
 
   let art = $state<Record<string, string>>({});
   let logos = $state<Record<string, string>>({});
@@ -133,6 +143,7 @@
   let iconColor = $state<Record<string, string>>({}); // dominant "r,g,b" per fetched icon (app bg gradient)
   let searchEngineIcon = $state(""); // favicon of the configured web-search provider
   const iconTried = new Set<string>();
+  const artFailed = new Set<string>(); // appids whose local art file 404'd (don't re-request)
   const iconInflight = new Set<string>(); // ids with an in-flight fetch (avoid duplicate IPC calls)
   // native apps with no launch URL but a known site to pull an icon from
   const ICON_DOMAIN: Record<string, string> = {
@@ -166,7 +177,7 @@
     const url = iconSource(a); if (!url) return;
     iconInflight.add(a.id);
     try {
-      const d = await invoke<string | null>("app_icon", { url });
+      const d = await api.appIcon(url);
       if (d) { appIcons = { ...appIcons, [a.id]: d }; computeIconBg(a.id, d, a.accent); }
       iconTried.add(a.id); // got a definitive answer (icon or "none") — don't refetch
     } catch {
@@ -199,7 +210,7 @@
         const keepAccent = Math.abs(iconLum - hexLum(accent)) >= 0.12; // enough contrast → keep color
         iconBg = { ...iconBg, [id]: keepAccent ? accent : iconLum > 0.5 ? "#0d0f14" : "#f4f5f8" };
         iconColor = { ...iconColor, [id]: `${ar},${ag},${ab}` }; // dominant color for the app bg gradient
-      } catch {}
+      } catch { /* canvas getImageData can throw on an odd/tainted image — skip the color calc */ }
     };
     img.src = dataUrl;
   }
@@ -266,7 +277,7 @@
   // hide rows that only apply to a current selection (custom size, bg color/image, custom volume)
   let visibleSettings = $derived(
     ALL_SETTINGS.filter((s) => {
-      const set = cfg?.settings ?? {};
+      const set = cfg?.settings; if (!set) return true;
       if (s.key === "custom") return set.ui_scale === "custom";
       if (s.key === "soundvol") return soundLabel() === "Custom";
       if (s.key === "bgcolor") return (set.background_default ?? "color") === "color";
@@ -278,6 +289,16 @@
     }),
   );
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
+  // ---- windowed (virtualized) item rail ----
+  // The rail translates so the focused row sits at the top of the clipped wrap, meaning only
+  // ~[focus, focus + viewport-rows] can ever be on screen. Render just that slice — a small
+  // margin above (upward-slide transition + the `near` fade) and a generous one below (covers a
+  // 4K panel at the smallest UI scale, ~32 visible rows) — and preserve absolute row offsets
+  // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
+  // same window: a 1,000-game library no longer fires a fetch per game at mount.
+  const WIN_ABOVE = 8, WIN_BELOW = 40;
+  let winLo = $derived(Math.max(0, focus - WIN_ABOVE));
+  let winItems = $derived(items.slice(winLo, focus + WIN_BELOW));
   let scaleNum = $derived(
     cfg?.settings?.ui_scale === "custom"
       ? (cfg?.settings?.ui_scale_custom ?? 1.6)
@@ -312,7 +333,8 @@
   let baseImageShown = $derived(bgDefault === "image" && !!bgImageUrl);
   let hasImagery = $derived(!!overlay || baseImageShown);
 
-  // ---- synthesized navigation sounds (no shipped audio assets) ----
+  // ---- synthesized navigation sounds (moved to $lib/sfx — reads the live settings) ----
+  initSfx(() => ({ on: !!cfg?.settings?.sound, volume: cfg?.settings?.sound_volume ?? 0.6 }));
   // Volume presets (mirrors the Size presets): Off / Low / Med / High / Custom.
   const SOUND_PRESETS = [
     { label: "Off", on: false, vol: 0 },
@@ -325,24 +347,6 @@
     if (!s.sound) return "Off";
     return SOUND_PRESETS.find((p) => p.on && Math.abs(p.vol - (s.sound_volume ?? 0.6)) < 0.001)?.label ?? "Custom";
   }
-  let actx: AudioContext | null = null;
-  function blip(freq: number, dur = 0.05, base = 0.2, type: OscillatorType = "sine", force = false) {
-    if (!force && !cfg?.settings?.sound) return;
-    const vol = cfg?.settings?.sound_volume ?? 0.6;
-    try {
-      actx ??= new AudioContext();
-      if (actx.state === "suspended") actx.resume();
-      const o = actx.createOscillator(), g = actx.createGain();
-      o.type = type; o.frequency.value = freq;
-      g.gain.setValueAtTime(Math.max(0.0001, base * vol), actx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
-      o.connect(g).connect(actx.destination);
-      o.start(); o.stop(actx.currentTime + dur);
-    } catch {}
-  }
-  const sfxMove = () => blip(420, 0.04, 0.32, "triangle");
-  const sfxEnter = () => { blip(620, 0.06, 0.42); setTimeout(() => blip(880, 0.07, 0.38), 45); };
-  const sfxBack = () => blip(300, 0.07, 0.32, "triangle");
 
   function tileName(t: Tile) { return t.kind === "app" ? t.app.name : t.game.name; }
   function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
@@ -361,37 +365,69 @@
     fn();
     heldDelay = setTimeout(() => { heldRepeat = setInterval(() => { if (heldCode === code) fn(); else holdStop(); }, 110); }, 360);
   }
+  // One-shot timers tracked so onMount cleanup can cancel any still pending — avoids reactive
+  // state writes after the component is gone (matters under HMR / any future routing).
+  const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+  function later(fn: () => void, ms: number) {
+    const t = setTimeout(() => { pendingTimers.delete(t); fn(); }, ms);
+    pendingTimers.add(t);
+    return t;
+  }
+  // Build an omnideck:// URL for an on-disk art file (Steam librarycache / our art cache). The
+  // webview holds the URL and decodes the file to GPU on paint — vs a base64 data URL pinned and
+  // re-diffed in reactive state. Each path segment is percent-encoded; the backend (asset.rs)
+  // canonicalizes + allowlists before reading. Favicons + the bg image stay on data: for now.
+  function artUrl(path: string): string {
+    return "omnideck://localhost" + path.split("/").map(encodeURIComponent).join("/");
+  }
+
+  // The manifest's art path can go stale (Steam moved/GC'd its librarycache): drop the 404'd
+  // URL so the styled name-tile fallback shows, and tombstone the id so loadArt doesn't loop.
+  function artError(appid: string) {
+    artFailed.add(appid);
+    const rest = { ...art };
+    delete rest[appid];
+    art = rest;
+  }
 
   async function loadArt(g: Game) {
-    if (!art[g.appid]) {
+    if (!art[g.appid] && !artFailed.has(g.appid)) {
       const p = g.art_box || g.art_header || g.art_hero;
-      if (p) { try { const d = await invoke<string | null>("get_art", { path: p }); if (d) art = { ...art, [g.appid]: d }; } catch {} }
+      if (p) art = { ...art, [g.appid]: artUrl(p) }; // local art: serve the file directly (no IPC)
     }
     if (!g.art_box && !gridBox[g.appid] && cfg?.settings?.steamgriddb_key) {
-      try { const d = await invoke<string | null>("grid_art", { appid: g.appid }); if (d) { art = { ...art, [g.appid]: d }; gridBox = { ...gridBox, [g.appid]: true }; } } catch {}
+      try { const path = await api.gridArt(g.appid); if (path) { art = { ...art, [g.appid]: artUrl(path) }; gridBox = { ...gridBox, [g.appid]: true }; } } catch { /* SteamGridDB best-effort (no key / network) */ }
     }
-    if (g.art_hero && !heroes[g.appid]) {
-      try { const d = await invoke<string | null>("get_art", { path: g.art_hero }); if (d) heroes = { ...heroes, [g.appid]: d }; } catch {}
-    }
+    if (g.art_hero && !heroes[g.appid]) heroes = { ...heroes, [g.appid]: artUrl(g.art_hero) }; // hero bg: serve directly
   }
 
   // ---- navigation (XMB: left/right = category, up/down = item) ----
   function moveCat(d: number) { const n = CATEGORIES.length; catSel = (catSel + d + n) % n; focus = 0; sfxMove(); }
   function moveItem(d: number) { settingsEditing = false; if (itemCount) { focus = (focus + d + itemCount) % itemCount; sfxMove(); } }
   function onWheel(e: WheelEvent) { e.preventDefault(); if (navGate()) moveItem(e.deltaY > 0 ? 1 : -1); }
+  // Apply a partial settings change by MUTATING the reactive cfg.settings in place. Svelte 5
+  // $state is fine-grained, so only the touched keys signal — this avoids the old cfg={...cfg}
+  // full-rebuild that re-ran every derived (games re-sort, etc.) and re-fetched the background
+  // image on every nudge. Snapshot before sending so Tauri serializes a plain object, not a proxy.
+  function patchSettings(patch: Partial<Settings>) {
+    if (!cfg) return;
+    Object.assign(cfg.settings, patch);
+    api.saveSettings($state.snapshot(cfg.settings)).catch((e) => reportError("Couldn't save settings", e));
+  }
   function adjustSetting(key: string, dir: number) {
     if (!cfg) return;
-    const s = { ...cfg.settings };
-    if (key === "recents") s.dashboard_recents = clamp((s.dashboard_recents ?? 8) + dir, 0, 20);
-    else if (key === "custom") s.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 3.5));
-    else if (key === "blur") s.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
-    else if (key === "bright") s.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
-    else if (key === "soundvol") { s.sound_volume = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); s.sound = s.sound_volume > 0; }
-    cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    const s = cfg.settings;
+    const patch: Partial<Settings> = {};
+    if (key === "recents") patch.dashboard_recents = clamp((s.dashboard_recents ?? 8) + dir, 0, 20);
+    else if (key === "custom") patch.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 3.5));
+    else if (key === "blur") patch.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
+    else if (key === "bright") patch.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
+    else if (key === "soundvol") { const v = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); patch.sound_volume = v; patch.sound = v > 0; }
+    patchSettings(patch);
     if (key === "soundvol") blip(620, 0.06, 0.42, "sine", true);
   }
   function doAction(key: string) {
+    holdStop(); // a held D-pad press that opens this modal must not keep auto-repeating behind it
     if (key === "addcustom") { formOpen = true; fName = ""; fExec = ""; fIcon = "🚀"; fCat = "apps"; }
   }
   // --- numeric settings: also typeable via a real <input> while editing ---
@@ -405,23 +441,21 @@
   function setNum(key: string, raw: number) {
     const m = NUM_META[key]; if (!cfg || !m || Number.isNaN(raw)) return;
     let v = clamp(raw, m.lo, m.hi); if (m.int) v = Math.round(v); else v = round2(v);
-    const s = { ...cfg.settings };
-    if (key === "recents") s.dashboard_recents = v;
-    else if (key === "custom") s.ui_scale_custom = v;
-    else if (key === "blur") s.bg_blur = v;
-    else if (key === "bright") s.bg_brightness = v;
-    else if (key === "soundvol") { s.sound_volume = v; s.sound = v > 0; }
-    cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    const patch: Partial<Settings> = {};
+    if (key === "recents") patch.dashboard_recents = v;
+    else if (key === "custom") patch.ui_scale_custom = v;
+    else if (key === "blur") patch.bg_blur = v;
+    else if (key === "bright") patch.bg_brightness = v;
+    else if (key === "soundvol") { patch.sound_volume = v; patch.sound = v > 0; }
+    patchSettings(patch);
   }
   // text settings (currently just the custom background image path)
   function setText(key: string, raw: string) {
     if (!cfg) return;
-    const s = { ...cfg.settings };
-    if (key === "bgimage") s.background_image = raw.trim();
-    else if (key === "searchurl") s.search_provider = raw.trim();
-    cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    const patch: Partial<Settings> = {};
+    if (key === "bgimage") patch.background_image = raw.trim();
+    else if (key === "searchurl") patch.search_provider = raw.trim();
+    patchSettings(patch);
   }
   function textValue(key: string): string {
     if (key === "bgimage") return cfg?.settings?.background_image ?? "";
@@ -429,11 +463,7 @@
     return "";
   }
   function onBgColor(e: Event) {
-    const v = (e.target as HTMLInputElement).value;
-    if (!cfg) return;
-    const s = { ...cfg.settings, background_color: v };
-    cfg = { ...cfg, settings: s };
-    invoke("save_settings", { settings: s }).catch(() => {});
+    patchSettings({ background_color: (e.target as HTMLInputElement).value });
   }
   function focusSelect(node: HTMLInputElement) { node.focus(); node.select(); }
   function isTyping() {
@@ -442,11 +472,8 @@
   }
   function onAccentColor(e: Event) {
     const v = (e.target as HTMLInputElement).value;
-    if (!cfg) return;
-    const s = { ...cfg.settings, accent: v };
-    cfg = { ...cfg, settings: s };
+    patchSettings({ accent: v });
     accent = v;
-    invoke("save_settings", { settings: s }).catch(() => {});
   }
   // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise always
   // switches category (so you can never get trapped in Settings).
@@ -468,17 +495,18 @@
   }
   async function launchTile(t: Tile) {
     const name = t.kind === "game" ? t.game.name : t.app.name;
+    const id = t.id; // tile id doubles as the launch / now-playing correlation key
     try {
       const category = t.kind === "game" ? "games" : catOf(t.app);
-      if (t.kind === "game") { status = `▶ Launching ${name}…`; await invoke("launch_game", { appid: t.game.appid, name }); }
-      else { status = `▶ ${name}…`; await invoke("launch_command", { exec: t.app.exec, name }); recordRecentApp(t.app.id); }
-      nowList = [{ kind: t.kind, name, category }, ...nowList.filter((e) => e.name !== name)].slice(0, 3);
+      if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, id); }
+      else { status = `▶ ${name}…`; await api.launchCommand(t.app.exec, name, id); recordRecentApp(t.app.id); }
+      nowList = [{ id, kind: t.kind, name, category }, ...nowList.filter((e) => e.id !== id)].slice(0, 3);
     } catch (e) { status = `launch error: ${e}`; return; }
-    setTimeout(() => (status = ""), 3500);
+    later(() => (status = ""), 3500);
   }
   function recordRecentApp(id: string) {
     recentApps = [id, ...recentApps.filter((x) => x !== id)].slice(0, 20);
-    invoke("save_recent_apps", { recentApps }).catch(() => {});
+    api.saveRecentApps(recentApps).catch((e) => reportError("Couldn't save recents", e));
   }
   function gotoSettings() { catSel = CATEGORIES.findIndex((c) => c.id === "settings"); focus = 0; }
   function goHome() { catSel = CATEGORIES.findIndex((c) => c.id === "dashboard"); focus = 0; }
@@ -501,49 +529,44 @@
     const d = new Date(ts * 1000);
     return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
   }
-  async function cycleSetting(key: string) {
+  function cycleSetting(key: string) {
     if (!cfg) return;
-    const s = { ...cfg.settings };
-    if (key === "size") { const c = SIZE_MODES.indexOf(s.ui_scale ?? "medium"); s.ui_scale = SIZE_MODES[((c < 0 ? 1 : c) + 1) % SIZE_MODES.length]; }
-    else if (key === "sort") s.sort = s.sort === "recent" ? "alpha" : "recent";
-    else if (key === "runtimes") s.show_runtimes = !s.show_runtimes;
+    const s = cfg.settings;
+    const patch: Partial<Settings> = {};
+    if (key === "size") { const c = SIZE_MODES.indexOf(s.ui_scale ?? "medium"); patch.ui_scale = SIZE_MODES[((c < 0 ? 1 : c) + 1) % SIZE_MODES.length]; }
+    else if (key === "sort") patch.sort = s.sort === "recent" ? "alpha" : "recent";
+    else if (key === "runtimes") patch.show_runtimes = !s.show_runtimes;
     else if (key === "sound") {
       // cycle Off → Low → Medium → High (Custom is reached via the Sound volume row)
       const cur = soundLabel();
       const i = SOUND_PRESETS.findIndex((p) => p.label === cur);
       const next = SOUND_PRESETS[(i < 0 ? 0 : i + 1) % SOUND_PRESETS.length];
-      s.sound = next.on; s.sound_volume = next.vol;
+      patch.sound = next.on; patch.sound_volume = next.vol;
       if (next.on) blip(620, 0.06, 0.42, "sine", true);
     }
-    else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); s.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
-    else if (key === "gamebg") s.game_backgrounds = !s.game_backgrounds;
-    else if (key === "appbg") s.app_backgrounds = !s.app_backgrounds;
-    else if (key === "bgcolor") { const c = BG_COLORS.indexOf(s.background_color ?? BG_COLORS[0]); s.background_color = BG_COLORS[((c < 0 ? -1 : c) + 1) % BG_COLORS.length]; }
-    else if (key === "recents_show") { const c = RECENTS_MODES.indexOf(s.recents_show ?? "both"); s.recents_show = RECENTS_MODES[((c < 0 ? 0 : c) + 1) % RECENTS_MODES.length]; }
-    else if (key === "accent") { const c = ACCENTS.indexOf(s.accent ?? "#4cc2ff"); s.accent = ACCENTS[((c < 0 ? 0 : c) + 1) % ACCENTS.length]; }
+    else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); patch.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
+    else if (key === "gamebg") patch.game_backgrounds = !s.game_backgrounds;
+    else if (key === "appbg") patch.app_backgrounds = !s.app_backgrounds;
+    else if (key === "bgcolor") { const c = BG_COLORS.indexOf(s.background_color ?? BG_COLORS[0]); patch.background_color = BG_COLORS[((c < 0 ? -1 : c) + 1) % BG_COLORS.length]; }
+    else if (key === "recents_show") { const c = RECENTS_MODES.indexOf(s.recents_show ?? "both"); patch.recents_show = RECENTS_MODES[((c < 0 ? 0 : c) + 1) % RECENTS_MODES.length]; }
+    else if (key === "accent") { const c = ACCENTS.indexOf(s.accent ?? "#4cc2ff"); patch.accent = ACCENTS[((c < 0 ? 0 : c) + 1) % ACCENTS.length]; }
     else if (key === "search") {
       const c = SEARCH_MODES.findIndex((m) => m.mode === (s.search_mode ?? "duckduckgo"));
       const next = SEARCH_MODES[((c < 0 ? 0 : c) + 1) % SEARCH_MODES.length];
-      s.search_mode = next.mode;
-      if (next.url) s.search_provider = next.url; // preset
-      else if (SEARCH_MODES.some((m) => m.url === s.search_provider)) s.search_provider = ""; // entering searxng/custom from a preset → clear for the URL field
+      patch.search_mode = next.mode;
+      if (next.url) patch.search_provider = next.url; // preset
+      else if (SEARCH_MODES.some((m) => m.url === s.search_provider)) patch.search_provider = ""; // entering searxng/custom → clear for the URL field
     }
-    cfg = { ...cfg, settings: s };
-    accent = s.accent ?? "#4cc2ff";
-    invoke("save_settings", { settings: s }).catch(() => {});
+    patchSettings(patch);
+    if (patch.accent) accent = patch.accent;
   }
 
-  function mediaControl(action: string) {
-    invoke("media_control", { action }).catch(() => {});
-    // re-poll so the play/pause glyph and title update promptly
-    setTimeout(() => invoke<MediaInfo | null>("media_now_playing").then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {}), 250);
-  }
   function isFav(id: string) { return favorites.includes(id); }
   function favCurrent() {
     if (catId === "settings") return;
     const t = items[focus]; if (!t) return;
     favorites = isFav(t.id) ? favorites.filter((x) => x !== t.id) : [...favorites, t.id];
-    invoke("save_favorites", { favorites }).catch(() => {});
+    api.saveFavorites(favorites).catch((e) => reportError("Couldn't save favorites", e));
   }
 
   // ---- add-apps catalog ----
@@ -559,30 +582,38 @@
   function openPower() { holdStop(); powerOpen = true; powerFocus = 0; }
   function powerMove(d: number) { powerFocus = clamp(powerFocus + d, 0, POWER.length - 1); }
   function powerActivate() {
+    holdStop(); // stop any in-progress hold-repeat when moving to the confirm/exit step
     const key = POWER[powerFocus].key;
     powerOpen = false;
-    if (key === "exit") invoke("quit").catch(() => {});
-    else if (key === "suspend") invoke("power_action", { action: "suspend" }).catch(() => {});
+    if (key === "exit") api.quit().catch((e) => reportError("Couldn't exit", e));
+    else if (key === "suspend") api.powerAction("suspend").catch((e) => reportError("Suspend failed", e));
     else confirmAct = { key, label: POWER[powerFocus].label };
   }
   function doConfirm() {
     if (!confirmAct) return;
-    invoke("power_action", { action: confirmAct.key }).catch(() => {});
+    api.powerAction(confirmAct.key).catch((e) => reportError("Power action failed", e));
     confirmAct = null;
   }
   function addCustom() {
     const name = fName.trim();
     const cmd = fExec.trim();
     if (!cfg || !name || !cmd) { formOpen = false; return; }
-    const id = "custom-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    // Slugify, trimming leading/trailing dashes so "My App!" and "My App?" don't both collapse
+    // to "custom-my-app-"; reject a name with no usable characters.
+    const base = "custom-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (base === "custom-") { reportError("Add a name with at least one letter or number", null); return; }
+    // De-dup with a numeric suffix instead of silently overwriting an existing same-slug launcher.
+    const collided = apps.some((a) => a.id === base);
+    let id = base; for (let n = 2; apps.some((a) => a.id === id); n++) id = `${base}-${n}`;
     // A bare URL (e.g. a SearXNG instance) is launched as a browser app so it opens in the
     // browser AND gets its site favicon; anything else is run as a normal argv command.
     const isUrl = /^https?:\/\//i.test(cmd);
     const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : cmd.split(/\s+/);
     const app = { id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat };
-    const next = [...apps.filter((a) => a.id !== id), app];
+    const next = [...apps, app];
     cfg = { ...cfg, apps: next };
-    invoke("save_apps", { apps: next }).catch(() => {});
+    api.saveApps(next).catch((e) => reportError("Couldn't save apps", e));
+    if (collided) { status = `Added "${name}" (a similar name already existed)`; later(() => (status = ""), 3000); }
     formOpen = false;
   }
 
@@ -607,7 +638,7 @@
       .filter((t) => (t.kind === "game" ? t.game.name : t.app.name).toLowerCase().includes(q))
       .slice(0, 40);
   });
-  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; }
+  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; oskFocus = 0; }
   function searchMove(d: number) {
     searchFocus = clamp(searchFocus + d, 0, searchResults.length); // last index = web-search row
     queueMicrotask(() => document.querySelector(`[data-sr="${searchFocus}"]`)?.scrollIntoView({ block: "nearest" }));
@@ -616,14 +647,42 @@
     if (!searchQuery.trim()) return;
     let prov = cfg?.settings?.search_provider || "https://duckduckgo.com/?q=";
     if (!/^https?:\/\//i.test(prov)) prov = "https://duckduckgo.com/?q="; // ignore a non-URL provider (safety + UX)
-    invoke("launch_command", { exec: ["BROWSER", prov + encodeURIComponent(searchQuery)], name: "Search" }).catch(() => {});
+    api.launchCommand(["BROWSER", prov + encodeURIComponent(searchQuery)], "Search").catch((e) => reportError("Search failed", e));
     searchOpen = false;
     status = `🔎 ${searchQuery}`;
-    setTimeout(() => (status = ""), 2500);
+    later(() => (status = ""), 2500);
   }
   function searchActivate() {
     if (searchFocus < searchResults.length) { searchOpen = false; launchTile(searchResults[searchFocus]); }
     else webSearch();
+  }
+
+  // ---- on-screen keyboard (controller/mouse text entry for search; search is case-insensitive
+  // so it's lowercase-only — no shift needed) ----
+  const OSK_ROWS = [
+    ["a", "b", "c", "d", "e", "f"],
+    ["g", "h", "i", "j", "k", "l"],
+    ["m", "n", "o", "p", "q", "r"],
+    ["s", "t", "u", "v", "w", "x"],
+    ["y", "z", "0", "1", "2", "3"],
+    ["4", "5", "6", "7", "8", "9"],
+    ["␣", ".", "-", "⌫", "✕", "⏎"],
+  ];
+  const OSK_FLAT = OSK_ROWS.flat();
+  const OSK_COLS = 6;
+  let oskFocus = $state(0);
+  function oskMove(dx: number, dy: number) {
+    const rows = OSK_ROWS.length;
+    const col = ((oskFocus % OSK_COLS) + dx + OSK_COLS) % OSK_COLS;
+    const row = (Math.floor(oskFocus / OSK_COLS) + dy + rows) % rows;
+    oskFocus = row * OSK_COLS + col;
+  }
+  function oskPress(k: string) {
+    if (k === "␣") searchQuery += " ";
+    else if (k === "⌫") searchQuery = searchQuery.slice(0, -1);
+    else if (k === "✕") searchQuery = "";
+    else if (k === "⏎") searchActivate();
+    else searchQuery += k;
   }
   function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocus = 0; }
   function catMove(d: number) { catFocus = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
@@ -632,16 +691,22 @@
     const e = displayedCatalog[i]; if (!e || !cfg) return;
     const next = isAdded(e.id) ? apps.filter((a) => a.id !== e.id) : [...apps, e];
     cfg = { ...cfg, apps: next };
-    try { await invoke("save_apps", { apps: next }); } catch {}
+    try { await api.saveApps(next); } catch (e) { reportError("Couldn't save apps", e); }
   }
 
   // ---- first-run wizard ----
   let wizardActive = $state(false);
   let wizardStep = $state(0);
-  async function finishWizard() { wizardActive = false; if (!cfg) return; const s = { ...cfg.settings, onboarded: true }; cfg = { ...cfg, settings: s }; try { await invoke("save_settings", { settings: s }); } catch {} }
+  function finishWizard() { wizardActive = false; patchSettings({ onboarded: true }); }
   function wizardNext() { if (wizardStep >= 2) finishWizard(); else wizardStep++; }
   function wizardPrev() { if (wizardStep > 0) wizardStep--; }
-  function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; cfg = { ...cfg, settings: { ...cfg.settings, accent: a } }; accent = a; invoke("save_settings", { settings: cfg.settings }).catch(() => {}); }
+  function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; patchSettings({ accent: a }); accent = a; }
+
+  // Single source of truth: is any modal/overlay open? Gates base navigation and stops
+  // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
+  const anyModal = $derived(
+    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen,
+  );
 
   function onKey(e: KeyboardEvent) {
     // A real <input>/<select> is focused (settings number field, custom-launcher form):
@@ -691,7 +756,8 @@
       else if (e.key === "Enter") searchActivate();
       else if (e.key === "Escape") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
       else if (e.key === "Backspace") searchQuery = searchQuery.slice(0, -1);
-      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) searchQuery += e.key;
+      // preventDefault so Space can't ALSO natively re-activate a mouse-focused result row
+      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) { e.preventDefault(); searchQuery += e.key; }
       return;
     }
     if ((e.key === "a" || e.key === "A") && !catalogOpen) { toggleCatalog(); return; }
@@ -702,7 +768,8 @@
       else if (e.key === "Tab") { e.preventDefault(); catSort = catSort === "group" ? "alpha" : "group"; }
       else if (e.key === "Escape") { if (catQuery) catQuery = ""; else catalogOpen = false; }
       else if (e.key === "Backspace") catQuery = catQuery.slice(0, -1);
-      else if (e.key.length === 1 && /^[a-z0-9 ]$/i.test(e.key)) catQuery += e.key;
+      // preventDefault so Space can't ALSO natively re-toggle a mouse-focused catalog row
+      else if (e.key.length === 1 && /^[a-z0-9 ]$/i.test(e.key)) { e.preventDefault(); catQuery += e.key; }
       return;
     }
     if (e.key === "p" || e.key === "P") { gotoSettings(); return; }
@@ -719,36 +786,62 @@
 
   onMount(() => {
     window.addEventListener("keydown", onKey);
-    invoke("get_capability").then((c) => (cap = c)).catch(() => {});
-    invoke<boolean>("in_gamescope_session").then((v) => (inSession = !!v)).catch(() => {});
-    invoke<any>("get_catalog").then((c) => (catalog = c ?? [])).catch(() => {});
-    invoke<any>("get_config")
+    api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
+    api.inGamescopeSession().then((v) => (inSession = v)).catch((e) => console.debug("[omnideck] inGamescopeSession probe failed", e));
+    api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
+    api.getConfig()
       .then((c) => {
         cfg = c;
         accent = c.settings?.accent ?? "#b14cff";
         favorites = c.favorites ?? [];
         recentApps = c.recent_apps ?? [];
+        if (c.config_error) reportError(c.config_error, null); // config.toml didn't parse — warn, don't silently revert
         if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
       })
       .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
       .finally(() => {
-        invoke<any>("get_library").then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
+        // art loads lazily per windowed row (see the winItems $effect), not per game here
+        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; }).catch((e) => (status = `library error: ${e}`));
       });
 
-    let raf = 0, acc = 0, timer = performance.now();
-    const loop = (t: number) => { acc++; if (t - timer >= 500) { fps = Math.round((acc * 1000) / (t - timer)); acc = 0; timer = t; clock = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } raf = requestAnimationFrame(loop); };
+    // Per-frame sampling catches brief dips a 500ms average smooths away; we only commit the
+    // numbers to reactive state once per 500ms window so the tracker adds no per-frame cost.
+    let raf = 0, frames = 0, winStart = performance.now(), lastFrame = winStart;
+    const warmupEnd = winStart + 600; // skip the first frames (long initial frame) for lo/hi
+    let loAcc = 9999, hiAcc = 0, avgAcc = 0, avgN = 0;
+    const loop = (t: number) => {
+      const dt = t - lastFrame; lastFrame = t;
+      if (dt > 0 && t > warmupEnd) {
+        const inst = Math.min(1000 / dt, 240);
+        if (inst < loAcc) loAcc = inst;
+        if (inst > hiAcc) hiAcc = inst;
+        avgAcc += inst; avgN++;
+      }
+      frames++;
+      if (t - winStart >= 500) {
+        fps = Math.round((frames * 1000) / (t - winStart));
+        if (avgN) fpsAvg = fpsAvg ? Math.round(fpsAvg * 0.7 + (avgAcc / avgN) * 0.3) : Math.round(avgAcc / avgN);
+        if (loAcc < fpsLo) fpsLo = Math.round(loAcc); // session watermarks (persist until reset)
+        if (hiAcc > fpsHi) fpsHi = Math.round(hiAcc);
+        loAcc = 9999; hiAcc = 0; avgAcc = 0; avgN = 0; frames = 0; winStart = t;
+        clock = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+      raf = requestAnimationFrame(loop);
+    };
     raf = requestAnimationFrame(loop);
 
     const off: Array<() => void> = [];
-    // We add to nowList when we launch (we know game vs app there); the backend tells us
-    // when the process/game actually exits so we can remove it. Match by name.
-    listen("app-exited", (e: any) => { const n = String(e.payload ?? ""); nowList = nowList.filter((x) => x.name !== n); }).then((u) => off.push(u));
-    // Poll MPRIS for the current song/show (works for native players + browser PWAs).
-    const pollMedia = () => invoke<MediaInfo | null>("media_now_playing").then((m) => { media = m && m.status !== "Stopped" ? m : null; }).catch(() => {});
-    pollMedia();
-    const mediaTimer = setInterval(pollMedia, 4000);
-    listen("gamepad-event", (e: any) => {
-      const p = e.payload as { kind: string; code: string; value: number };
+    // We add to nowList when we launch (we know game vs app there); the backend tells us when
+    // the process/game exits — correlate by the launch id (the tile id), not the display name.
+    api.onAppExited((e) => { const id = String(e.payload ?? ""); nowList = nowList.filter((x) => x.id !== id); }).then((u) => off.push(u));
+    // MPRIS Now Playing is event-driven (backend zbus watcher). One initial fetch covers the
+    // window between mount and the listener attaching; after that, `media-changed` pushes
+    // every track/status change in ms (works for native players + browser PWAs).
+    const applyMedia = (m: MediaInfo | null) => { media = m && m.status !== "Stopped" ? m : null; };
+    api.mediaNowPlaying().then(applyMedia).catch((e) => console.debug("[omnideck] media fetch failed", e));
+    api.onMediaChanged((e) => applyMedia(e.payload)).then((u) => off.push(u));
+    api.onGamepad((e) => {
+      const p = e.payload;
       if (p.kind === "button_pressed") {
         lastInput = p.code;
         if (wizardActive) {
@@ -772,10 +865,16 @@
           return;
         }
         if (searchOpen) {
-          if (p.code === "DPadUp") holdStart(p.code, () => searchMove(-1));
-          else if (p.code === "DPadDown") holdStart(p.code, () => searchMove(1));
-          else if (p.code === "South") searchActivate();
-          else if (p.code === "East") searchOpen = false;
+          // D-pad drives the on-screen keyboard; bumpers move the result selection.
+          if (p.code === "DPadUp") holdStart(p.code, () => oskMove(0, -1));
+          else if (p.code === "DPadDown") holdStart(p.code, () => oskMove(0, 1));
+          else if (p.code === "DPadLeft") holdStart(p.code, () => oskMove(-1, 0));
+          else if (p.code === "DPadRight") holdStart(p.code, () => oskMove(1, 0));
+          else if (p.code === "South") oskPress(OSK_FLAT[oskFocus]);
+          else if (p.code === "LeftTrigger") searchMove(-1);
+          else if (p.code === "RightTrigger") searchMove(1);
+          else if (p.code === "West") searchQuery = searchQuery.slice(0, -1);
+          else if (p.code === "East") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
           return;
         }
         if (catalogOpen) {
@@ -803,7 +902,7 @@
         // One deadzone (no 0.3–0.6 dead band) + the same hold-repeat the D-pad uses. Track the
         // active axis:direction so a held stick auto-repeats once, and recentering or any modal
         // opening stops it — fixes drift-stuck nav and phantom nav behind a modal.
-        if (wizardActive || catalogOpen || searchOpen || powerOpen || confirmAct || formOpen || infoOpen) { holdStop(); return; }
+        if (anyModal) { holdStop(); return; }
         const DZ = 0.6;
         const dir = p.value > DZ ? 1 : p.value < -DZ ? -1 : 0;
         const code = `${p.code}:${dir}`;
@@ -812,7 +911,15 @@
       }
     }).then((u) => off.push(u));
 
-    return () => { window.removeEventListener("keydown", onKey); cancelAnimationFrame(raf); clearInterval(mediaTimer); off.forEach((u) => u()); };
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
+      clearTimeout(toastErrTimer);
+      clearTimeout(bgTimer);
+      pendingTimers.forEach(clearTimeout);
+      holdStop();
+      off.forEach((u) => u());
+    };
   });
 
   $effect(() => { if (focus >= itemCount && itemCount) focus = itemCount - 1; });
@@ -820,17 +927,22 @@
   // fetch site icons for visible web/app tiles + the add-apps catalog (cached on disk)
   $effect(() => { for (const t of items) if (t.kind === "app") loadAppIcon(t.app); });
   $effect(() => { for (const c of displayedCatalog) loadAppIcon(c); });
+  // game art only for windowed rows — scrolling pulls art in just ahead of visibility
+  $effect(() => { for (const t of winItems) if (t.kind === "game") loadArt(t.game); });
   // load the custom background image (data URL) when that mode is selected
+  let bgSeq = 0;
   $effect(() => {
     const path = cfg?.settings?.background_image;
     if (cfg?.settings?.background_default === "image" && path) {
-      invoke<string | null>("get_art", { path }).then((d) => { bgImageUrl = d ?? ""; }).catch(() => { bgImageUrl = ""; });
+      const seq = ++bgSeq; // drop a stale resolve if the path changed before this one returned
+      api.getArt(path).then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; }).catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
     } else { bgImageUrl = ""; }
   });
   // fetch the current web-search provider's favicon (shown on the search "web" row)
+  let provSeq = 0;
   $effect(() => {
     const prov = cfg?.settings?.search_provider;
-    if (prov) invoke<string | null>("app_icon", { url: prov }).then((d) => { searchEngineIcon = d ?? ""; }).catch(() => {});
+    if (prov) { const seq = ++provSeq; api.appIcon(prov).then((d) => { if (seq === provSeq) searchEngineIcon = d ?? ""; }).catch((e) => console.debug("[omnideck] search-engine favicon fetch failed", e)); }
   });
 </script>
 
@@ -846,10 +958,10 @@
     <div class="brand">OMNIDECK</div>
     <div class="meta">
       <span class="clock">{clock}</span>
-      <button class="badge gear" onclick={openSearch} title="Search (/)">🔍</button>
-      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)">＋</button>
-      <button class="badge gear" onclick={gotoSettings} title="Settings (P)">⚙</button>
-      <button class="badge gear" onclick={openPower} title="Power">⏻</button>
+      <button class="badge gear" onclick={openSearch} title="Search (/)" aria-label="Search">🔍</button>
+      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)" aria-label="Add apps">＋</button>
+      <button class="badge gear" onclick={gotoSettings} title="Settings (P)" aria-label="Settings">⚙</button>
+      <button class="badge gear" onclick={openPower} title="Power" aria-label="Power menu">⏻</button>
     </div>
   </header>
 
@@ -897,12 +1009,14 @@
         </div>
       {:else}
         <div class="xitems" style="transform: translateY(calc({-focus} * var(--ih)))">
-          {#each items as t, i (t.id)}
+          {#if winLo > 0}<div class="xpad" style="height: calc({winLo} * var(--ih))" aria-hidden="true"></div>{/if}
+          {#each winItems as t, wi (t.id)}
+            {@const i = wi + winLo}
             <button class="xitem" class:focused={i === focus} class:near={Math.abs(i - focus) <= 4}
               onclick={() => { focus = i; launchTile(t); }}>
               <span class="xthumb" style={t.kind === "app" ? `background:${appIcons[t.app.id] ? (iconBg[t.app.id] ?? "#f4f5f8") : t.app.accent}` : ""}>
-                {#if t.kind === "game" && art[t.game.appid] && Math.abs(i - focus) <= 8}
-                  <img src={art[t.game.appid]} alt="" decoding="async" />
+                {#if t.kind === "game" && art[t.game.appid]}
+                  <img src={art[t.game.appid]} alt="" decoding="async" onerror={() => artError(t.game.appid)} />
                 {:else if t.kind === "app" && appIcons[t.app.id]}
                   <img class="appicon" src={appIcons[t.app.id]} alt="" decoding="async" />
                 {:else}
@@ -918,58 +1032,58 @@
   </div>
 
   {#if searchOpen}
-    <button class="prefs-backdrop" aria-label="Close search" onclick={() => (searchOpen = false)}></button>
-    <div class="prefs catalog">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (searchOpen = false)}>✕</button>
-      <h2>Search</h2>
+    <Modal labelledby="dlg-search" backdropLabel="Close search" closeLabel="Close search" onclose={() => (searchOpen = false)}>
+      <h2 id="dlg-search">Search</h2>
       <div class="csearch active">{searchQuery ? `🔎 ${searchQuery}` : "Type to search your games, apps & the web…"}</div>
       <div class="catlist">
         {#each searchResults as t, i (t.id)}
-          <div class="crow" class:focused={i === searchFocus} data-sr={i} onmouseenter={() => (searchFocus = i)} onclick={() => { searchFocus = i; searchActivate(); }}>
+          <button type="button" class="crow" class:focused={i === searchFocus} data-sr={i} onmouseenter={() => (searchFocus = i)} onclick={() => { searchFocus = i; searchActivate(); }}>
             <span class="cicon" style="background:{t.kind === 'app' && appIcons[t.app.id] ? (iconBg[t.app.id] ?? '#f4f5f8') : t.kind === 'app' ? t.app.accent : '#22304a'}">{#if t.kind === "app" && appIcons[t.app.id]}<img class="appicon" src={appIcons[t.app.id]} alt="" />{:else}{t.kind === "app" ? t.app.icon : "🎮"}{/if}</span>
             <span class="cname">{t.kind === "app" ? t.app.name : t.game.name}</span>
             <span class="ccat">{t.cat}</span>
-          </div>
+          </button>
         {/each}
-        <div class="crow" class:focused={searchFocus === searchResults.length} data-sr={searchResults.length} onmouseenter={() => (searchFocus = searchResults.length)} onclick={() => webSearch()}>
+        <button type="button" class="crow" class:focused={searchFocus === searchResults.length} data-sr={searchResults.length} onmouseenter={() => (searchFocus = searchResults.length)} onclick={() => webSearch()}>
           <span class="cicon" style="background:#3a3f4a">{#if searchEngineIcon}<img class="appicon" src={searchEngineIcon} alt="" />{:else}🌐{/if}</span>
           <span class="cname">Search the web{searchQuery ? ` for “${searchQuery}”` : "…"}</span>
-        </div>
+        </button>
       </div>
-      <p class="phint">type · ↑↓ select · Enter open · Esc clear/close · web-search provider set in Settings</p>
-    </div>
+      <div class="osk" role="group" aria-label="On-screen keyboard">
+        {#each OSK_FLAT as k, i}
+          <button class="oskkey" class:focused={i === oskFocus} class:special={"␣⌫✕⏎".includes(k)}
+            onmouseenter={() => (oskFocus = i)} onclick={() => { oskFocus = i; oskPress(k); }}>{k}</button>
+        {/each}
+      </div>
+      <p class="phint">keyboard: type · ↑↓ select · Enter open — controller: D-pad + ✕ to type · bumpers pick result · ⏎ go · ◯ clear/close</p>
+    </Modal>
   {/if}
 
   {#if catalogOpen}
-    <button class="prefs-backdrop" aria-label="Close add apps" onclick={() => (catalogOpen = false)}></button>
-    <div class="prefs catalog">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (catalogOpen = false)}>✕</button>
+    <Modal labelledby="dlg-catalog" backdropLabel="Close add apps" closeLabel="Close add apps" onclose={() => (catalogOpen = false)}>
       <div class="chead">
-        <h2>Add apps &amp; media</h2>
+        <h2 id="dlg-catalog">Add apps &amp; media</h2>
         <button class="sortbtn" onclick={() => (catSort = catSort === "group" ? "alpha" : "group")}>{catSort === "group" ? "Grouped" : "A–Z"}</button>
       </div>
       <div class="csearch" class:active={catQuery}>{catQuery ? `🔎 ${catQuery}` : "Type to search…  ·  Tab: sort"}</div>
       <div class="catlist">
         {#each displayedCatalog as c, i (c.id)}
           {#if catSort === "group" && (i === 0 || displayedCatalog[i - 1].category !== c.category)}<div class="cgroup">{c.category ?? "apps"}</div>{/if}
-          <div class="crow" class:focused={i === catFocus} data-cat={i} onmouseenter={() => (catFocus = i)} onclick={() => { catFocus = i; catToggle(i); }}>
+          <button type="button" class="crow" class:focused={i === catFocus} data-cat={i} onmouseenter={() => (catFocus = i)} onclick={() => { catFocus = i; catToggle(i); }}>
             <span class="cicon" style="background:{appIcons[c.id] ? (iconBg[c.id] ?? '#f4f5f8') : c.accent}">{#if appIcons[c.id]}<img class="appicon" src={appIcons[c.id]} alt="" />{:else}{c.icon}{/if}</span>
             <span class="cname">{c.name}</span>
             <span class="cstate" class:on={isAdded(c.id)}>{isAdded(c.id) ? "✓ Added" : "+ Add"}</span>
-          </div>
+          </button>
         {/each}
         {#if !displayedCatalog.length}<div class="cgroup">no matches for “{catQuery}”</div>{/if}
       </div>
       <p class="phint">type to search · Tab sort · ↑↓ select · Enter/✕ toggle · Esc clear/close</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if infoOpen && infoTile}
-    <button class="prefs-backdrop" aria-label="Close info" onclick={() => (infoOpen = false)}></button>
-    <div class="prefs info">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (infoOpen = false)}>✕</button>
+    <Modal labelledby="dlg-info" backdropLabel="Close info" closeLabel="Close info" onclose={() => (infoOpen = false)}>
       {#if infoTile.kind === "game"}
-        <h2>{infoTile.game.name}</h2>
+        <h2 id="dlg-info">{infoTile.game.name}</h2>
         <dl class="infogrid">
           <dt>Type</dt><dd>Steam game</dd>
           <dt>App ID</dt><dd>{infoTile.game.appid}</dd>
@@ -979,11 +1093,11 @@
         </dl>
         <div class="confirm-btns">
           <button class="cbtn danger" onclick={() => { const t = infoTile; infoOpen = false; if (t) launchTile(t); }}>▶ Launch</button>
-          <button class="cbtn" onclick={() => { if (infoTile?.kind === "game") invoke("game_properties", { appid: infoTile.game.appid }).catch(() => {}); }}>Steam properties</button>
+          <button class="cbtn" onclick={() => { if (infoTile?.kind === "game") api.gameProperties(infoTile.game.appid).catch((e) => reportError("Couldn't open Steam properties", e)); }}>Steam properties</button>
         </div>
         <p class="phint">Steam properties opens Steam (for launch options / verify). Esc/◯ close.</p>
       {:else}
-        <h2>{infoTile.app.name}</h2>
+        <h2 id="dlg-info">{infoTile.app.name}</h2>
         <dl class="infogrid">
           <dt>Category</dt><dd>{infoTile.cat}</dd>
           <dt>Source</dt><dd>{appSource(infoTile.app)}</dd>
@@ -993,44 +1107,39 @@
         </div>
         <p class="phint">Esc/◯ close · □/F favorite</p>
       {/if}
-    </div>
+    </Modal>
   {/if}
 
   {#if powerOpen}
-    <button class="prefs-backdrop" aria-label="Close power menu" onclick={() => (powerOpen = false)}></button>
-    <div class="prefs power">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (powerOpen = false)}>✕</button>
-      <h2>Power</h2>
+    <Modal labelledby="dlg-power" backdropLabel="Close power menu" closeLabel="Close power menu" onclose={() => (powerOpen = false)}>
+      <h2 id="dlg-power">Power</h2>
       <div class="catlist">
         {#each POWER as p, i}
-          <div class="crow" class:focused={i === powerFocus} onmouseenter={() => (powerFocus = i)} onclick={() => { powerFocus = i; powerActivate(); }}>
+          <button type="button" class="crow" class:focused={i === powerFocus} onmouseenter={() => (powerFocus = i)} onclick={() => { powerFocus = i; powerActivate(); }}>
             <span class="cicon" style="background:#22304a">{p.icon}</span>
             <span class="cname">{p.key === "exit" && inSession ? "Log out" : p.label}</span>
-          </div>
+          </button>
         {/each}
       </div>
       <p class="phint">↑↓ select · Enter/✕ choose · Esc/◯ close</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if confirmAct}
-    <button class="prefs-backdrop" aria-label="Cancel" onclick={() => (confirmAct = null)}></button>
-    <div class="prefs confirm">
-      <h2>{confirmAct.label}?</h2>
+    <Modal labelledby="dlg-confirm" backdropLabel="Cancel" showClose={false} onclose={() => (confirmAct = null)}>
+      <h2 id="dlg-confirm">{confirmAct.label}?</h2>
       <p class="wlead">This will {confirmAct.key === "reboot" ? "restart" : "shut down"} the computer.</p>
       <div class="confirm-btns">
         <button class="cbtn" onclick={() => (confirmAct = null)}>Cancel</button>
         <button class="cbtn danger" onclick={doConfirm}>{confirmAct.label}</button>
       </div>
       <p class="phint">Enter/✕ confirm · Esc/◯ cancel</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if formOpen}
-    <button class="prefs-backdrop" aria-label="Close" onclick={() => (formOpen = false)}></button>
-    <div class="prefs">
-      <button class="prefs-close" title="Close (Esc)" onclick={() => (formOpen = false)}>✕</button>
-      <h2>Add custom launcher</h2>
+    <Modal labelledby="dlg-form" backdropLabel="Close" onclose={() => (formOpen = false)}>
+      <h2 id="dlg-form">Add custom launcher</h2>
       <div class="frow"><label for="f-name">Name</label><input id="f-name" bind:value={fName} placeholder="My App" /></div>
       <div class="frow"><label for="f-exec">Command</label><input id="f-exec" bind:value={fExec} placeholder="/usr/bin/foo --flag" /></div>
       <div class="frow"><label for="f-icon">Icon</label><input id="f-icon" bind:value={fIcon} placeholder="🚀" /></div>
@@ -1047,63 +1156,21 @@
         <button class="cbtn danger" onclick={addCustom}>Add</button>
       </div>
       <p class="phint">Command is split on spaces. Use the full path if it isn't on PATH. Esc to close.</p>
-    </div>
+    </Modal>
   {/if}
 
   {#if wizardActive && cfg}
-    <div class="wizard">
-      {#if wizardStep === 0}
-        <div class="wstep">
-          <div class="wlogo">OMNIDECK</div><h2>Welcome 👋</h2>
-          <p class="wlead">Your living-room launcher for games, streaming, music, and your own media.</p>
-          <ul class="wfacts"><li>Mode: <b>{cap?.tier ?? "…"}</b></li><li>Games: <b>{games.length}</b></li><li>Apps to add: <b>{catalog.length}</b></li></ul>
-          <div class="wnav">Press <b>Enter / ✕</b> to continue</div>
-        </div>
-      {:else if wizardStep === 1}
-        <div class="wstep">
-          <h2>Pick a theme</h2><p class="wlead">Choose an accent — change it anytime in Settings.</p>
-          <div class="wswatches">{#each ACCENTS as a}<span class="wsw" class:sel={cfg.settings.accent === a} style="background:{a}"></span>{/each}</div>
-          <div class="wnav"><b>◀ ▶</b> change · <b>Enter / ✕</b> next · <b>Esc / ◯</b> back</div>
-        </div>
-      {:else}
-        <div class="wstep">
-          <h2>You're set! 🎮</h2>
-          <ul class="wfacts"><li><b>← →</b> category · <b>↑ ↓</b> items</li><li><b>Enter / ✕</b> launch · <b>□ / F</b> favorite</li><li><b>△ / A</b> add apps · <b>Start / H</b> home · <b>P</b> settings · <b>/ Select</b> search · <b>i / R1</b> info</li></ul>
-          <div class="wnav">Press <b>Enter / ✕</b> to start</div>
-        </div>
-      {/if}
-    </div>
+    <Wizard step={wizardStep} tier={cap?.tier ?? null} gamesCount={games.length} catalogCount={catalog.length}
+      accents={ACCENTS} accent={cfg.settings.accent ?? "#4cc2ff"} />
   {/if}
 
-  {#if nowCards.length}
-    <div class="nowstack">
-      {#each nowCards as c (c.kind + c.name)}
-        <div class="nowplaying">
-          {#if c.media && c.media.status === "Playing"}<span class="np-eq"><i></i><i></i><i></i></span>
-          {:else if c.media}<span class="np-icon">⏸</span>
-          {:else}<span class="np-spinner"></span>{/if}
-          <span class="np-label">
-            {c.media ? "Now playing" : c.kind === "game" ? "Game running" : "Running"}<br />
-            {#if c.media && c.media.title}<b>{c.media.title}</b>{#if c.media.artist}<span class="np-sub"> — {c.media.artist}</span>{/if}
-            {:else}<b>{c.kind === "game" ? "🎮 " : "▶ "}{c.name}</b>{/if}
-          </span>
-          {#if c.media}
-            <span class="np-controls">
-              <button class="np-c" title="Previous" onclick={() => mediaControl("previous")}>⏮</button>
-              <button class="np-c" title="Play / Pause" onclick={() => mediaControl("play-pause")}>{c.media.status === "Playing" ? "⏸" : "▶"}</button>
-              <button class="np-c" title="Next" onclick={() => mediaControl("next")}>⏭</button>
-            </span>
-          {/if}
-          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (or press the Guide button)" onclick={() => invoke("close_current_app")}>↩</button>{/if}
-          {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" onclick={() => (nowList = nowList.filter((x) => x.name !== c.name))}>✕</button>{/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
+  <NowPlaying cards={nowCards} {inSession} onerror={reportError}
+    ondismiss={(id) => (nowList = nowList.filter((x) => x.id !== id))} />
 
   {#if status}<div class="toast">{status}</div>{/if}
+  {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
-  <footer>fps {fps} · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
+  <footer><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
 </main>
 
 <style>
@@ -1152,6 +1219,7 @@
      (720p, or a 1280x800 handheld). A bare 34% clipped the top icon at small heights. */
   .xitems-wrap { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; bottom: 0; overflow: hidden; }
   .xitems { display: flex; flex-direction: column; gap: 0; will-change: transform; transition: transform .12s cubic-bezier(.2,.7,.2,1); }
+  .xpad { flex: 0 0 auto; } /* offset spacer for rows above the rendered window */
   .xitem { height: var(--ih); display: flex; align-items: center; gap: 1rem; background: none; border: 0; color: #c2cbdb; cursor: pointer; text-align: left; opacity: .42; transition: opacity .12s, transform .12s; padding: 0 10px; border-radius: 12px; }
   .xitem.near { opacity: .72; }
   .xitem.focused { opacity: 1; transform: translateX(14px) scale(1.2); transform-origin: left center; }
@@ -1169,37 +1237,25 @@
   .swatch { width: 30px; height: 18px; border-radius: 5px; display: inline-block; border: 1px solid #ffffff44; }
   .numedit { width: 5em; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
   .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
-  .numedit:focus, .textedit:focus { outline: none; }
+  /* Suppress the default focus ring on elements that already show focus another way (inputs'
+     accent border, the in-app .focused highlight used by controller/mouse nav)... */
+  .numedit:focus, .textedit:focus, .crow:focus, .cbtn:focus, .oskkey:focus, .sortbtn:focus,
+  .badge:focus, .fpsbtn:focus,
+  .xcat:focus, .xitem:focus { outline: none; }
+  /* ...but show a clear accent ring for keyboard users (:focus-visible only). */
+  .numedit:focus-visible, .textedit:focus-visible, .crow:focus-visible, .cbtn:focus-visible,
+  .oskkey:focus-visible, .sortbtn:focus-visible, .badge:focus-visible, .fpsbtn:focus-visible,
+  .xcat:focus-visible, .xitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
 
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
+  .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
 
-  .nowstack { position: fixed; z-index: 12; right: 2.4vw; bottom: 8vh; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
-  .nowplaying { display: flex; align-items: center; gap: 16px; background: #0c1320e8; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 16px; padding: 14px 20px; box-shadow: 0 20px 60px #000b; max-width: 42vw; }
-  .np-spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid #2c3a5c; border-top-color: var(--accent); animation: np-spin 0.9s linear infinite; flex: 0 0 auto; }
-  @keyframes np-spin { to { transform: rotate(360deg); } }
-  .np-icon { font-size: 20px; color: var(--accent); flex: 0 0 auto; }
-  .np-eq { display: flex; align-items: flex-end; gap: 2px; height: 20px; flex: 0 0 auto; }
-  .np-eq i { width: 4px; background: var(--accent); border-radius: 2px; animation: np-eq 0.9s ease-in-out infinite; }
-  .np-eq i:nth-child(1) { animation-delay: 0s; } .np-eq i:nth-child(2) { animation-delay: 0.3s; } .np-eq i:nth-child(3) { animation-delay: 0.6s; }
-  @keyframes np-eq { 0%, 100% { height: 6px; } 50% { height: 18px; } }
-  .np-label { font-size: clamp(13px, 1.4vw, 17px); color: #9fb0c8; line-height: 1.3; min-width: 0; }
-  .np-label b { color: #fff; font-size: 1.1em; }
-  .np-sub { color: #9fb0c8; }
-  .np-x { background: #1b2540; border: 1px solid #2c3a5c; color: #9fb0c8; border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 14px; flex: 0 0 auto; }
-  .np-x:hover { border-color: var(--accent); color: #fff; }
-  .np-controls { display: flex; gap: 6px; flex: 0 0 auto; }
-  .np-c { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 8px; width: 32px; height: 32px; cursor: pointer; font-size: 14px; }
-  .np-c:hover { border-color: var(--accent); color: #fff; }
-
-  .prefs-backdrop { position: fixed; inset: 0; background: rgba(4,6,10,.6); border: 0; padding: 0; cursor: pointer; z-index: 10; }
-  .prefs { position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(620px, 92vw); background: #121826; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 18px; padding: 22px 26px; box-shadow: 0 30px 80px #000c; display: flex; flex-direction: column; gap: 4px; }
-  .prefs h2 { margin: 0 0 10px; font-size: clamp(20px, 2.2vw, 26px); }
-  .prefs-close { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 9px; background: #1b2540; border: 1px solid #2c3a5c; color: #9fb0c8; cursor: pointer; font-size: 15px; line-height: 1; }
-  .prefs-close:hover { border-color: var(--accent); color: #fff; }
+  /* Now Playing card styles live in $lib/NowPlaying.svelte */
+  /* modal shell styles (.prefs*, backdrop, close) live in $lib/Modal.svelte */
   .catlist { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
-  .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; }
+  .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: none; color: inherit; font: inherit; width: 100%; text-align: left; }
   .crow.focused { background: #1b2540; border-color: var(--accent); }
   .cicon { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; font-size: 20px; flex: 0 0 auto; }
   .cname { flex: 1; font-size: clamp(14px, 1.5vw, 18px); font-weight: 600; }
@@ -1216,6 +1272,11 @@
   .cwheel::-webkit-color-swatch-wrapper { padding: 0; }
   .cwheel::-webkit-color-swatch { border: none; border-radius: 4px; }
   .phint { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
+  .osk { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; }
+  .oskkey { background: #0c1320; border: 2px solid #2c3a5c; color: #dde5f0; border-radius: 8px; padding: 10px 0; font-size: clamp(15px, 1.6vw, 20px); font-weight: 700; cursor: pointer; text-transform: uppercase; }
+  .oskkey.special { color: var(--accent); background: #11192b; }
+  .oskkey.focused { border-color: var(--accent); background: #1b2540; color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .oskkey:hover { border-color: var(--accent); }
 
   .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
   .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
@@ -1229,19 +1290,17 @@
   .frow input, .frow select { flex: 1; background: #0c1320; border: 1px solid #2c3a5c; color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
   .frow input:focus, .frow select:focus { outline: none; border-color: var(--accent); }
 
-  .wizard { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: radial-gradient(1200px 800px at 50% 30%, #1a2236 0%, #05070b 70%); }
-  .wstep { width: min(640px, 90vw); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 32px; }
-  .wlogo { font-size: clamp(26px, 3.4vw, 48px); font-weight: 800; letter-spacing: 4px; color: var(--accent); }
-  .wstep h2 { margin: 0; font-size: clamp(26px, 3.4vw, 44px); }
+  /* wizard styles live in $lib/Wizard.svelte; .wlead stays — the confirm modal uses it too */
   .wlead { margin: 0; color: #aab6c9; font-size: clamp(15px, 1.7vw, 21px); max-width: 34em; line-height: 1.5; }
-  .wfacts { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 8px; color: #cdd7e6; font-size: clamp(14px, 1.6vw, 20px); }
-  .wfacts b { color: #fff; }
-  .wswatches { display: flex; gap: 16px; margin: 8px 0; }
-  .wsw { width: 56px; height: 56px; border-radius: 14px; border: 3px solid transparent; box-shadow: 0 6px 20px #0008; }
-  .wsw.sel { border-color: #fff; transform: scale(1.12); }
-  .wnav { margin-top: 14px; color: #7e8aa0; font-size: clamp(13px, 1.4vw, 17px); }
-  .wnav b { color: var(--accent); }
 
-  footer { padding: 7px 2.4vw; color: #5b6678; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
+  footer { padding: 7px 2.4vw; color: #8a96ab; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
   footer b { color: #93a0b6; font-weight: 600; }
+  .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
+  .fpsbtn:hover { color: var(--accent); }
+
+  /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
+     transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
+  @media (prefers-reduced-motion: reduce) {
+    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon { transition: none !important; }
+  }
 </style>

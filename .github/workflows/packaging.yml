@@ -1,0 +1,60 @@
+name: packaging
+
+# Validates the AUR PKGBUILD: lints it, checks .SRCINFO is in sync, builds the package in a
+# clean Arch container, and lints the result. The PKGBUILD builds the *released tag* tarball
+# (source=...v$pkgver.tar.gz), so this proves "a stranger running makepkg gets a working
+# package" for the version the PKGBUILD currently points at.
+#
+# Note: after bumping pkgver for a release you must push the matching git tag *first*, else the
+# tarball URL 404s and this job (correctly) fails.
+
+on:
+  push:
+    branches: [main]
+    paths: ['packaging/**', '.github/workflows/packaging.yml']
+  pull_request:
+    paths: ['packaging/**', '.github/workflows/packaging.yml']
+  workflow_dispatch:
+
+jobs:
+  aur:
+    name: AUR PKGBUILD · makepkg + namcap (Arch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Run the Arch toolchain in a container; checkout stays on the host (which has git).
+      - name: makepkg + namcap
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" archlinux:latest bash -euo pipefail -c '
+            pacman -Syu --noconfirm --needed \
+              base-devel sudo rust pkgconf webkit2gtk-4.1 hicolor-icon-theme namcap curl ca-certificates unzip
+            # bun is declared as the AUR makedep bun-bin; install the official binary for CI.
+            curl -fsSL https://bun.sh/install | bash
+            install -m755 /root/.bun/bin/bun /usr/local/bin/bun
+
+            # makepkg refuses to run as root.
+            useradd -m builder
+            cp -a /repo /home/builder/src
+            chown -R builder:builder /home/builder/src
+            cd /home/builder/src/packaging
+
+            # namcap exits 0 even on findings, so gate on ERROR (E:) lines ourselves.
+            gate() { cat "$1"; if grep -q " E: " "$1"; then echo "::error::namcap reported errors"; exit 1; fi; }
+
+            echo "::group::namcap PKGBUILD"
+            runuser -u builder -- namcap PKGBUILD > /tmp/n1.txt 2>&1; gate /tmp/n1.txt
+            echo "::endgroup::"
+
+            echo "::group::.SRCINFO in sync with PKGBUILD"
+            runuser -u builder -- makepkg --printsrcinfo > /tmp/gen.srcinfo
+            diff -u .SRCINFO /tmp/gen.srcinfo || { echo "::error::.SRCINFO is stale — run: makepkg --printsrcinfo > .SRCINFO"; exit 1; }
+            echo "::endgroup::"
+
+            echo "::group::makepkg build"
+            runuser -u builder -- makepkg -f --noconfirm --nodeps
+            echo "::endgroup::"
+
+            echo "::group::namcap package"
+            runuser -u builder -- bash -c "namcap omnideck-*.pkg.tar.zst" > /tmp/n2.txt 2>&1; gate /tmp/n2.txt
+            echo "::endgroup::"
+          '

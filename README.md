@@ -60,9 +60,19 @@ profiles when the hardware can handle it.
 
 - Linux (X11 or Wayland). A browser (Brave/Chromium/Firefox) for streaming launchers.
 - Build deps: `webkit2gtk-4.1`, `libudev` (gamepad input), Rust (1.80+), Node 20+ or Bun.
-- Optional: `gamescope` + `gamescope-session-plus` (for the 10-foot session tier);
-  `cage` (media-kiosk tier on GPU-less hosts); `playerctl` (live song/show titles in the
-  Now Playing card via MPRIS); `xorg-xprop` (needed inside a gamescope session).
+- Optional: `gamescope` (for the 10-foot **session** — install it with
+  `packaging/install-session.sh`, which runs a *plain* gamescope session; no
+  `gamescope-session-plus` required); `cage` (media-kiosk tier on GPU-less hosts);
+  `xorg-xprop` (needed inside a gamescope session). Now Playing titles come straight
+  from MPRIS over D-Bus — `playerctl` is no longer needed.
+
+  The session uses the display's EDID-*preferred* mode, which on many gaming monitors
+  is 60 Hz even when the panel does 144/165. To force the real mode (and pick the right
+  monitor on multi-head setups), create `~/.config/omnideck/session.conf`:
+
+  ```bash
+  GAMESCOPE_FLAGS="-W 2560 -H 1440 -r 165 -O DP-3"   # connector names: ls /sys/class/drm
+  ```
 
 ## Build & run (dev)
 
@@ -80,16 +90,25 @@ bun run tauri build --no-bundle    # release binary -> src-tauri/target/release/
 | Navigate (category ← →, items ↑ ↓) | Arrow keys | D-pad / left stick |
 | Launch / confirm | Enter | ✕ / A (South) |
 | Favorite (pin to Dashboard) | `F` | □ / X (West) |
-| Search | `/` | — |
+| Search | `/` | Select |
 | Add apps | `A` | △ / Y (North) |
 | Settings | `P` | Start / Options |
 | Back / close panel / cancel | Esc | ◯ / B (East) |
+| Switch app ⇄ OmniDeck (session; app keeps running) | `Ctrl+Alt+Home` | Guide (press) |
+| Close the launched app & return (session) | `Ctrl+Alt+End` | Guide (hold ≥ 0.8 s) |
 
 Power (Exit / Suspend / Restart / Shut down) is in the **⏻** menu in the top bar.
+The switch/close rows work **while the launched app has focus** — the Guide button reads the
+controller hardware directly, and the chords are global X grabs in the session. Switching
+hides the app instead of killing it: music keeps playing while you browse, and switching
+again brings it back.
+
+On a controller, **Select** opens search with an **on-screen keyboard** (D-pad to move,
+✕/A to type, bumpers to pick a result) — search and launch without a keyboard.
 
 ## Configuration
 
-`~/.config/omnideck/config.toml` (generated on first run):
+`~/.config/omnideck/config.toml` (or `$XDG_CONFIG_HOME/omnideck/`; generated on first run):
 
 ```toml
 [settings]
@@ -117,8 +136,8 @@ category = "games"                      # games | video | music | apps
 Most of these are also editable in-app (**Settings**), including an **Add custom launcher**
 form for your own commands.
 
-Debug helpers (headless, no window): `omnideck --probe`, `--scan`, `--config`,
-`--catalog`, `--gridart <appid>`.
+Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
+`catalog`, `gridart <appid>`, `media` (and `omnideck --help` / `--version`).
 
 ## A note on streaming quality
 
@@ -129,7 +148,8 @@ where OmniDeck's media tuning shines.
 
 ## Roadmap
 
-- Validate real gamescope **session boot** from the display manager on hardware (M2)
+- ✅ Real gamescope **session boot** validated on NVIDIA hardware (M2, 2026-07-02: boots from
+  SDDM, renders, keyboard input + app launch work — full A–E matrix in `packaging/M2-RESULTS.md`)
 - App/streaming **icons** (favicons + bundled icon set) for non-game tiles
 - Native/flatpak catalog expansion (verified Flathub IDs)
 - **Packaging** (AUR, Flatpak, AppImage)
