@@ -18,7 +18,7 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
     let mut gilrs = match gilrs::Gilrs::new() {
         Ok(g) => g,
         Err(e) => {
-            eprintln!("[omnideck] gilrs init FAILED: {e}");
+            tracing::error!("gilrs init FAILED: {e}");
             let _ = handle.emit("gamepad-status", format!("gilrs init FAILED: {e}"));
             return;
         }
@@ -28,7 +28,7 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         .gamepads()
         .map(|(id, g)| format!("{id:?}:{}", g.name()))
         .collect();
-    eprintln!("[omnideck] gilrs ready — {} pad(s): {pads:?}", pads.len());
+    tracing::info!("gilrs ready — {} pad(s): {pads:?}", pads.len());
     let _ = handle.emit(
         "gamepad-status",
         format!("gilrs ready — {} pad(s) connected: {pads:?}", pads.len()),
@@ -60,11 +60,11 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     let long = guide_down.take().is_some_and(|t| t.elapsed() >= GUIDE_HOLD_CLOSE);
                     if long {
                         if crate::watchdog::return_home() {
-                            eprintln!("[omnideck] guide (hold): closed the current app");
+                            tracing::info!("guide (hold): closed the current app");
                             let _ = handle.emit("app-closed", ());
                         }
                     } else if let Some(what) = crate::switcher::toggle() {
-                        eprintln!("[omnideck] guide: app {what}");
+                        tracing::info!("guide: app {what}");
                     } // nothing launched — ignore quietly
                     continue; // swallow; never forward Guide as a UI event
                 }

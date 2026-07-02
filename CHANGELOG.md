@@ -47,6 +47,11 @@ All notable changes to OmniDeck are documented here. Format follows
   `~/.config/omnideck/session.conf` (`GAMESCOPE_FLAGS="-W 2560 -H 1440 -r 165 -O DP-3"`)
   so high-refresh panels aren't stuck at the EDID-preferred 60 Hz, and enables
   `--adaptive-sync` (VRR) by default.
+- **File logging** (`tracing`): everything that used to go only to stderr now also lands in
+  a daily-rotating file under `$XDG_STATE_HOME/omnideck/` (default
+  `~/.local/state/omnideck/omnideck.<date>.log`, 7 days kept), including panics — so a
+  broken gamescope session can be debugged after logging back into the desktop instead of
+  via display-manager log forensics. `RUST_LOG` filters both sinks (default `info`).
 - **Config error surfacing**: a `config.toml` that fails to parse now shows a toast with
   the parse error ("using defaults until fixed") instead of silently reverting — and the
   app **refuses to overwrite** the broken file until it's fixed.

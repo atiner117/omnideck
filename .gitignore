@@ -29,3 +29,6 @@ vite.config.ts.timestamp-*
 
 # ts-rs default export dir (every `cargo test` writes it; canonical copy: /src/lib/bindings)
 /src-tauri/bindings/
+
+# stray file-log dir from a mis-set XDG_STATE_HOME test run
+src-tauri/omnideck/
