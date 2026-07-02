@@ -41,16 +41,34 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         std::collections::HashMap::new();
     const AXIS_EPS: f32 = 0.05;
 
+    // Guide/Home button, console-style: SHORT press switches between OmniDeck and the
+    // launched app (it keeps running — music keeps playing); LONG hold (>= 800 ms) closes
+    // it. Decided on release, so we time the press. gilrs reads evdev directly, so this
+    // works even while the launched app holds window focus.
+    const GUIDE_HOLD_CLOSE: std::time::Duration = std::time::Duration::from_millis(800);
+    let mut guide_down: Option<std::time::Instant> = None;
+
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
-            // Guide/Home button closes a launched app and returns to OmniDeck. gilrs reads
-            // evdev directly, so this fires even while the launched app holds window focus.
-            if let gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) = &event {
-                if crate::watchdog::return_home() {
-                    let _ = handle.emit("app-closed", ());
-                    continue; // swallow the press; don't also forward it as a UI event
+            match &event {
+                gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) => {
+                    guide_down = Some(std::time::Instant::now());
+                    continue; // swallow; acted on at release
                 }
+                gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
+                    let long = guide_down.take().is_some_and(|t| t.elapsed() >= GUIDE_HOLD_CLOSE);
+                    if long {
+                        if crate::watchdog::return_home() {
+                            eprintln!("[omnideck] guide (hold): closed the current app");
+                            let _ = handle.emit("app-closed", ());
+                        }
+                    } else if let Some(what) = crate::switcher::toggle() {
+                        eprintln!("[omnideck] guide: app {what}");
+                    } // nothing launched — ignore quietly
+                    continue; // swallow; never forward Guide as a UI event
+                }
+                _ => {}
             }
             // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
             if let gilrs::EventType::AxisChanged(a, v, _) = &event {

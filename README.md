@@ -86,11 +86,14 @@ bun run tauri build --no-bundle    # release binary -> src-tauri/target/release/
 | Add apps | `A` | △ / Y (North) |
 | Settings | `P` | Start / Options |
 | Back / close panel / cancel | Esc | ◯ / B (East) |
-| Close the launched app & return (session) | `Ctrl+Alt+Home` | Guide / Home |
+| Switch app ⇄ OmniDeck (session; app keeps running) | `Ctrl+Alt+Home` | Guide (press) |
+| Close the launched app & return (session) | `Ctrl+Alt+End` | Guide (hold ≥ 0.8 s) |
 
 Power (Exit / Suspend / Restart / Shut down) is in the **⏻** menu in the top bar.
-The close-and-return row works **while the launched app has focus** — the Guide button reads
-the controller hardware directly, and `Ctrl+Alt+Home` is a global X grab in the session.
+The switch/close rows work **while the launched app has focus** — the Guide button reads the
+controller hardware directly, and the chords are global X grabs in the session. Switching
+hides the app instead of killing it: music keeps playing while you browse, and switching
+again brings it back.
 
 On a controller, **Select** opens search with an **on-screen keyboard** (D-pad to move,
 ✕/A to type, bumpers to pick a result) — search and launch without a keyboard.

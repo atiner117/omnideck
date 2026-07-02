@@ -23,6 +23,7 @@ mod icons;
 mod library;
 mod mpris;
 mod steamgriddb;
+mod switcher;
 mod watchdog;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

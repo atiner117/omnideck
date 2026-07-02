@@ -23,18 +23,25 @@ For each run record: result per check (PASS / FAIL / N/A), and for any FAIL the
 ## NVIDIA — RTX 3070 · driver 610.43.02 · gamescope session (SDDM)
 - Date / tester: 2026-07-02 · atiner
 - A. UI renders: **PASS** — session boots from SDDM straight into the OmniDeck XMB.
-- B. Input: **PASS (keyboard)** — keyboard navigates categories + items and launches tiles.
-  Controller: **PENDING** (gamepad wasn't at hand; re-test B + the Guide button).
-- C. Launch + Now Playing: **PARTIAL** — a browser PWA (YouTube Music) launched and opened
-  properly fullscreen. Steam-game launch + the Now Playing watchdog card: **PENDING**.
-- D. Focus return: **PENDING** — exposed a real gap instead: with the PWA fullscreen and
-  focused, there was NO keyboard path back to OmniDeck (Guide button is gamepad-only; the
-  Now Playing ↩ button is hidden behind the fullscreen app). Fixed by the global
-  Ctrl+Alt+Home grab (src-tauri/src/hotkey.rs) — re-test D with it, plus the gamepad Guide
-  button and a Steam game's automatic focus-return on exit.
-- E. Power menu: **PENDING**
-- Notes / logs: first real session run; A/B prove render + input, which were the two
-  historical black-screen risks on NVIDIA.
+- B. Input: **PASS** — keyboard navigates categories + items and launches tiles. Controller
+  (Bluetooth pad, low battery): D-pad nav + **Guide button returned from the app to
+  OmniDeck** before the pad died. Re-test with a charged pad.
+- C. Launch + Now Playing: **PARTIAL** — browser PWAs (YouTube Music) launch and open
+  properly fullscreen; KDE System Settings launches. Steam-game launch + the Now Playing
+  watchdog card: **PENDING**.
+- D. Focus return: **PARTIAL** — Guide→home worked on hardware (run 2). Gap found in run 1
+  (no keyboard path back from a focused fullscreen app) → fixed: global Ctrl+Alt+Home /
+  Ctrl+Alt+End grabs + a real hide/show app switcher (hotkey.rs, switcher.rs). The chord
+  handler was verified in the LIVE session via XTEST injection (log receipt); the user's
+  physical presses never arrived (suspect flaky keyboard / wrong key — Home is the nav
+  cluster, not Super). The unmap→focus-falls-to-OmniDeck→remap→app-refocuses cycle was
+  verified live against gamescope. Steam-game automatic focus return: **PENDING**.
+- E. Power menu: **PASS (partial)** — Shut down and Log out work from the session. Suspend +
+  the polkit-denial toast path: **PENDING**.
+- Notes / logs: runs 1–2 (2026-07-02). A/B prove render + input, the two historical
+  black-screen risks on NVIDIA. gamescope focus rules (live-verified): ignores
+  _NET_ACTIVE_WINDOW and GAMESCOPECTRL_BASELAYER_APPID for plain windows; focus follows
+  window mapping — the basis of the switcher.
 
 ## AMD — `<gpu model>` · Mesa `<version>` · `<session type>`
 - Date / tester:

@@ -29,10 +29,17 @@ All notable changes to OmniDeck are documented here. Format follows
 - **Generated IPC types** (ts-rs): the TypeScript side of the Rust↔JS contract is generated
   from the Rust structs into `src/lib/bindings/`; CI fails if they drift, so a Rust field
   rename breaks the build instead of silently becoming `undefined` in the frontend.
-- **`Ctrl+Alt+Home` returns home from any launched app** (session): a global X key grab —
-  the keyboard twin of the controller Guide button — closes the focused fullscreen app and
-  returns to OmniDeck, even though the app owns keyboard focus. Found during the first real
-  M2 hardware session run, which is now recorded in `packaging/M2-RESULTS.md`.
+- **App switcher** (session): switching no longer kills the launched app — it hides it
+  (gamescope refocuses OmniDeck) and brings it back on the next switch, process and audio
+  intact. Console-style bindings: **Guide press / `Ctrl+Alt+Home`** = switch,
+  **Guide hold (≥ 0.8 s) / `Ctrl+Alt+End`** = close and return. The chords are global X
+  grabs (work while the app owns keyboard focus — the keyboard twin of the Guide button,
+  which reads evdev directly). Born from the first real M2 hardware session runs, recorded
+  in `packaging/M2-RESULTS.md`.
+- **Launched Qt/KDE apps follow your KDE theme** (session): children get
+  `XDG_CURRENT_DESKTOP=KDE` + `QT_QPA_PLATFORMTHEME=kde` so System Settings & friends load
+  plasma-integration and render with your color scheme (dark mode included) instead of
+  falling back to light Fusion.
 - **First-run wizard & a11y baseline**: dialog semantics (`role="dialog"`, focus
   management), keyboard-focusable rows, `:focus-visible` rings, `aria-label`s on icon
   buttons, `prefers-reduced-motion` support, footer contrast fix.
