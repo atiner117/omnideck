@@ -25,6 +25,7 @@ use tauri::Emitter;
 use zbus::zvariant::OwnedValue;
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct MediaInfo {
     pub status: String, // "Playing" | "Paused" | "Stopped"
     pub title: String,

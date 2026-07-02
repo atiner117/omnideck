@@ -9,6 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
 pub struct Settings {
     pub grid_columns: usize,
@@ -116,6 +117,7 @@ impl Settings {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
 pub struct Config {
     pub settings: Settings,
@@ -132,6 +134,7 @@ pub struct Config {
     /// Set when config.toml exists but couldn't be parsed/read, so the UI can warn the user
     /// ("syntax error — using defaults") instead of silently reverting. Never written to disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))] // absent over IPC when None
     pub config_error: Option<String>,
 }
 
