@@ -285,6 +285,16 @@
     }),
   );
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
+  // ---- windowed (virtualized) item rail ----
+  // The rail translates so the focused row sits at the top of the clipped wrap, meaning only
+  // ~[focus, focus + viewport-rows] can ever be on screen. Render just that slice — a small
+  // margin above (upward-slide transition + the `near` fade) and a generous one below (covers a
+  // 4K panel at the smallest UI scale, ~32 visible rows) — and preserve absolute row offsets
+  // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
+  // same window: a 1,000-game library no longer fires a fetch per game at mount.
+  const WIN_ABOVE = 8, WIN_BELOW = 40;
+  let winLo = $derived(Math.max(0, focus - WIN_ABOVE));
+  let winItems = $derived(items.slice(winLo, focus + WIN_BELOW));
   let scaleNum = $derived(
     cfg?.settings?.ui_scale === "custom"
       ? (cfg?.settings?.ui_scale_custom ?? 1.6)
@@ -817,7 +827,8 @@
       })
       .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
       .finally(() => {
-        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; allGames.filter((g) => g.installed && !g.is_tool).forEach(loadArt); }).catch((e) => (status = `library error: ${e}`));
+        // art loads lazily per windowed row (see the winItems $effect), not per game here
+        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; }).catch((e) => (status = `library error: ${e}`));
       });
 
     // Per-frame sampling catches brief dips a 500ms average smooths away; we only commit the
@@ -943,6 +954,8 @@
   // fetch site icons for visible web/app tiles + the add-apps catalog (cached on disk)
   $effect(() => { for (const t of items) if (t.kind === "app") loadAppIcon(t.app); });
   $effect(() => { for (const c of displayedCatalog) loadAppIcon(c); });
+  // game art only for windowed rows — scrolling pulls art in just ahead of visibility
+  $effect(() => { for (const t of winItems) if (t.kind === "game") loadArt(t.game); });
   // load the custom background image (data URL) when that mode is selected
   let bgSeq = 0;
   $effect(() => {
@@ -1023,11 +1036,13 @@
         </div>
       {:else}
         <div class="xitems" style="transform: translateY(calc({-focus} * var(--ih)))">
-          {#each items as t, i (t.id)}
+          {#if winLo > 0}<div class="xpad" style="height: calc({winLo} * var(--ih))" aria-hidden="true"></div>{/if}
+          {#each winItems as t, wi (t.id)}
+            {@const i = wi + winLo}
             <button class="xitem" class:focused={i === focus} class:near={Math.abs(i - focus) <= 4}
               onclick={() => { focus = i; launchTile(t); }}>
               <span class="xthumb" style={t.kind === "app" ? `background:${appIcons[t.app.id] ? (iconBg[t.app.id] ?? "#f4f5f8") : t.app.accent}` : ""}>
-                {#if t.kind === "game" && art[t.game.appid] && Math.abs(i - focus) <= 8}
+                {#if t.kind === "game" && art[t.game.appid]}
                   <img src={art[t.game.appid]} alt="" decoding="async" onerror={() => artError(t.game.appid)} />
                 {:else if t.kind === "app" && appIcons[t.app.id]}
                   <img class="appicon" src={appIcons[t.app.id]} alt="" decoding="async" />
@@ -1285,6 +1300,7 @@
      (720p, or a 1280x800 handheld). A bare 34% clipped the top icon at small heights. */
   .xitems-wrap { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; bottom: 0; overflow: hidden; }
   .xitems { display: flex; flex-direction: column; gap: 0; will-change: transform; transition: transform .12s cubic-bezier(.2,.7,.2,1); }
+  .xpad { flex: 0 0 auto; } /* offset spacer for rows above the rendered window */
   .xitem { height: var(--ih); display: flex; align-items: center; gap: 1rem; background: none; border: 0; color: #c2cbdb; cursor: pointer; text-align: left; opacity: .42; transition: opacity .12s, transform .12s; padding: 0 10px; border-radius: 12px; }
   .xitem.near { opacity: .72; }
   .xitem.focused { opacity: 1; transform: translateX(14px) scale(1.2); transform-origin: left center; }
