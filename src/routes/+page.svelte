@@ -1222,7 +1222,8 @@
               <button class="np-c" title="Next" aria-label="Next track" onclick={() => mediaControl("next")}>⏭</button>
             </span>
           {/if}
-          {#if c.kind === "app"}<button class="np-c" title="Switch to the app (Guide press / Ctrl+Alt+Home)" aria-label="Switch to app" onclick={() => api.switchApp().catch((e) => reportError("Couldn't switch app", e))}>⇄</button>{/if}
+          <!-- ⇄ only in the gamescope session: on a desktop, unmap would hide the window from the real WM -->
+          {#if c.kind === "app" && inSession}<button class="np-c" title="Switch to the app (Guide press / Ctrl+Alt+Home)" aria-label="Switch to app" onclick={() => api.switchApp().catch((e) => reportError("Couldn't switch app", e))}>⇄</button>{/if}
           {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (Guide hold / Ctrl+Alt+End)" aria-label="Close app and return" onclick={() => api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e))}>↩</button>{/if}
           {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" aria-label="Dismiss card" onclick={() => (nowList = nowList.filter((x) => x.id !== c.id))}>✕</button>{/if}
         </div>

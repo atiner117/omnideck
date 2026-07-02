@@ -30,6 +30,14 @@ fn pgid_of(pid: u32) -> u32 {
 /// back to OmniDeck); else re-show whatever the last toggle hid. Returns a short description
 /// of what happened, or None if there was nothing to act on.
 pub fn toggle() -> Option<&'static str> {
+    // Session-only, enforced at the chokepoint for every caller (UI command, Guide press,
+    // hotkey): on a desktop, unmapping would hide the app's window from the real WM, which
+    // has its own idea of window management. (OMNIDECK_FORCE_HOTKEY tests on desktop X11.)
+    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none()
+        && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none()
+    {
+        return None;
+    }
     let (conn, screen_num) = x11rb::connect(None).ok()?;
     let root = conn.setup().roots[screen_num].root;
     let net_wm_pid = conn.intern_atom(false, b"_NET_WM_PID").ok()?.reply().ok()?.atom;
