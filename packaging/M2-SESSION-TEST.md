@@ -42,6 +42,9 @@ Steam the first time (slow) and *may* not stamp the window. For a clean test, ei
    SDDM. **Suspend** works without confirm; **Restart/Shut down** ask to confirm first.
 
 ## 5. Getting out / safety
+- **A launched app holds the screen** (PWA/native): press the controller **Guide** button or
+  **Ctrl+Alt+Home** — both close the app and return to OmniDeck (the chord is a global X grab,
+  so it works even while the app has keyboard focus).
 - **Exit OmniDeck** (Settings) quits → back to SDDM.
 - If stuck: `Ctrl+Alt+F3` → log in on the TTY → `loginctl terminate-user $USER` or `sudo systemctl restart sddm`.
 - Uninstall the session entirely (matches what install-session.sh creates):

@@ -86,8 +86,11 @@ bun run tauri build --no-bundle    # release binary -> src-tauri/target/release/
 | Add apps | `A` | △ / Y (North) |
 | Settings | `P` | Start / Options |
 | Back / close panel / cancel | Esc | ◯ / B (East) |
+| Close the launched app & return (session) | `Ctrl+Alt+Home` | Guide / Home |
 
 Power (Exit / Suspend / Restart / Shut down) is in the **⏻** menu in the top bar.
+The close-and-return row works **while the launched app has focus** — the Guide button reads
+the controller hardware directly, and `Ctrl+Alt+Home` is a global X grab in the session.
 
 On a controller, **Select** opens search with an **on-screen keyboard** (D-pad to move,
 ✕/A to type, bumpers to pick a result) — search and launch without a keyboard.
@@ -134,7 +137,8 @@ where OmniDeck's media tuning shines.
 
 ## Roadmap
 
-- ✅ Real gamescope **session boot** validated on hardware (M2 — runs a *plain* gamescope session)
+- ✅ Real gamescope **session boot** validated on NVIDIA hardware (M2, 2026-07-02: boots from
+  SDDM, renders, keyboard input + app launch work — full A–E matrix in `packaging/M2-RESULTS.md`)
 - App/streaming **icons** (favicons + bundled icon set) for non-game tiles
 - Native/flatpak catalog expansion (verified Flathub IDs)
 - **Packaging** (AUR, Flatpak, AppImage)
