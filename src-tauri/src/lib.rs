@@ -21,6 +21,7 @@ mod hotkey;
 mod http;
 mod icons;
 mod library;
+mod logging;
 mod mpris;
 mod steamgriddb;
 mod switcher;
@@ -28,10 +29,15 @@ mod watchdog;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Logging before anything that can warn (config parse errors surface in CLI runs too):
+    // stderr + a rotating file under XDG_STATE_HOME — see logging.rs.
+    logging::init();
+
     // Headless subcommands (parsed before the GPU re-exec); no subcommand = launch the GUI.
     if cli::handle() {
         return;
     }
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "OmniDeck starting");
 
     // Re-exec once with GPU-appropriate webview env (NVIDIA needs workarounds; Mesa doesn't).
     gpu::ensure_gpu_env();

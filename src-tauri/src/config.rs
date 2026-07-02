@@ -185,13 +185,13 @@ pub fn load_or_create() -> Config {
                     // Don't clobber the user's file; report the error so the UI can warn instead
                     // of looking like it ignored their edit. Full detail to the log, first line
                     // (TOML's "parse error at line N, column M") to the toast.
-                    eprintln!("[omnideck] config.toml parse error — using defaults:\n{e}");
+                    tracing::warn!("config.toml parse error — using defaults:\n{e}");
                     let first = e.to_string().lines().next().unwrap_or("parse error").to_string();
                     error_defaults(format!("config.toml: {first} — using defaults until fixed"))
                 }
             },
             Err(e) => {
-                eprintln!("[omnideck] could not read config.toml: {e} — using defaults");
+                tracing::warn!("could not read config.toml: {e} — using defaults");
                 error_defaults(format!("Couldn't read config.toml ({e}) — using defaults"))
             }
         };

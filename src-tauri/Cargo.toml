@@ -40,6 +40,11 @@ futures-util = { version = "0.3", default-features = false }
 # global Ctrl+Alt+Home grab inside the gamescope session (keyboard path back to OmniDeck
 # while a launched app holds focus — the keyboard twin of the gamepad Guide button)
 x11rb = "0.13"
+# structured logging: stderr + a rotating file under XDG_STATE_HOME, so a broken gamescope
+# session can be debugged after logging back into the desktop (RUST_LOG filters both)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 [dev-dependencies]
 ts-rs = "12.0.1"

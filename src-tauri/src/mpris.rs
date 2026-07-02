@@ -208,7 +208,7 @@ pub async fn watch(app: tauri::AppHandle) {
     let conn = match zbus::Connection::session().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[omnideck] mpris: no session bus ({e}) — Now Playing disabled");
+            tracing::warn!("mpris: no session bus ({e}) — Now Playing disabled");
             return;
         }
     };
@@ -216,7 +216,7 @@ pub async fn watch(app: tauri::AppHandle) {
     let dbus = match zbus::fdo::DBusProxy::new(&conn).await {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("[omnideck] mpris: DBus proxy failed ({e}) — Now Playing disabled");
+            tracing::warn!("mpris: DBus proxy failed ({e}) — Now Playing disabled");
             return;
         }
     };
@@ -225,7 +225,7 @@ pub async fn watch(app: tauri::AppHandle) {
     let mut owner_changes = match dbus.receive_name_owner_changed().await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[omnideck] mpris: NameOwnerChanged subscribe failed ({e})");
+            tracing::warn!("mpris: NameOwnerChanged subscribe failed ({e})");
             return;
         }
     };
@@ -242,7 +242,7 @@ pub async fn watch(app: tauri::AppHandle) {
     let mut props_stream = match props_stream {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[omnideck] mpris: PropertiesChanged subscribe failed ({e})");
+            tracing::warn!("mpris: PropertiesChanged subscribe failed ({e})");
             return;
         }
     };
@@ -340,7 +340,7 @@ pub async fn watch(app: tauri::AppHandle) {
         }
         emit_current(&app);
     }
-    eprintln!("[omnideck] mpris: PropertiesChanged stream ended — Now Playing updates stopped");
+    tracing::warn!("mpris: PropertiesChanged stream ended — Now Playing updates stopped");
 }
 
 #[cfg(test)]

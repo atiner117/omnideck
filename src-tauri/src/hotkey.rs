@@ -31,7 +31,7 @@ pub fn spawn_if_session(app: tauri::AppHandle) {
     }
     std::thread::spawn(move || {
         if let Err(e) = run(app) {
-            eprintln!("[omnideck] hotkey: {e} — Ctrl+Alt+Home/End unavailable");
+            tracing::error!("hotkey: {e} — Ctrl+Alt+Home/End unavailable");
         }
     });
 }
@@ -82,19 +82,19 @@ fn connect_and_grab() -> Result<Grabs, Box<dyn std::error::Error>> {
 
 fn run(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let grabs = connect_and_grab()?;
-    eprintln!("[omnideck] hotkey: grabbed Ctrl+Alt+Home (switch) and Ctrl+Alt+End (close app)");
+    tracing::info!("hotkey: grabbed Ctrl+Alt+Home (switch) and Ctrl+Alt+End (close app)");
 
     loop {
         // Only our grabbed chords are delivered here; the keycode says which one.
         let Event::KeyPress(e) = grabs.conn.wait_for_event()? else { continue };
         if grabs.home_keycodes.contains(&e.detail) {
             match crate::switcher::toggle() {
-                Some(what) => eprintln!("[omnideck] hotkey: Ctrl+Alt+Home — app {what}"),
-                None => eprintln!("[omnideck] hotkey: Ctrl+Alt+Home — no app to switch to"),
+                Some(what) => tracing::info!("hotkey: Ctrl+Alt+Home — app {what}"),
+                None => tracing::info!("hotkey: Ctrl+Alt+Home — no app to switch to"),
             }
         } else if grabs.end_keycodes.contains(&e.detail) {
             let closed = crate::watchdog::return_home();
-            eprintln!("[omnideck] hotkey: Ctrl+Alt+End — {}", if closed { "closed the current app" } else { "no app to close" });
+            tracing::info!("hotkey: Ctrl+Alt+End — {}", if closed { "closed the current app" } else { "no app to close" });
             if closed {
                 let _ = app.emit("app-closed", ());
             }

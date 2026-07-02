@@ -88,9 +88,9 @@ pub fn set_steam_game_atom_if_gamescope() {
     }
     std::thread::spawn(|| {
         if std::process::Command::new("xprop").arg("-version").output().is_err() {
-            eprintln!(
-                "[omnideck] WARNING: `xprop` not found — install `xorg-xprop`, or the gamescope \
-                 session may be a black screen (cannot set the STEAM_GAME atom)."
+            tracing::warn!(
+                "`xprop` not found — install `xorg-xprop`, or the gamescope session may be a \
+                 black screen (cannot set the STEAM_GAME atom)."
             );
             return;
         }
@@ -98,14 +98,13 @@ pub fn set_steam_game_atom_if_gamescope() {
         for attempt in 1..=40 {
             std::thread::sleep(std::time::Duration::from_millis(300));
             if stamp_steam_atom_once() {
-                eprintln!("[omnideck] STEAM_GAME=769 set on window (attempt {attempt})");
+                tracing::info!("STEAM_GAME=769 set on window (attempt {attempt})");
                 return;
             }
         }
-        eprintln!(
-            "[omnideck] WARNING: could not set STEAM_GAME after 40 tries (window not found by \
-             name 'omnideck'). If the session is black, set it manually — see \
-             packaging/M2-SESSION-TEST.md."
+        tracing::warn!(
+            "could not set STEAM_GAME after 40 tries (window not found by name 'omnideck'). \
+             If the session is black, set it manually — see packaging/M2-SESSION-TEST.md."
         );
     });
 }
@@ -173,11 +172,11 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
             }
         }
         if !started {
-            eprintln!("[omnideck] watchdog: '{name}' never reported running; giving up");
+            tracing::warn!("watchdog: '{name}' never reported running; giving up");
             let _ = app.emit("app-exited", exit_key);
             return;
         }
-        eprintln!("[omnideck] watchdog: '{name}' is running");
+        tracing::info!("watchdog: '{name}' is running");
         // Phase 2: wait for exit. running()==None means "unknown" (registry momentarily
         // unreadable, or the appid block vanished after a Steam restart). Tolerate brief None
         // runs, but give up after a long stretch so a Steam crash mid-game can't spin this
@@ -190,14 +189,14 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
                 None => {
                     unknown += 1;
                     if unknown >= 900 {
-                        eprintln!("[omnideck] watchdog: '{name}' state unknown for ~15 min; giving up");
+                        tracing::warn!("watchdog: '{name}' state unknown for ~15 min; giving up");
                         break;
                     }
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(1000));
         }
-        eprintln!("[omnideck] watchdog: '{name}' exited — refocusing OmniDeck");
+        tracing::info!("watchdog: '{name}' exited — refocusing OmniDeck");
         let _ = app.emit("app-exited", exit_key);
         // Best-effort focus recovery in a gamescope session.
         if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
