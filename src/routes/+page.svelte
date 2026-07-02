@@ -3,7 +3,9 @@
   import * as api from "$lib/backend";
   import type { App, Game, Config, Capability, MediaInfo, Settings } from "$lib/backend";
   import Modal from "$lib/Modal.svelte";
-  import { dialogFocus } from "$lib/dialog";
+  import NowPlaying from "$lib/NowPlaying.svelte";
+  import Wizard from "$lib/Wizard.svelte";
+  import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
 
   type Tile =
     | { kind: "game"; id: string; cat: string; game: Game }
@@ -331,7 +333,8 @@
   let baseImageShown = $derived(bgDefault === "image" && !!bgImageUrl);
   let hasImagery = $derived(!!overlay || baseImageShown);
 
-  // ---- synthesized navigation sounds (no shipped audio assets) ----
+  // ---- synthesized navigation sounds (moved to $lib/sfx — reads the live settings) ----
+  initSfx(() => ({ on: !!cfg?.settings?.sound, volume: cfg?.settings?.sound_volume ?? 0.6 }));
   // Volume presets (mirrors the Size presets): Off / Low / Med / High / Custom.
   const SOUND_PRESETS = [
     { label: "Off", on: false, vol: 0 },
@@ -344,24 +347,6 @@
     if (!s.sound) return "Off";
     return SOUND_PRESETS.find((p) => p.on && Math.abs(p.vol - (s.sound_volume ?? 0.6)) < 0.001)?.label ?? "Custom";
   }
-  let actx: AudioContext | null = null;
-  function blip(freq: number, dur = 0.05, base = 0.2, type: OscillatorType = "sine", force = false) {
-    if (!force && !cfg?.settings?.sound) return;
-    const vol = cfg?.settings?.sound_volume ?? 0.6;
-    try {
-      actx ??= new AudioContext();
-      if (actx.state === "suspended") actx.resume();
-      const o = actx.createOscillator(), g = actx.createGain();
-      o.type = type; o.frequency.value = freq;
-      g.gain.setValueAtTime(Math.max(0.0001, base * vol), actx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
-      o.connect(g).connect(actx.destination);
-      o.start(); o.stop(actx.currentTime + dur);
-    } catch { /* AudioContext unavailable/blocked (autoplay policy) — nav sound is non-essential */ }
-  }
-  const sfxMove = () => blip(420, 0.04, 0.32, "triangle");
-  const sfxEnter = () => { blip(620, 0.06, 0.42); setTimeout(() => blip(880, 0.07, 0.38), 45); };
-  const sfxBack = () => blip(300, 0.07, 0.32, "triangle");
 
   function tileName(t: Tile) { return t.kind === "app" ? t.app.name : t.game.name; }
   function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
@@ -576,10 +561,6 @@
     if (patch.accent) accent = patch.accent;
   }
 
-  function mediaControl(action: string) {
-    // no re-poll needed: the player's PropertiesChanged fires a `media-changed` event
-    api.mediaControl(action).catch((e) => reportError("Media control failed", e));
-  }
   function isFav(id: string) { return favorites.includes(id); }
   function favCurrent() {
     if (catId === "settings") return;
@@ -1179,57 +1160,12 @@
   {/if}
 
   {#if wizardActive && cfg}
-    <div class="wizard" role="dialog" aria-modal="true" aria-label="OmniDeck setup" tabindex="-1" use:dialogFocus>
-      {#if wizardStep === 0}
-        <div class="wstep">
-          <div class="wlogo">OMNIDECK</div><h2>Welcome 👋</h2>
-          <p class="wlead">Your living-room launcher for games, streaming, music, and your own media.</p>
-          <ul class="wfacts"><li>Mode: <b>{cap?.tier ?? "…"}</b></li><li>Games: <b>{games.length}</b></li><li>Apps to add: <b>{catalog.length}</b></li></ul>
-          <div class="wnav">Press <b>Enter / ✕</b> to continue</div>
-        </div>
-      {:else if wizardStep === 1}
-        <div class="wstep">
-          <h2>Pick a theme</h2><p class="wlead">Choose an accent — change it anytime in Settings.</p>
-          <div class="wswatches">{#each ACCENTS as a}<span class="wsw" class:sel={cfg.settings.accent === a} style="background:{a}"></span>{/each}</div>
-          <div class="wnav"><b>◀ ▶</b> change · <b>Enter / ✕</b> next · <b>Esc / ◯</b> back</div>
-        </div>
-      {:else}
-        <div class="wstep">
-          <h2>You're set! 🎮</h2>
-          <ul class="wfacts"><li><b>← →</b> category · <b>↑ ↓</b> items</li><li><b>Enter / ✕</b> launch · <b>□ / F</b> favorite</li><li><b>△ / A</b> add apps · <b>Start / H</b> home · <b>P</b> settings · <b>/ Select</b> search · <b>i / R1</b> info</li></ul>
-          <div class="wnav">Press <b>Enter / ✕</b> to start</div>
-        </div>
-      {/if}
-    </div>
+    <Wizard step={wizardStep} tier={cap?.tier ?? null} gamesCount={games.length} catalogCount={catalog.length}
+      accents={ACCENTS} accent={cfg.settings.accent ?? "#4cc2ff"} />
   {/if}
 
-  {#if nowCards.length}
-    <div class="nowstack">
-      {#each nowCards as c (c.id)}
-        <div class="nowplaying">
-          {#if c.media && c.media.status === "Playing"}<span class="np-eq"><i></i><i></i><i></i></span>
-          {:else if c.media}<span class="np-icon">⏸</span>
-          {:else}<span class="np-spinner"></span>{/if}
-          <span class="np-label">
-            {c.media ? "Now playing" : c.kind === "game" ? "Game running" : "Running"}<br />
-            {#if c.media && c.media.title}<b>{c.media.title}</b>{#if c.media.artist}<span class="np-sub"> — {c.media.artist}</span>{/if}
-            {:else}<b>{c.kind === "game" ? "🎮 " : "▶ "}{c.name}</b>{/if}
-          </span>
-          {#if c.media}
-            <span class="np-controls">
-              <button class="np-c" title="Previous" aria-label="Previous track" onclick={() => mediaControl("previous")}>⏮</button>
-              <button class="np-c" title="Play / Pause" aria-label="Play or pause" onclick={() => mediaControl("play-pause")}>{c.media.status === "Playing" ? "⏸" : "▶"}</button>
-              <button class="np-c" title="Next" aria-label="Next track" onclick={() => mediaControl("next")}>⏭</button>
-            </span>
-          {/if}
-          <!-- ⇄ only in the gamescope session: on a desktop, unmap would hide the window from the real WM -->
-          {#if c.kind === "app" && inSession}<button class="np-c" title="Switch to the app (Guide press / Ctrl+Alt+Home)" aria-label="Switch to app" onclick={() => api.switchApp().catch((e) => reportError("Couldn't switch app", e))}>⇄</button>{/if}
-          {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (Guide hold / Ctrl+Alt+End)" aria-label="Close app and return" onclick={() => api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e))}>↩</button>{/if}
-          {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" aria-label="Dismiss card" onclick={() => (nowList = nowList.filter((x) => x.id !== c.id))}>✕</button>{/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
+  <NowPlaying cards={nowCards} {inSession} onerror={reportError}
+    ondismiss={(id) => (nowList = nowList.filter((x) => x.id !== id))} />
 
   {#if status}<div class="toast">{status}</div>{/if}
   {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
@@ -1304,12 +1240,11 @@
   /* Suppress the default focus ring on elements that already show focus another way (inputs'
      accent border, the in-app .focused highlight used by controller/mouse nav)... */
   .numedit:focus, .textedit:focus, .crow:focus, .cbtn:focus, .oskkey:focus, .sortbtn:focus,
-  .badge:focus, .np-c:focus, .np-x:focus, .fpsbtn:focus,
+  .badge:focus, .fpsbtn:focus,
   .xcat:focus, .xitem:focus { outline: none; }
   /* ...but show a clear accent ring for keyboard users (:focus-visible only). */
   .numedit:focus-visible, .textedit:focus-visible, .crow:focus-visible, .cbtn:focus-visible,
-  .oskkey:focus-visible, .sortbtn:focus-visible, .badge:focus-visible,
-  .np-c:focus-visible, .np-x:focus-visible, .fpsbtn:focus-visible,
+  .oskkey:focus-visible, .sortbtn:focus-visible, .badge:focus-visible, .fpsbtn:focus-visible,
   .xcat:focus-visible, .xitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
@@ -1317,24 +1252,7 @@
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
   .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
 
-  .nowstack { position: fixed; z-index: 12; right: 2.4vw; bottom: 8vh; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
-  .nowplaying { display: flex; align-items: center; gap: 16px; background: #0c1320e8; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 16px; padding: 14px 20px; box-shadow: 0 20px 60px #000b; max-width: 42vw; }
-  .np-spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid #2c3a5c; border-top-color: var(--accent); animation: np-spin 0.9s linear infinite; flex: 0 0 auto; }
-  @keyframes np-spin { to { transform: rotate(360deg); } }
-  .np-icon { font-size: 20px; color: var(--accent); flex: 0 0 auto; }
-  .np-eq { display: flex; align-items: flex-end; gap: 2px; height: 20px; flex: 0 0 auto; }
-  .np-eq i { width: 4px; background: var(--accent); border-radius: 2px; animation: np-eq 0.9s ease-in-out infinite; }
-  .np-eq i:nth-child(1) { animation-delay: 0s; } .np-eq i:nth-child(2) { animation-delay: 0.3s; } .np-eq i:nth-child(3) { animation-delay: 0.6s; }
-  @keyframes np-eq { 0%, 100% { height: 6px; } 50% { height: 18px; } }
-  .np-label { font-size: clamp(13px, 1.4vw, 17px); color: #9fb0c8; line-height: 1.3; min-width: 0; }
-  .np-label b { color: #fff; font-size: 1.1em; }
-  .np-sub { color: #9fb0c8; }
-  .np-x { background: #1b2540; border: 1px solid #2c3a5c; color: #9fb0c8; border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 14px; flex: 0 0 auto; }
-  .np-x:hover { border-color: var(--accent); color: #fff; }
-  .np-controls { display: flex; gap: 6px; flex: 0 0 auto; }
-  .np-c { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 8px; width: 32px; height: 32px; cursor: pointer; font-size: 14px; }
-  .np-c:hover { border-color: var(--accent); color: #fff; }
-
+  /* Now Playing card styles live in $lib/NowPlaying.svelte */
   /* modal shell styles (.prefs*, backdrop, close) live in $lib/Modal.svelte */
   .catlist { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
   .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: none; color: inherit; font: inherit; width: 100%; text-align: left; }
@@ -1372,18 +1290,8 @@
   .frow input, .frow select { flex: 1; background: #0c1320; border: 1px solid #2c3a5c; color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
   .frow input:focus, .frow select:focus { outline: none; border-color: var(--accent); }
 
-  .wizard { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: radial-gradient(1200px 800px at 50% 30%, #1a2236 0%, #05070b 70%); }
-  .wstep { width: min(640px, 90vw); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 32px; }
-  .wlogo { font-size: clamp(26px, 3.4vw, 48px); font-weight: 800; letter-spacing: 4px; color: var(--accent); }
-  .wstep h2 { margin: 0; font-size: clamp(26px, 3.4vw, 44px); }
+  /* wizard styles live in $lib/Wizard.svelte; .wlead stays — the confirm modal uses it too */
   .wlead { margin: 0; color: #aab6c9; font-size: clamp(15px, 1.7vw, 21px); max-width: 34em; line-height: 1.5; }
-  .wfacts { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 8px; color: #cdd7e6; font-size: clamp(14px, 1.6vw, 20px); }
-  .wfacts b { color: #fff; }
-  .wswatches { display: flex; gap: 16px; margin: 8px 0; }
-  .wsw { width: 56px; height: 56px; border-radius: 14px; border: 3px solid transparent; box-shadow: 0 6px 20px #0008; }
-  .wsw.sel { border-color: #fff; transform: scale(1.12); }
-  .wnav { margin-top: 14px; color: #7e8aa0; font-size: clamp(13px, 1.4vw, 17px); }
-  .wnav b { color: var(--accent); }
 
   footer { padding: 7px 2.4vw; color: #8a96ab; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
   footer b { color: #93a0b6; font-weight: 600; }
@@ -1393,7 +1301,6 @@
   /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
      transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
   @media (prefers-reduced-motion: reduce) {
-    .np-spinner, .np-eq i { animation: none; }
     .xcats, .xitems, .xbg, .xitem, .xcat .xcicon { transition: none !important; }
   }
 </style>
