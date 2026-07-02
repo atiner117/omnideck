@@ -137,13 +137,26 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
     }
     let (cmd, args) = exec.split_first().ok_or("empty command")?;
     use std::os::unix::process::CommandExt;
-    let child = std::process::Command::new(cmd)
+    let mut command = std::process::Command::new(cmd);
+    command
         .args(args)
         // Own process group so return_home() can SIGTERM the whole group (browsers fork
         // helpers/persistent processes that would otherwise survive a single-pid kill).
-        .process_group(0)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .process_group(0);
+    // Inside the gamescope session there's no desktop environment, so Qt/KDE apps (System
+    // Settings, Dolphin, …) load no platform theme and ignore the user's KDE color scheme —
+    // they come up light in a 10-foot dark UI. Claim KDE for launched children so Qt loads
+    // plasma-integration and reads ~/.config/kdeglobals (the user's real theme, dark included).
+    // Harmless on non-KDE hosts: without the plugin Qt just falls back to its default theme.
+    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+        if std::env::var_os("XDG_CURRENT_DESKTOP").is_none() {
+            command.env("XDG_CURRENT_DESKTOP", "KDE");
+        }
+        if std::env::var_os("QT_QPA_PLATFORMTHEME").is_none() {
+            command.env("QT_QPA_PLATFORMTHEME", "kde");
+        }
+    }
+    let child = command.spawn().map_err(|e| e.to_string())?;
     watchdog::watch_child(app, child, name.unwrap_or_else(|| cmd.clone()), id);
     Ok(())
 }

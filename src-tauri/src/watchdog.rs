@@ -4,6 +4,7 @@
 // handler returns immediately, so we poll registry.vdf), and the STEAM_GAME atom that drives
 // gamescope's focus-return path.
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use tauri::Emitter;
 
 /// PID of the most-recently-launched foreground app (PWA/native) that OmniDeck spawned,
@@ -11,6 +12,16 @@ use tauri::Emitter;
 /// return to OmniDeck — inside gamescope a launched window stacks on top of us with no other
 /// way back. Steam games use a separate path (gamescope refocuses us when the game exits).
 static CURRENT_CHILD: AtomicU32 = AtomicU32::new(0);
+
+/// Process-group ids of ALL still-running launched apps (each launch is its own group
+/// leader via process_group(0)). The switcher matches session windows to these groups to
+/// know which windows belong to launched apps (vs OmniDeck itself or gamescope's own).
+static LIVE_GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Snapshot of the launched-app process groups that are still alive.
+pub fn live_groups() -> Vec<u32> {
+    LIVE_GROUPS.lock().map(|g| g.clone()).unwrap_or_default()
+}
 
 /// Close the current foreground app so gamescope refocuses OmniDeck. Best-effort SIGTERM by
 /// PID; the child's `watch_child` thread reaps it and emits `app-exited`. Returns true if a
@@ -37,6 +48,9 @@ pub fn return_home() -> bool {
 pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: String, id: Option<String>) {
     let pid = child.id();
     CURRENT_CHILD.store(pid, Ordering::SeqCst); // newest launch becomes the "current" app
+    if let Ok(mut groups) = LIVE_GROUPS.lock() {
+        groups.push(pid);
+    }
     // The frontend correlates Now Playing entries by this launch id (the tile id), falling back
     // to the name for any legacy caller, so two same-named launchables don't clobber on exit.
     let exit_key = id.unwrap_or_else(|| name.clone());
@@ -45,6 +59,9 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
         let _ = child.wait();
         // Clear only if a newer launch hasn't already replaced us as the current app.
         let _ = CURRENT_CHILD.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+        if let Ok(mut groups) = LIVE_GROUPS.lock() {
+            groups.retain(|&g| g != pid);
+        }
         let _ = app.emit("app-exited", exit_key);
     });
 }

@@ -1,4 +1,6 @@
-// OmniDeck — global session hotkey: Ctrl+Alt+Home = close the launched app, return home.
+// OmniDeck — global session hotkeys:
+//   Ctrl+Alt+Home = switch between OmniDeck and the launched app (hide/show — it keeps running)
+//   Ctrl+Alt+End  = close the launched app and return home
 //
 // Inside a gamescope session a launched fullscreen app (browser PWA, native player) takes
 // window focus, so nothing typed on the keyboard ever reaches OmniDeck's webview — a
@@ -9,16 +11,18 @@
 // (gamescope is an X compositor at heart), so this covers all launched apps there.
 //
 // Deliberately session-only: on a normal desktop, OmniDeck is just a window and shouldn't
-// own a system-wide chord (set OMNIDECK_FORCE_HOTKEY=1 to test the grab on a desktop X11
-// session). Chord choice: Ctrl+Alt+Home — memorable ("go home"), three keys so a game or
-// on-screen keyboard can't hit it by accident, and not among gamescope's own Super binds.
+// own system-wide chords (set OMNIDECK_FORCE_HOTKEY=1 to test the grabs on a desktop X11
+// session). Chord choice: three keys so a game or on-screen keyboard can't hit them by
+// accident, not among gamescope's own Super binds, and mnemonic: Home = go home, End = end.
 use tauri::Emitter;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, GrabMode, ModMask};
 use x11rb::protocol::Event;
 
-const XK_HOME: u32 = 0xff50; // keysym for the Home key (nav cluster)
-const XK_KP_HOME: u32 = 0xff95; // numpad Home (the 7 key with NumLock off) — grab both
+const XK_HOME: u32 = 0xff50; // nav-cluster Home
+const XK_KP_HOME: u32 = 0xff95; // numpad Home (7 with NumLock off)
+const XK_END: u32 = 0xff57; // nav-cluster End
+const XK_KP_END: u32 = 0xff9c; // numpad End (1 with NumLock off)
 
 pub fn spawn_if_session(app: tauri::AppHandle) {
     let in_gamescope = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some();
@@ -27,16 +31,23 @@ pub fn spawn_if_session(app: tauri::AppHandle) {
     }
     std::thread::spawn(move || {
         if let Err(e) = run(app) {
-            eprintln!("[omnideck] hotkey: {e} — Ctrl+Alt+Home return-home unavailable");
+            eprintln!("[omnideck] hotkey: {e} — Ctrl+Alt+Home/End unavailable");
         }
     });
 }
 
-/// Connect to $DISPLAY and grab Ctrl+Alt+Home on the root window, in all lock-modifier
-/// variants (the classic 4-grab: plain, NumLock, CapsLock, both) so the chord works
-/// regardless of lock state. Keycode is resolved from the server's keyboard mapping
-/// (never hardcode: keycodes are layout/server specific even though Home is stable).
-fn connect_and_grab() -> Result<x11rb::rust_connection::RustConnection, Box<dyn std::error::Error>> {
+/// The grab setup: which keycodes carry a keysym set, grabbed with Ctrl+Alt in all
+/// lock-modifier variants (the classic 4-grab: plain, NumLock, CapsLock, both).
+struct Grabs {
+    conn: x11rb::rust_connection::RustConnection,
+    home_keycodes: Vec<u8>,
+    end_keycodes: Vec<u8>,
+}
+
+/// Connect to $DISPLAY and grab Ctrl+Alt+{Home,End} on the root window. Keycodes are
+/// resolved from the server's keyboard mapping (never hardcode: keycodes are layout/server
+/// specific), including the numpad variants.
+fn connect_and_grab() -> Result<Grabs, Box<dyn std::error::Error>> {
     let (conn, screen_num) = x11rb::connect(None)?; // gamescope's Xwayland via $DISPLAY
     let root = conn.setup().roots[screen_num].root;
 
@@ -44,36 +55,46 @@ fn connect_and_grab() -> Result<x11rb::rust_connection::RustConnection, Box<dyn 
     let (min_kc, max_kc) = (setup.min_keycode, setup.max_keycode);
     let mapping = conn.get_keyboard_mapping(min_kc, max_kc - min_kc + 1)?.reply()?;
     let per = mapping.keysyms_per_keycode as usize;
-    let keycodes: Vec<u8> = mapping
-        .keysyms
-        .chunks(per)
-        .enumerate()
-        .filter(|(_, syms)| syms.contains(&XK_HOME) || syms.contains(&XK_KP_HOME))
-        .map(|(i, _)| min_kc + i as u8)
-        .collect();
-    if keycodes.is_empty() {
-        return Err("keyboard has no Home key".into());
+    let keycodes_for = |syms: &[u32]| -> Vec<u8> {
+        mapping
+            .keysyms
+            .chunks(per)
+            .enumerate()
+            .filter(|(_, chunk)| chunk.iter().any(|s| syms.contains(s)))
+            .map(|(i, _)| min_kc + i as u8)
+            .collect()
+    };
+    let home_keycodes = keycodes_for(&[XK_HOME, XK_KP_HOME]);
+    let end_keycodes = keycodes_for(&[XK_END, XK_KP_END]);
+    if home_keycodes.is_empty() && end_keycodes.is_empty() {
+        return Err("keyboard has no Home/End keys".into());
     }
 
     let base = ModMask::CONTROL | ModMask::M1;
-    for keycode in keycodes {
+    for &keycode in home_keycodes.iter().chain(&end_keycodes) {
         for locks in [ModMask::from(0u16), ModMask::M2, ModMask::LOCK, ModMask::M2 | ModMask::LOCK] {
             conn.grab_key(true, root, base | locks, keycode, GrabMode::ASYNC, GrabMode::ASYNC)?;
         }
     }
     conn.flush()?;
-    Ok(conn)
+    Ok(Grabs { conn, home_keycodes, end_keycodes })
 }
 
 fn run(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let conn = connect_and_grab()?;
-    eprintln!("[omnideck] hotkey: Ctrl+Alt+Home grabbed (close launched app / return home)");
+    let grabs = connect_and_grab()?;
+    eprintln!("[omnideck] hotkey: grabbed Ctrl+Alt+Home (switch) and Ctrl+Alt+End (close app)");
 
     loop {
-        // Only our grabbed chord is ever delivered here, so any KeyPress means "go home".
-        if let Event::KeyPress(_) = conn.wait_for_event()? {
+        // Only our grabbed chords are delivered here; the keycode says which one.
+        let Event::KeyPress(e) = grabs.conn.wait_for_event()? else { continue };
+        if grabs.home_keycodes.contains(&e.detail) {
+            match crate::switcher::toggle() {
+                Some(what) => eprintln!("[omnideck] hotkey: Ctrl+Alt+Home — app {what}"),
+                None => eprintln!("[omnideck] hotkey: Ctrl+Alt+Home — no app to switch to"),
+            }
+        } else if grabs.end_keycodes.contains(&e.detail) {
             let closed = crate::watchdog::return_home();
-            eprintln!("[omnideck] hotkey: Ctrl+Alt+Home — {}", if closed { "closed the current app" } else { "no app to close" });
+            eprintln!("[omnideck] hotkey: Ctrl+Alt+End — {}", if closed { "closed the current app" } else { "no app to close" });
             if closed {
                 let _ = app.emit("app-closed", ());
             }
@@ -85,25 +106,28 @@ fn run(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
-    /// End-to-end grab check against a live X server: grab the chord, inject it with
-    /// xdotool (XTEST), and assert the KeyPress is delivered to us. Ignored by default
-    /// (needs $DISPLAY + xdotool); run against the target server with:
-    ///   DISPLAY=:0 cargo test grab_smoke -- --ignored
+    /// End-to-end grab check against a live X server: grab the chords, inject them with
+    /// xdotool (XTEST), and assert both KeyPresses are delivered to us with the right
+    /// keycode class. Ignored by default (needs $DISPLAY + xdotool); run against the
+    /// target server with:  DISPLAY=:0 cargo test grab_smoke -- --ignored
     #[test]
     #[ignore]
     fn grab_smoke() {
-        let conn = connect_and_grab().expect("connect + grab failed");
-        std::process::Command::new("xdotool")
-            .args(["key", "ctrl+alt+Home"])
-            .status()
-            .expect("xdotool not available");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if let Ok(Some(Event::KeyPress(_))) = conn.poll_for_event() {
-                return; // chord delivered through the grab — pass
+        let grabs = connect_and_grab().expect("connect + grab failed");
+        for (chord, expected) in [("ctrl+alt+Home", &grabs.home_keycodes), ("ctrl+alt+End", &grabs.end_keycodes)] {
+            std::process::Command::new("xdotool")
+                .args(["key", chord])
+                .status()
+                .expect("xdotool not available");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Ok(Some(Event::KeyPress(e))) = grabs.conn.poll_for_event() {
+                    assert!(expected.contains(&e.detail), "{chord} delivered an unexpected keycode {}", e.detail);
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{chord} was not delivered within 5s");
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            assert!(std::time::Instant::now() < deadline, "chord was not delivered within 5s");
-            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
 }
