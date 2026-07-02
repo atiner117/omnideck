@@ -17,7 +17,8 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, GrabMode, ModMask};
 use x11rb::protocol::Event;
 
-const XK_HOME: u32 = 0xff50; // keysym for the Home key
+const XK_HOME: u32 = 0xff50; // keysym for the Home key (nav cluster)
+const XK_KP_HOME: u32 = 0xff95; // numpad Home (the 7 key with NumLock off) — grab both
 
 pub fn spawn_if_session(app: tauri::AppHandle) {
     let in_gamescope = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some();
@@ -43,16 +44,22 @@ fn connect_and_grab() -> Result<x11rb::rust_connection::RustConnection, Box<dyn 
     let (min_kc, max_kc) = (setup.min_keycode, setup.max_keycode);
     let mapping = conn.get_keyboard_mapping(min_kc, max_kc - min_kc + 1)?.reply()?;
     let per = mapping.keysyms_per_keycode as usize;
-    let keycode = mapping
+    let keycodes: Vec<u8> = mapping
         .keysyms
         .chunks(per)
-        .position(|syms| syms.contains(&XK_HOME))
-        .map(|i| min_kc + i as u8)
-        .ok_or("keyboard has no Home key")?;
+        .enumerate()
+        .filter(|(_, syms)| syms.contains(&XK_HOME) || syms.contains(&XK_KP_HOME))
+        .map(|(i, _)| min_kc + i as u8)
+        .collect();
+    if keycodes.is_empty() {
+        return Err("keyboard has no Home key".into());
+    }
 
     let base = ModMask::CONTROL | ModMask::M1;
-    for locks in [ModMask::from(0u16), ModMask::M2, ModMask::LOCK, ModMask::M2 | ModMask::LOCK] {
-        conn.grab_key(true, root, base | locks, keycode, GrabMode::ASYNC, GrabMode::ASYNC)?;
+    for keycode in keycodes {
+        for locks in [ModMask::from(0u16), ModMask::M2, ModMask::LOCK, ModMask::M2 | ModMask::LOCK] {
+            conn.grab_key(true, root, base | locks, keycode, GrabMode::ASYNC, GrabMode::ASYNC)?;
+        }
     }
     conn.flush()?;
     Ok(conn)
