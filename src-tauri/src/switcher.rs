@@ -65,7 +65,13 @@ pub fn toggle() -> Option<&'static str> {
         }
         let _ = conn.flush();
         if let Ok(mut hidden) = HIDDEN.lock() {
-            *hidden = visible;
+            // APPEND (don't overwrite): an app launched while another was hidden must not
+            // orphan the first one's windows — the next show brings the whole set back.
+            for win in visible {
+                if !hidden.contains(&win) {
+                    hidden.push(win);
+                }
+            }
         }
         return Some("hidden — OmniDeck focused");
     }

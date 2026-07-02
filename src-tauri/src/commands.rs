@@ -218,6 +218,13 @@ pub fn close_current_app() -> bool {
     watchdog::return_home()
 }
 
+/// Switch between OmniDeck and the launched app without closing it (UI path; Guide press /
+/// Ctrl+Alt+Home do the same). Returns true if something was hidden or re-shown.
+#[tauri::command]
+pub fn switch_app() -> bool {
+    crate::switcher::toggle().is_some()
+}
+
 /// True when OmniDeck is running as a gamescope session (vs. a window on the desktop). Lets
 /// the UI relabel "Exit OmniDeck" as "Log out" — in a session, quitting returns to the greeter.
 #[tauri::command]
