@@ -34,6 +34,7 @@ omnideck scan      # Steam library scan result
 omnideck config    # effective config + path
 omnideck catalog   # media/app catalog (what's detected/offered)
 omnideck gridart <appid>   # test a SteamGridDB fetch
+omnideck media     # MPRIS players on the session bus (what Now Playing shows)
 omnideck --help    # all subcommands; --version for the version
 ```
 

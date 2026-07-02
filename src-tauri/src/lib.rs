@@ -10,6 +10,7 @@ mod config;
 mod http;
 mod icons;
 mod library;
+mod mpris;
 mod steamgriddb;
 
 use clap::Parser;
@@ -499,65 +500,17 @@ fn game_properties(appid: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[derive(Clone, Serialize)]
-struct MediaInfo {
-    status: String, // "Playing" | "Paused" | "Stopped"
-    title: String,
-    artist: String,
-    player: String,
+/// Current media snapshot from the MPRIS watcher's state (no I/O). The frontend calls this
+/// once at mount — before its `media-changed` listener attaches — then relies on events.
+#[tauri::command]
+fn media_now_playing() -> Option<mpris::MediaInfo> {
+    mpris::now_playing()
 }
 
-/// Current media metadata via MPRIS (`playerctl`). None if playerctl is missing or no
-/// player is active. Works for native players (Feishin, Spotify) and browser PWAs
-/// (YouTube Music in a Chromium/Brave window) since browsers expose MPRIS too.
+/// Control the active MPRIS player (play-pause / next / previous) over the session bus.
 #[tauri::command]
-fn media_now_playing() -> Option<MediaInfo> {
-    let out = std::process::Command::new("playerctl")
-        .args([
-            "metadata",
-            "--format",
-            "{{status}}\t{{title}}\t{{artist}}\t{{playerName}}",
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let line = String::from_utf8_lossy(&out.stdout);
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
-    let mut parts = line.splitn(4, '\t');
-    let status = parts.next().unwrap_or("").to_string();
-    let title = parts.next().unwrap_or("").to_string();
-    let artist = parts.next().unwrap_or("").to_string();
-    let player = parts.next().unwrap_or("").to_string();
-    if title.is_empty() && artist.is_empty() {
-        return None;
-    }
-    Some(MediaInfo {
-        status,
-        title,
-        artist,
-        player,
-    })
-}
-
-/// Control the active MPRIS player (play-pause / next / previous) via `playerctl`.
-#[tauri::command]
-fn media_control(action: String) -> Result<(), String> {
-    let verb = match action.as_str() {
-        "play-pause" => "play-pause",
-        "next" => "next",
-        "previous" => "previous",
-        _ => return Err(format!("unknown media action: {action}")),
-    };
-    std::process::Command::new("playerctl")
-        .arg(verb)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+async fn media_control(action: String) -> Result<(), String> {
+    mpris::control(&action).await
 }
 
 /// Quit the launcher. In a gamescope session this exits CLIENTCMD, which ends the
@@ -666,6 +619,8 @@ enum CliCommand {
     },
     /// List the bundled app/media catalog
     Catalog,
+    /// Snapshot MPRIS players on the session bus (what Now Playing would show)
+    Media,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -712,6 +667,10 @@ pub fn run() {
             }
             return;
         }
+        Some(CliCommand::Media) => {
+            print!("{}", tauri::async_runtime::block_on(mpris::report()));
+            return;
+        }
         None => {}
     }
 
@@ -752,6 +711,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || gamepad_loop(handle));
+            // Event-driven Now Playing: one session-bus watcher pushes `media-changed` events.
+            tauri::async_runtime::spawn(mpris::watch(app.handle().clone()));
             set_steam_game_atom_if_gamescope();
             // In a gamescope session take the whole output: a windowed (e.g. 1280x720)
             // toplevel gets scaled/letterboxed by gamescope, so request real fullscreen
