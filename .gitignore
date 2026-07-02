@@ -26,3 +26,6 @@ vite.config.ts.timestamp-*
 /GLM-REVIEW.md
 /NOTES.md
 /NOTES-*.md
+
+# ts-rs default export dir (every `cargo test` writes it; canonical copy: /src/lib/bindings)
+/src-tauri/bindings/

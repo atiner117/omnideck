@@ -20,6 +20,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Copy, Serialize, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "kebab-case")]
 pub enum Tier {
     GamescopeSession,
@@ -28,6 +29,7 @@ pub enum Tier {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Gpu {
     pub pci: String,
     pub vendor: String,
@@ -38,6 +40,7 @@ pub struct Gpu {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Capability {
     pub tier: Tier,
     pub gpus: Vec<Gpu>,

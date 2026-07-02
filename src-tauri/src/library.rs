@@ -16,6 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Game {
     pub appid: String,
     pub name: String,
@@ -23,6 +24,8 @@ pub struct Game {
     pub library_path: String,
     pub installed: bool,
     pub is_tool: bool,
+    // serde_json emits a plain JSON number (ts-rs would otherwise type u64 as bigint)
+    #[cfg_attr(test, ts(type = "number"))]
     pub last_played: u64,
     pub art_box: Option<String>,
     pub art_header: Option<String>,
@@ -31,14 +34,17 @@ pub struct Game {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct LibrarySummary {
     pub path: String,
     pub label: String,
     pub available: bool,
+    #[cfg_attr(test, ts(type = "number"))]
     pub app_count: usize,
 }
 
 #[derive(Clone, Serialize, Debug, Default)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Library {
     pub steam_root: Option<String>,
     pub games: Vec<Game>,

@@ -38,3 +38,6 @@ clap = { version = "4", features = ["derive"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
 
+[dev-dependencies]
+ts-rs = "12.0.1"
+
