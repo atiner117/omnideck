@@ -13,8 +13,22 @@ vite.config.ts.timestamp-*
 /src-tauri/target
 /src-tauri/gen
 
+# AUR build artifacts (makepkg / updpkgsums run in packaging/)
+/packaging/*.tar.gz
+/packaging/*.pkg.tar.zst
+/packaging/src/
+/packaging/pkg/
+
 # icon rasterization intermediate (icon.svg is the source of truth)
 /icon-source.png
 
-# private engineering review (not for the public repo)
+# private engineering review + maintainer notes (not for the public repo)
 /GLM-REVIEW.md
+/NOTES.md
+/NOTES-*.md
+
+# ts-rs default export dir (every `cargo test` writes it; canonical copy: /src/lib/bindings)
+/src-tauri/bindings/
+
+# stray file-log dir from a mis-set XDG_STATE_HOME test run
+src-tauri/omnideck/

@@ -3,8 +3,11 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],
+  "comment": "Least-privilege: the frontend only uses invoke (custom commands need no permission) + listen (core:event). window/app/webview cover the rest; menu/tray/path/image/resources are dropped. opener:default removed — the plugin was never called.",
   "permissions": [
-    "core:default",
-    "opener:default"
+    "core:app:default",
+    "core:event:default",
+    "core:webview:default",
+    "core:window:default"
   ]
 }

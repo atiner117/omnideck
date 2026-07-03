@@ -20,7 +20,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # M0 spike: read controllers via evdev to test the real input path inside gamescope
@@ -33,4 +32,20 @@ base64 = "0.22"
 toml = "0.8"
 # SteamGridDB: fetch missing box art over HTTPS
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# headless CLI surface (omnideck probe|scan|gridart|catalog|config + --version/--help)
+clap = { version = "4", features = ["derive"] }
+# event-driven MPRIS Now Playing (replaces the 4 s `playerctl` fork+exec poll)
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false }
+# global Ctrl+Alt+Home grab inside the gamescope session (keyboard path back to OmniDeck
+# while a launched app holds focus — the keyboard twin of the gamepad Guide button)
+x11rb = "0.13"
+# structured logging: stderr + a rotating file under XDG_STATE_HOME, so a broken gamescope
+# session can be debugged after logging back into the desktop (RUST_LOG filters both)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[dev-dependencies]
+ts-rs = "12.0.1"
 

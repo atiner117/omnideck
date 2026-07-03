@@ -1,0 +1,13 @@
+post_install() {
+  cat <<'MSG'
+==> OmniDeck installed. Launch "OmniDeck" from your application menu.
+
+    For the 10-foot gamescope SESSION (pick "OmniDeck" at your display manager,
+    SteamOS/Bazzite Game-Mode style), run once:
+
+        /usr/share/omnideck/install-session.sh
+
+    It needs sudo and registers a display-manager session, so it is never run
+    automatically. Requires the optional dependency: gamescope.
+MSG
+}
