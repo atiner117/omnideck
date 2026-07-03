@@ -9,6 +9,18 @@ a game, and returns cleanly. This is the milestone that proves the whole concept
 - A built binary: `cd ~/Projects/omnideck && bun run tauri build --no-bundle`.
 - KMS active (NVIDIA modeset on — confirmed via `/sys/class/drm/card*-*` connectors).
 
+## 0.5 Automated pre-flight (no logout needed)
+```bash
+./packaging/test-session.sh    # nested gamescope on your desktop, ~1 min
+```
+Boots OmniDeck in a **nested** gamescope window and drives the input paths end to end:
+first paint (non-black), Ctrl+Alt+Home hide/show + Ctrl+Alt+End close (real X grabs),
+and the gamepad Guide short-press/hold via a virtual uinput pad (real evdev, real gilrs).
+Run it before every bare-metal session test — anything it catches is a bug you don't have
+to log out for. What it CANNOT cover (this checklist's remaining value): display mode /
+165 Hz (real EDID), a real Steam game launch + focus return (STEAM_GAME atom), suspend,
+and the SDDM login flow itself.
+
 ## 1. Install the session
 ```bash
 cd ~/Projects/omnideck

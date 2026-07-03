@@ -48,4 +48,7 @@ tracing-appender = "0.2"
 
 [dev-dependencies]
 ts-rs = "12.0.1"
+# examples/virtual-pad.rs — uinput gamepad injector for the nested-session harness
+# (packaging/test-session.sh); gilrs in the app sees it as a real evdev pad
+evdev = "0.12"
 
