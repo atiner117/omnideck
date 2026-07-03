@@ -20,6 +20,19 @@ pub fn ensure_gpu_env() {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(std::env::args_os().skip(1));
     cmd.env("OMNIDECK_ENV_READY", "1");
+    // Inside gamescope, be an X11 (Xwayland) client EXPLICITLY. Everything session-side —
+    // the STEAM_GAME focus-return atom (watchdog), the app switcher's unmap/map, the
+    // Ctrl+Alt+Home grabs — manages our window through X. GTK, however, prefers a Wayland
+    // socket when it sees one: a parent compositor's leaked WAYLAND_DISPLAY (nested
+    // gamescope on a desktop — the test harness) or a gamescope build that exports its own
+    // would silently put our window where none of that machinery can reach it. On the real
+    // SDDM session this is a no-op today (no parent socket); it pins the behavior we
+    // already rely on. The "don't force GDK_BACKEND=x11" warning below is about *desktop
+    // Wayland*, where it stays unset. Launched children inherit it, which is also right:
+    // the switcher can only hide/show X windows.
+    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+        cmd.env("GDK_BACKEND", "x11");
+    }
     if crate::capability::probe().nvidia_present {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
         let in_gamescope = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
