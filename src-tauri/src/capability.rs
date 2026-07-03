@@ -20,6 +20,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Copy, Serialize, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "kebab-case")]
 pub enum Tier {
     GamescopeSession,
@@ -28,6 +29,7 @@ pub enum Tier {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Gpu {
     pub pci: String,
     pub vendor: String,
@@ -38,6 +40,7 @@ pub struct Gpu {
 }
 
 #[derive(Clone, Serialize, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Capability {
     pub tier: Tier,
     pub gpus: Vec<Gpu>,
@@ -81,18 +84,20 @@ pub fn probe() -> Capability {
 
     let mut diagnostics = Vec::new();
     if tier1_capable {
-        if !gamescope {
-            diagnostics.push("Tier-1 capable, but gamescope is not installed.".into());
-        }
-        if !gamescope_session_plus {
+        // The session uses *plain* gamescope (install-session.sh runs `gamescope -f …`), so
+        // readiness keys on `gamescope` — NOT gamescope-session-plus, which OmniDeck never invokes.
+        if gamescope {
             diagnostics.push(
-                "Tier-1 capable, but gamescope-session-plus is missing — install with \
-                 `paru -S gamescope-session-git` to enable the session."
+                "Tier-1 ready: run packaging/install-session.sh, then pick \"OmniDeck\" at your \
+                 display manager (plain gamescope — gamescope-session-plus is not required)."
                     .into(),
             );
-        }
-        if gamescope && gamescope_session_plus {
-            diagnostics.push("Tier-1 ready: a gamescope session can launch.".into());
+        } else {
+            diagnostics.push(
+                "Tier-1 capable, but gamescope is not installed — install `gamescope`, then run \
+                 packaging/install-session.sh to add the session."
+                    .into(),
+            );
         }
     } else if has_real_gpu && !kms_active {
         diagnostics.push(

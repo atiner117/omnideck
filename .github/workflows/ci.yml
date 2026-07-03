@@ -50,7 +50,9 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned (not "latest") so a breaking Bun release can't flip CI red overnight; floor
+          # for the bun.lock text format (lockfileVersion 1). Bump deliberately with the lockfile.
+          bun-version: "1.2.0"
 
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
@@ -69,5 +71,49 @@ jobs:
         working-directory: src-tauri
         run: cargo test --release
 
+      # The Rust structs are the source of truth for the TS types (ts-rs). Regenerate and
+      # fail if the committed bindings drifted — a struct change must ship its bindings.
+      - name: IPC bindings in sync (ts-rs)
+        working-directory: src-tauri
+        run: |
+          TS_RS_EXPORT_DIR="$PWD/../src/lib/bindings" cargo test --release export_bindings
+          git diff --exit-code ../src/lib/bindings \
+            || { echo "::error::src/lib/bindings is stale — run: cd src-tauri && TS_RS_EXPORT_DIR=\$PWD/../src/lib/bindings cargo test export_bindings"; exit 1; }
+
       - name: Tauri build (no bundle)
         run: bun run tauri build --no-bundle
+
+  cargo-deny:
+    name: cargo-deny (advisories · licenses · bans · sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: ./src-tauri/Cargo.toml
+
+  cargo-audit:
+    name: cargo-audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - name: cargo audit
+        working-directory: src-tauri
+        run: cargo audit
+
+  version-sync:
+    name: version sync (Cargo.toml == tauri.conf.json == PKGBUILD)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions agree
+        run: |
+          cargo_v=$(grep -m1 '^version' src-tauri/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          tauri_v=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"(.*)".*/\1/')
+          pkg_v=$(grep -m1 '^pkgver=' packaging/PKGBUILD | cut -d= -f2)
+          echo "Cargo.toml=$cargo_v  tauri.conf.json=$tauri_v  PKGBUILD=$pkg_v"
+          if [ "$cargo_v" != "$tauri_v" ] || [ "$cargo_v" != "$pkg_v" ]; then
+            echo "::error::version strings disagree — bump all three together"; exit 1
+          fi
