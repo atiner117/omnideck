@@ -5,11 +5,11 @@
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
   import Wizard from "$lib/Wizard.svelte";
+  import SearchModal from "$lib/SearchModal.svelte";
+  import CatalogModal from "$lib/CatalogModal.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
-
-  type Tile =
-    | { kind: "game"; id: string; cat: string; game: Game }
-    | { kind: "app"; id: string; cat: string; app: App };
+  import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
+  import type { Tile } from "$lib/tiles";
 
   const CATEGORIES = [
     { id: "dashboard", label: "Home", icon: "⭐" },
@@ -657,19 +657,7 @@
     else webSearch();
   }
 
-  // ---- on-screen keyboard (controller/mouse text entry for search; search is case-insensitive
-  // so it's lowercase-only — no shift needed) ----
-  const OSK_ROWS = [
-    ["a", "b", "c", "d", "e", "f"],
-    ["g", "h", "i", "j", "k", "l"],
-    ["m", "n", "o", "p", "q", "r"],
-    ["s", "t", "u", "v", "w", "x"],
-    ["y", "z", "0", "1", "2", "3"],
-    ["4", "5", "6", "7", "8", "9"],
-    ["␣", ".", "-", "⌫", "✕", "⏎"],
-  ];
-  const OSK_FLAT = OSK_ROWS.flat();
-  const OSK_COLS = 6;
+  // ---- on-screen keyboard (layout in $lib/osk.ts; rendered by SearchModal) ----
   let oskFocus = $state(0);
   function oskMove(dx: number, dy: number) {
     const rows = OSK_ROWS.length;
@@ -1032,52 +1020,37 @@
   </div>
 
   {#if searchOpen}
-    <Modal labelledby="dlg-search" backdropLabel="Close search" closeLabel="Close search" onclose={() => (searchOpen = false)}>
-      <h2 id="dlg-search">Search</h2>
-      <div class="csearch active">{searchQuery ? `🔎 ${searchQuery}` : "Type to search your games, apps & the web…"}</div>
-      <div class="catlist">
-        {#each searchResults as t, i (t.id)}
-          <button type="button" class="crow" class:focused={i === searchFocus} data-sr={i} onmouseenter={() => (searchFocus = i)} onclick={() => { searchFocus = i; searchActivate(); }}>
-            <span class="cicon" style="background:{t.kind === 'app' && appIcons[t.app.id] ? (iconBg[t.app.id] ?? '#f4f5f8') : t.kind === 'app' ? t.app.accent : '#22304a'}">{#if t.kind === "app" && appIcons[t.app.id]}<img class="appicon" src={appIcons[t.app.id]} alt="" />{:else}{t.kind === "app" ? t.app.icon : "🎮"}{/if}</span>
-            <span class="cname">{t.kind === "app" ? t.app.name : t.game.name}</span>
-            <span class="ccat">{t.cat}</span>
-          </button>
-        {/each}
-        <button type="button" class="crow" class:focused={searchFocus === searchResults.length} data-sr={searchResults.length} onmouseenter={() => (searchFocus = searchResults.length)} onclick={() => webSearch()}>
-          <span class="cicon" style="background:#3a3f4a">{#if searchEngineIcon}<img class="appicon" src={searchEngineIcon} alt="" />{:else}🌐{/if}</span>
-          <span class="cname">Search the web{searchQuery ? ` for “${searchQuery}”` : "…"}</span>
-        </button>
-      </div>
-      <div class="osk" role="group" aria-label="On-screen keyboard">
-        {#each OSK_FLAT as k, i}
-          <button class="oskkey" class:focused={i === oskFocus} class:special={"␣⌫✕⏎".includes(k)}
-            onmouseenter={() => (oskFocus = i)} onclick={() => { oskFocus = i; oskPress(k); }}>{k}</button>
-        {/each}
-      </div>
-      <p class="phint">keyboard: type · ↑↓ select · Enter open — controller: D-pad + ✕ to type · bumpers pick result · ⏎ go · ◯ clear/close</p>
-    </Modal>
+    <SearchModal
+      query={searchQuery}
+      focus={searchFocus}
+      results={searchResults}
+      {oskFocus}
+      {appIcons}
+      {iconBg}
+      engineIcon={searchEngineIcon}
+      onfocus={(i) => (searchFocus = i)}
+      onactivate={searchActivate}
+      onwebsearch={webSearch}
+      onoskfocus={(i) => (oskFocus = i)}
+      onoskpress={oskPress}
+      onclose={() => (searchOpen = false)}
+    />
   {/if}
 
   {#if catalogOpen}
-    <Modal labelledby="dlg-catalog" backdropLabel="Close add apps" closeLabel="Close add apps" onclose={() => (catalogOpen = false)}>
-      <div class="chead">
-        <h2 id="dlg-catalog">Add apps &amp; media</h2>
-        <button class="sortbtn" onclick={() => (catSort = catSort === "group" ? "alpha" : "group")}>{catSort === "group" ? "Grouped" : "A–Z"}</button>
-      </div>
-      <div class="csearch" class:active={catQuery}>{catQuery ? `🔎 ${catQuery}` : "Type to search…  ·  Tab: sort"}</div>
-      <div class="catlist">
-        {#each displayedCatalog as c, i (c.id)}
-          {#if catSort === "group" && (i === 0 || displayedCatalog[i - 1].category !== c.category)}<div class="cgroup">{c.category ?? "apps"}</div>{/if}
-          <button type="button" class="crow" class:focused={i === catFocus} data-cat={i} onmouseenter={() => (catFocus = i)} onclick={() => { catFocus = i; catToggle(i); }}>
-            <span class="cicon" style="background:{appIcons[c.id] ? (iconBg[c.id] ?? '#f4f5f8') : c.accent}">{#if appIcons[c.id]}<img class="appicon" src={appIcons[c.id]} alt="" />{:else}{c.icon}{/if}</span>
-            <span class="cname">{c.name}</span>
-            <span class="cstate" class:on={isAdded(c.id)}>{isAdded(c.id) ? "✓ Added" : "+ Add"}</span>
-          </button>
-        {/each}
-        {#if !displayedCatalog.length}<div class="cgroup">no matches for “{catQuery}”</div>{/if}
-      </div>
-      <p class="phint">type to search · Tab sort · ↑↓ select · Enter/✕ toggle · Esc clear/close</p>
-    </Modal>
+    <CatalogModal
+      entries={displayedCatalog}
+      focus={catFocus}
+      query={catQuery}
+      sort={catSort}
+      {appIcons}
+      {iconBg}
+      {isAdded}
+      onfocus={(i) => (catFocus = i)}
+      ontoggle={catToggle}
+      onsortswap={() => (catSort = catSort === "group" ? "alpha" : "group")}
+      onclose={() => (catalogOpen = false)}
+    />
   {/if}
 
   {#if infoOpen && infoTile}
@@ -1227,7 +1200,6 @@
   .xthumb { width: calc(3.1rem * var(--scale)); height: calc(3.1rem * var(--scale)); border-radius: 10px; flex: 0 0 auto; overflow: hidden; display: grid; place-items: center; background: #1a2233; box-shadow: 0 4px 14px #0007; }
   .xthumb img { width: 100%; height: 100%; object-fit: cover; }
   .xthumb img.appicon { object-fit: contain; padding: 18%; box-sizing: border-box; }
-  .cicon img.appicon { width: 70%; height: 70%; object-fit: contain; }
   .xthumb .xemoji { font-size: calc(1.5rem * var(--scale)); }
   .xitem.focused .xthumb { box-shadow: 0 0 0 2px var(--accent), 0 8px 24px #000a; }
   .xname { font-size: calc(clamp(16px, 1.7vw, 24px) * var(--scale)); font-weight: 600; display: flex; align-items: center; gap: 10px; }
@@ -1239,12 +1211,13 @@
   .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
   /* Suppress the default focus ring on elements that already show focus another way (inputs'
      accent border, the in-app .focused highlight used by controller/mouse nav)... */
-  .numedit:focus, .textedit:focus, .crow:focus, .cbtn:focus, .oskkey:focus, .sortbtn:focus,
+  .numedit:focus, .textedit:focus, .cbtn:focus,
   .badge:focus, .fpsbtn:focus,
   .xcat:focus, .xitem:focus { outline: none; }
-  /* ...but show a clear accent ring for keyboard users (:focus-visible only). */
-  .numedit:focus-visible, .textedit:focus-visible, .crow:focus-visible, .cbtn:focus-visible,
-  .oskkey:focus-visible, .sortbtn:focus-visible, .badge:focus-visible, .fpsbtn:focus-visible,
+  /* ...but show a clear accent ring for keyboard users (:focus-visible only).
+     (.crow/.oskkey/.sortbtn rules live with the modal vocabulary in Modal.svelte.) */
+  .numedit:focus-visible, .textedit:focus-visible, .cbtn:focus-visible,
+  .badge:focus-visible, .fpsbtn:focus-visible,
   .xcat:focus-visible, .xitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
@@ -1253,30 +1226,12 @@
   .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
 
   /* Now Playing card styles live in $lib/NowPlaying.svelte */
-  /* modal shell styles (.prefs*, backdrop, close) live in $lib/Modal.svelte */
-  .catlist { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
-  .crow { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: none; color: inherit; font: inherit; width: 100%; text-align: left; }
-  .crow.focused { background: #1b2540; border-color: var(--accent); }
-  .cicon { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; font-size: 20px; flex: 0 0 auto; }
-  .cname { flex: 1; font-size: clamp(14px, 1.5vw, 18px); font-weight: 600; }
-  .ccat { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 1px; }
-  .cstate { color: #7e8aa0; font-weight: 700; font-size: clamp(12px, 1.3vw, 15px); min-width: 72px; text-align: right; }
-  .cstate.on { color: #6ee7a8; }
-  .cgroup { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; padding: 12px 10px 4px; }
-  .cgroup:first-child { padding-top: 2px; }
-  .chead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-right: 44px; }
-  .sortbtn { background: #1b2540; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); color: #cdd7e6; border-radius: 999px; padding: 4px 14px; cursor: pointer; font-size: clamp(11px, 1.1vw, 14px); font-weight: 700; }
-  .csearch { color: #93a0b6; font-size: clamp(12px, 1.2vw, 15px); padding: 4px 2px 6px; }
-  .csearch.active { color: var(--accent); font-weight: 700; }
+  /* Modal shell (.prefs*, backdrop, close) AND the shared modal-content vocabulary
+     (.catlist/.crow/.cicon/.csearch/.phint/.osk* …) live in $lib/Modal.svelte — the
+     in-page dialogs below (power, info, confirm, form) use those classes too. */
   .cwheel { width: 30px; height: 22px; padding: 0; border: 1px solid #ffffff55; border-radius: 5px; background: none; cursor: pointer; }
   .cwheel::-webkit-color-swatch-wrapper { padding: 0; }
   .cwheel::-webkit-color-swatch { border: none; border-radius: 4px; }
-  .phint { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
-  .osk { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; }
-  .oskkey { background: #0c1320; border: 2px solid #2c3a5c; color: #dde5f0; border-radius: 8px; padding: 10px 0; font-size: clamp(15px, 1.6vw, 20px); font-weight: 700; cursor: pointer; text-transform: uppercase; }
-  .oskkey.special { color: var(--accent); background: #11192b; }
-  .oskkey.focused { border-color: var(--accent); background: #1b2540; color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
-  .oskkey:hover { border-color: var(--accent); }
 
   .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
   .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
