@@ -55,6 +55,14 @@ All notable changes to OmniDeck are documented here. Format follows
 - **Config error surfacing**: a `config.toml` that fails to parse now shows a toast with
   the parse error ("using defaults until fixed") instead of silently reverting — and the
   app **refuses to overwrite** the broken file until it's fixed.
+- **Automated session pre-flight** (`packaging/test-session.sh`): boots OmniDeck in a
+  *nested* gamescope on the desktop and drives the real input paths end to end — first
+  paint, `Ctrl+Alt+Home/End` chords (X grabs), and the gamepad Guide short-press/hold via
+  a virtual uinput pad (`examples/virtual-pad.rs`) — so switcher/hotkey regressions are
+  caught without logging out. Uses an env-gated FIFO test hook (`OMNIDECK_TEST_CONTROL`,
+  inert in production) to launch a deterministic stub client (`examples/x11-stub.rs`)
+  through the real watchdog-owned launch path. Bare metal still owns: display mode,
+  real Steam launch/return, suspend, SDDM login (see `M2-SESSION-TEST.md` §0.5).
 
 ### Changed
 - **NVIDIA/WebKitGTK workarounds are now session-aware** (2026 behavior): dmabuf renderer
@@ -92,6 +100,19 @@ All notable changes to OmniDeck are documented here. Format follows
   caught by the new supply-chain gate on its first CI run.
 
 ### Fixed
+- **App switcher hide/show is now verified, not fire-and-forget**: map/unmap of a
+  launched app's windows goes through gamescope's compositor asynchronously, and a
+  request landing while it digests the previous transition could be swallowed — stranding
+  the app invisible with the switcher thinking nothing was hidden (Guide did nothing from
+  then on). The switcher now confirms each transition and retries, and keeps unconfirmed
+  windows in the hidden set so the next toggle recovers them. Found by the nested-session
+  harness (~1 in 3 runs); on hardware it would have looked like "the app randomly never
+  comes back".
+- **`GDK_BACKEND=x11` is pinned inside gamescope sessions**: the atom/switcher/hotkey
+  machinery manages OmniDeck's window through X, but GTK connects to any Wayland socket
+  it sees (a leaked parent compositor socket under nested gamescope; potentially a future
+  gamescope exporting its own) — putting the window where none of that machinery can
+  reach it. Desktop Wayland is untouched (the backend stays unforced there).
 - A broken `config.toml` can no longer be clobbered by automatic saves (recent-apps
   writes fired on every launch).
 - Steam-exit watchdog no longer spins forever if Steam crashes mid-game (15 min unknown
