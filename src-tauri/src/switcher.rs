@@ -68,15 +68,15 @@ pub fn toggle() -> Option<&'static str> {
 
     if !visible.is_empty() {
         // Hide: unmap every owned visible toplevel; gamescope refocuses OmniDeck.
-        for &win in &visible {
-            let _ = conn.unmap_window(win);
+        let failed = set_mapped(&conn, &visible, false);
+        if !failed.is_empty() {
+            tracing::warn!("switcher: {} window(s) resisted unmap", failed.len());
         }
-        let _ = conn.flush();
         if let Ok(mut hidden) = HIDDEN.lock() {
             // APPEND (don't overwrite): an app launched while another was hidden must not
             // orphan the first one's windows — the next show brings the whole set back.
             for win in visible {
-                if !hidden.contains(&win) {
+                if !hidden.contains(&win) && !failed.contains(&win) {
                     hidden.push(win);
                 }
             }
@@ -89,11 +89,55 @@ pub fn toggle() -> Option<&'static str> {
     if hidden.is_empty() {
         return None;
     }
-    for &win in &hidden {
-        let _ = conn.map_window(win);
+    let failed = set_mapped(&conn, &hidden, true);
+    if !failed.is_empty() {
+        // Put the strays back so the next toggle retries instead of stranding the app
+        // invisible with an empty HIDDEN list (Guide would then do nothing forever).
+        tracing::warn!("switcher: {} window(s) did not remap — kept for retry", failed.len());
+        if let Ok(mut h) = HIDDEN.lock() {
+            h.extend(failed);
+        }
     }
-    let _ = conn.flush();
     Some("re-shown — app focused")
+}
+
+/// Map or unmap `wins` and VERIFY each reached the requested state, re-issuing the request a
+/// few times. Fire-and-forget is not enough: map/unmap of foreign toplevels is asynchronous
+/// through steamcompmgr (maps are SubstructureRedirect'ed to it), and a request that lands
+/// while it is still digesting the previous transition can get swallowed — seen live in the
+/// nested-session harness as a re-shown window that never became viewable. Returns the
+/// windows that never confirmed (destroyed windows are treated as done — they're gone).
+fn set_mapped(
+    conn: &x11rb::rust_connection::RustConnection,
+    wins: &[Window],
+    mapped: bool,
+) -> Vec<Window> {
+    let want = if mapped { MapState::VIEWABLE } else { MapState::UNMAPPED };
+    let mut pending: Vec<Window> = wins.to_vec();
+    for attempt in 0..8 {
+        pending.retain(|&win| {
+            match conn.get_window_attributes(win).map(|c| c.reply()) {
+                Ok(Ok(attrs)) => {
+                    // UNVIEWABLE counts as hidden too (mapped but ancestor unmapped).
+                    !(attrs.map_state == want || (!mapped && attrs.map_state != MapState::VIEWABLE))
+                }
+                _ => false, // window is gone — nothing left to (un)map
+            }
+        });
+        if pending.is_empty() {
+            break;
+        }
+        for &win in &pending {
+            let _ = if mapped { conn.map_window(win) } else { conn.unmap_window(win) };
+        }
+        let _ = conn.flush();
+        // First pass sends the initial request immediately; later passes give steamcompmgr
+        // time to process before re-checking.
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        }
+    }
+    pending
 }
 
 #[cfg(test)]
