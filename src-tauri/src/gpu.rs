@@ -61,3 +61,43 @@ pub fn ensure_gpu_env() {
 
 #[cfg(not(unix))]
 pub fn ensure_gpu_env() {}
+
+/// Log the display mode the session ACTUALLY runs at, via gamescope's Xwayland RandR
+/// (gamescope reports its real output mode there). This is the ground truth for "did my
+/// session.conf `-r 165` apply?" — the UI's fps meter can't answer it: WebKitGTK's
+/// software-compositing frame clock paces requestAnimationFrame at ~60 regardless of the
+/// panel (M2 finding: meter read ~61 on a 165 Hz mode; the 100/240 spikes were rAF burst
+/// noise hitting the meter's clamp).
+pub fn log_session_display_mode() {
+    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none() {
+        return;
+    }
+    if let Err(e) = try_log_mode() {
+        tracing::warn!("display-mode probe failed (cosmetic): {e}");
+    }
+}
+
+fn try_log_mode() -> Result<(), Box<dyn std::error::Error>> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::randr::ConnectionExt as _;
+    let (conn, screen_num) = x11rb::connect(None)?;
+    let root = conn.setup().roots[screen_num].root;
+    let res = conn.randr_get_screen_resources_current(root)?.reply()?;
+    let modes: std::collections::HashMap<u32, _> =
+        res.modes.iter().map(|m| (m.id, m)).collect();
+    for &crtc in &res.crtcs {
+        let info = conn.randr_get_crtc_info(crtc, res.config_timestamp)?.reply()?;
+        if info.mode == 0 {
+            continue; // disabled crtc
+        }
+        if let Some(m) = modes.get(&info.mode) {
+            let denom = u64::from(m.htotal) * u64::from(m.vtotal);
+            let hz = if denom > 0 { m.dot_clock as f64 / denom as f64 } else { 0.0 };
+            tracing::info!(
+                "session display mode: {}x{} @ {hz:.0} Hz (gamescope Xwayland RandR)",
+                m.width, m.height
+            );
+        }
+    }
+    Ok(())
+}
