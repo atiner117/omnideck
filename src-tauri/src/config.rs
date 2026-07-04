@@ -138,13 +138,17 @@ pub struct Config {
     pub config_error: Option<String>,
 }
 
-fn config_path() -> Option<PathBuf> {
-    // XDG: prefer $XDG_CONFIG_HOME (when absolute), else ~/.config (unchanged for existing installs).
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+/// The XDG config base: $XDG_CONFIG_HOME (when absolute), else ~/.config. Shared with
+/// callers that peek at OTHER apps' config (e.g. jellyfin-mpv-shim's server address).
+pub fn config_base() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("omnideck/config.toml"))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+}
+
+fn config_path() -> Option<PathBuf> {
+    Some(config_base()?.join("omnideck/config.toml"))
 }
 
 fn defaults() -> Config {

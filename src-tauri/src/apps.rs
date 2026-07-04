@@ -56,13 +56,43 @@ pub fn list() -> Vec<App> {
     if has("heroic") {
         v.push(app("heroic", "Heroic", "🦸", "#2a2250", "games", vec!["heroic".into()]));
     }
-    if has("jellyfin-mpv-shim") {
-        v.push(app("jellyfin", "Jellyfin", "🪼", "#005a8c", "video", vec!["jellyfin-mpv-shim".into()]));
+    // jellyfin-mpv-shim is cast plumbing — it parks in the background as a cast target and
+    // shows no UI, so it must never BE the tile (M2 finding: "Jellyfin" launched a tray
+    // icon). The tile opens something browsable: the desktop client when installed
+    // (detected_apps covers it), else the server's web client as a PWA — the shim's own
+    // config knows the server address, so casting to the shim still works from there.
+    if has("jellyfin-mpv-shim") && !has("jellyfinmediaplayer") {
+        let url = jellyfin_server_url().unwrap_or_else(|| "http://localhost:8096".into());
+        v.push(app("jellyfin", "Jellyfin", "🪼", "#005a8c", "video",
+            vec!["BROWSER".into(), format!("--app={url}")]));
     }
     if has("brave") {
         v.push(app("web", "Web", "🌐", "#5a2d12", "apps", vec!["brave".into()]));
     }
     v
+}
+
+/// The Jellyfin server address from jellyfin-mpv-shim's own config
+/// (`~/.config/jellyfin-mpv-shim/cred.json`, first `"address"` string found). The shim is
+/// already paired with the user's server, so this beats guessing localhost. None on any
+/// parse trouble — the caller falls back.
+fn jellyfin_server_url() -> Option<String> {
+    let path = crate::config::config_base()?.join("jellyfin-mpv-shim/cred.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    fn find_address(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::Object(m) => m.iter().find_map(|(k, v)| {
+                if k.eq_ignore_ascii_case("address") {
+                    v.as_str().filter(|s| s.starts_with("http")).map(str::to_string)
+                } else {
+                    find_address(v)
+                }
+            }),
+            serde_json::Value::Array(a) => a.iter().find_map(find_address),
+            _ => None,
+        }
+    }
+    find_address(&v)
 }
 
 fn installed_flatpaks() -> std::collections::HashSet<String> {
