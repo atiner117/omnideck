@@ -72,6 +72,15 @@ All notable changes to OmniDeck are documented here. Format follows
   real Steam launch/return, suspend, SDDM login (see `M2-SESSION-TEST.md` §0.5).
 
 ### Changed
+- **PSP-clean chrome pass**: the footer hint wall is gone — diagnostics left, three hints
+  right, and the full keyboard/controller reference lives in a **Help overlay** (`?` /
+  `F1`, footer button; the wizard mentions it). **Settings** is grouped into sections
+  (Appearance / Background / Home & Library / Sound / Search / Launchers) with header
+  rows the navigation skips. **Search** dims the on-screen keyboard while a physical
+  keyboard is typing (back on D-pad touch) and says when only the web row is left.
+  **Emoji chrome is gone**: category rail, header buttons, and the power menu use a
+  monochrome stroke-glyph set (`$lib/icons.ts`); app tiles keep their fetched brand
+  icons. Modals cap at 92 vh and scroll instead of overflowing at large UI scales.
 - **NVIDIA/WebKitGTK workarounds are now session-aware** (2026 behavior): dmabuf renderer
   disabled on X11/gamescope; `__NV_DISABLE_EXPLICIT_SYNC=1` on Wayland (keeps the
   hardware-accelerated path); `GDK_BACKEND=x11` is no longer forced on Wayland desktops.
