@@ -86,6 +86,16 @@ profiles when the hardware can handle it.
   GAMESCOPE_FLAGS="-W 2560 -H 1440 -r 165 -O DP-3"   # connector names: ls /sys/class/drm
   ```
 
+## Three ways to run it
+
+1. **Desktop window** — just run `omnideck`. A normal app window; everything works
+   except the session-only pieces (app switcher, global chords).
+2. **Fullscreen "Big Picture" from your desktop** — `gamescope -f -- omnideck`.
+   The complete 10-foot experience (switcher, Guide button, chords, fullscreen apps)
+   inside your existing desktop session, no logout. Add `-W/-H/-r` flags to taste.
+3. **Dedicated session** — `sudo ./packaging/install-session.sh`, then pick
+   **OmniDeck** at your display manager's session list. The console mode.
+
 ## Build & run (dev)
 
 ```bash
