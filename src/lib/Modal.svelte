@@ -34,7 +34,7 @@
 
 <style>
   .prefs-backdrop { position: fixed; inset: 0; background: rgba(4,6,10,.6); border: 0; padding: 0; cursor: pointer; z-index: 10; }
-  .prefs { position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(620px, 92vw); background: #121826; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 18px; padding: 22px 26px; box-shadow: 0 30px 80px #000c; display: flex; flex-direction: column; gap: 4px; }
+  .prefs { position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(620px, 92vw); max-height: 92vh; overflow-y: auto; background: #121826; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 18px; padding: 22px 26px; box-shadow: 0 30px 80px #000c; display: flex; flex-direction: column; gap: 4px; }
   .prefs :global(h2) { margin: 0 0 10px; font-size: clamp(20px, 2.2vw, 26px); }
   /* Shared modal-content vocabulary (same :global-under-.prefs idiom as h2 above): list
      rows, group headers, the search/status line, hints, and the OSK grid. Lives here so
@@ -56,7 +56,8 @@
   .prefs :global(.csearch) { color: #93a0b6; font-size: clamp(12px, 1.2vw, 15px); padding: 4px 2px 6px; }
   .prefs :global(.csearch.active) { color: var(--accent); font-weight: 700; }
   .prefs :global(.phint) { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
-  .prefs :global(.osk) { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; }
+  .prefs :global(.osk) { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; transition: opacity .15s; }
+  .prefs :global(.osk.dim) { opacity: 0.35; }
   .prefs :global(.oskkey) { background: #0c1320; border: 2px solid #2c3a5c; color: #dde5f0; border-radius: 8px; padding: 10px 0; font-size: clamp(15px, 1.6vw, 20px); font-weight: 700; cursor: pointer; text-transform: uppercase; }
   .prefs :global(.oskkey.special) { color: var(--accent); background: #11192b; }
   .prefs :global(.oskkey.focused) { border-color: var(--accent); background: #1b2540; color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }

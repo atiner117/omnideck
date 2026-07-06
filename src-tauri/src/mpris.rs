@@ -110,21 +110,19 @@ fn best_info(players: &HashMap<String, PlayerState>) -> Option<MediaInfo> {
 
 /// Snapshot for the `media_now_playing` command (frontend's initial fetch).
 pub fn now_playing() -> Option<MediaInfo> {
-    let players = state().lock().ok()?;
+    let players = crate::sync::lock_or_recover(state(), "mpris.players");
     best_info(&players)
 }
 
 fn emit_current(app: &tauri::AppHandle) {
-    let info = state().lock().ok().and_then(|p| best_info(&p));
+    let info = best_info(&crate::sync::lock_or_recover(state(), "mpris.players"));
     let _ = app.emit("media-changed", info);
 }
 
 /// Control the tracked player. Errs when no session bus / no player — the UI toasts it.
 pub async fn control(action: &str) -> Result<(), String> {
     let conn = CONN.get().ok_or("no D-Bus session bus (MPRIS unavailable)")?;
-    let name = state()
-        .lock()
-        .map_err(|e| e.to_string())?
+    let name = crate::sync::lock_or_recover(state(), "mpris.players")
         .iter()
         .max_by_key(|(_, p)| (p.status == "Playing", p.last_change))
         .map(|(name, _)| name.clone())
@@ -260,9 +258,7 @@ pub async fn watch(app: tauri::AppHandle) {
                 Err(_) => continue, // vanished between ListNames and now
             };
             if let Some(p) = fetch_player(&conn, &name, owner).await {
-                if let Ok(mut players) = state().lock() {
-                    players.insert(name, p);
-                }
+                crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
             }
         }
     }
@@ -283,16 +279,12 @@ pub async fn watch(app: tauri::AppHandle) {
                     // appeared (or changed owner): fetch initial state
                     let owner = owner.to_string();
                     if let Some(p) = fetch_player(&conn_a, &name, owner).await {
-                        if let Ok(mut players) = state().lock() {
-                            players.insert(name, p);
-                        }
+                        crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
                     }
                 }
                 None => {
                     // player closed (possibly mid-song): drop it so the card clears
-                    if let Ok(mut players) = state().lock() {
-                        players.remove(&name);
-                    }
+                    crate::sync::lock_or_recover(state(), "mpris.players").remove(&name);
                 }
             }
             emit_current(&app_a);
@@ -314,7 +306,8 @@ pub async fn watch(app: tauri::AppHandle) {
         }
         // Apply the delta under the lock; remember whether a re-fetch is needed.
         let mut refetch: Option<String> = None; // well-known name
-        if let Ok(mut players) = state().lock() {
+        {
+            let mut players = crate::sync::lock_or_recover(state(), "mpris.players");
             if let Some((name, p)) = players.iter_mut().find(|(_, p)| p.owner == sender) {
                 if let Some(s) = changed.get("PlaybackStatus").and_then(|v| <&str>::try_from(v).ok()) {
                     p.status = s.to_string();
@@ -333,9 +326,7 @@ pub async fn watch(app: tauri::AppHandle) {
         if let Some(name) = refetch {
             let owner = sender.clone();
             if let Some(p) = fetch_player(&conn, &name, owner).await {
-                if let Ok(mut players) = state().lock() {
-                    players.insert(name, p);
-                }
+                crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
             }
         }
         emit_current(&app);

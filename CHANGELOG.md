@@ -55,6 +55,14 @@ All notable changes to OmniDeck are documented here. Format follows
 - **Config error surfacing**: a `config.toml` that fails to parse now shows a toast with
   the parse error ("using defaults until fixed") instead of silently reverting — and the
   app **refuses to overwrite** the broken file until it's fixed.
+- **Live wallpaper — the wave** (Settings → Background → Live wallpaper): PSP-style
+  accent-tinted ribbons drifting under the rail. Half-resolution canvas at ~24 fps,
+  paused while hidden, a single static frame under `prefers-reduced-motion`. Default on;
+  one toggle off.
+- **Ambient music** (Settings → Sound → Ambient music, off by default): a synthesized
+  slowly-breathing pad — four soft partials over a root that glides between neighbouring
+  keys every ~35 s behind a sweeping lowpass. No audio assets, whisper-quiet by design,
+  volume row appears when enabled.
 - **Session display-mode ground truth**: at session startup the app logs the mode
   gamescope actually set (via its Xwayland RandR) — `session display mode: 2560x1440 @
   165 Hz` — because the UI fps meter cannot prove it: WebKitGTK's software-compositing
@@ -72,6 +80,15 @@ All notable changes to OmniDeck are documented here. Format follows
   real Steam launch/return, suspend, SDDM login (see `M2-SESSION-TEST.md` §0.5).
 
 ### Changed
+- **PSP-clean chrome pass**: the footer hint wall is gone — diagnostics left, three hints
+  right, and the full keyboard/controller reference lives in a **Help overlay** (`?` /
+  `F1`, footer button; the wizard mentions it). **Settings** is grouped into sections
+  (Appearance / Background / Home & Library / Sound / Search / Launchers) with header
+  rows the navigation skips. **Search** dims the on-screen keyboard while a physical
+  keyboard is typing (back on D-pad touch) and says when only the web row is left.
+  **Emoji chrome is gone**: category rail, header buttons, and the power menu use a
+  monochrome stroke-glyph set (`$lib/icons.ts`); app tiles keep their fetched brand
+  icons. Modals cap at 92 vh and scroll instead of overflowing at large UI scales.
 - **NVIDIA/WebKitGTK workarounds are now session-aware** (2026 behavior): dmabuf renderer
   disabled on X11/gamescope; `__NV_DISABLE_EXPLICIT_SYNC=1` on Wayland (keeps the
   hardware-accelerated path); `GDK_BACKEND=x11` is no longer forced on Wayland desktops.
@@ -89,6 +106,16 @@ All notable changes to OmniDeck are documented here. Format follows
   overwriting a same-named entry; empty/symbol-only names are rejected.
 
 ### Security
+- **DNS-rebinding closed in the SSRF guard** (2026-07 audit): the blocklist now also
+  resolves hostnames and re-checks every returned address (IPv6 ranges included), at the
+  fetch entry points and on every redirect hop — a public-looking domain that resolves to
+  `127.0.0.1`/`10.x` no longer walks past the literal-IP check. Groundwork for the
+  planned LAN media-server integration.
+- **`get_art` (custom background) is content-gated** (2026-07 audit): canonicalized,
+  regular-files-only, and magic-byte sniffed against the claimed image type — a
+  crafted/imported config can no longer feed a non-image through the background loader.
+  Deliberately NOT path-rooted: backgrounds legitimately live on photo mounts, and the
+  surface is display-only (no exfil channel under the CSP).
 - `quick-xml` RUSTSEC-2026-0194/0195 (DoS, via `plist`/`tauri-utils`): documented ignores
   in the audit gates — the parser never sees untrusted XML in a Linux launcher, and no
   fixed release exists on our tree yet (drop the ignores when `plist` adopts quick-xml 0.41).
@@ -107,6 +134,14 @@ All notable changes to OmniDeck are documented here. Format follows
   caught by the new supply-chain gate on its first CI run.
 
 ### Fixed
+- **Guide-hold / Ctrl+Alt+End now closes EVERY running launched app** (2026-07 audit):
+  it only signalled the most-recently-launched one, so with app B stacked over a
+  still-running app A, "close" left A holding the screen. Deliberate semantics: close is
+  the escape hatch, the switcher is how you keep apps alive.
+- **A poisoned internal mutex now logs a warning and recovers** instead of silently
+  no-op'ing every later critical section; `flatpak list` is cached per run instead of
+  shelling out on every app scan; ~10 inlined session-detection env checks collapsed
+  into one `session::in_session()` (all 2026-07 audit).
 - **Left-stick Y was inverted** (M2, DualShock 4): gilrs's convention is positive Y =
   stick up; the UI consumed it unnegated, so up moved down. Now negated exactly once, and
   the harness asserts the convention end to end through a virtual pad (raw `ABS_Y` min →

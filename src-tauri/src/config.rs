@@ -33,6 +33,9 @@ pub struct Settings {
     pub background_image: String, // file path used when background_default = "image"
     pub game_backgrounds: bool, // overlay the focused game's cover art
     pub app_backgrounds: bool, // overlay a color wash from the focused app's icon
+    pub live_wallpaper: String, // animated background: "off" | "waves" (PSP-style ribbon)
+    pub ambient: bool, // synthesized ambient background music (subtle, off by default)
+    pub ambient_volume: f64, // ambient music volume multiplier (0.0–1.0)
 }
 
 impl Default for Settings {
@@ -61,6 +64,9 @@ impl Default for Settings {
             background_image: String::new(),
             game_backgrounds: true,
             app_backgrounds: true,
+            live_wallpaper: "waves".into(),
+            ambient: false,
+            ambient_volume: 0.35,
         }
     }
 }
@@ -113,6 +119,10 @@ impl Settings {
         if !matches!(self.background_default.as_str(), "color" | "image") {
             self.background_default = "color".into();
         }
+        if !matches!(self.live_wallpaper.as_str(), "off" | "waves") {
+            self.live_wallpaper = "waves".into();
+        }
+        self.ambient_volume = self.ambient_volume.clamp(0.0, 1.0);
     }
 }
 

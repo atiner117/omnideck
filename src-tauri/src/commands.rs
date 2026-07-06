@@ -42,12 +42,16 @@ pub fn get_library() -> library::Library {
 
 /// Read a local image file and return it as a data URL the webview can display.
 /// (Still used for the custom background image; game art moved to the omnideck:// protocol.)
+///
+/// No path-root allowlist ON PURPOSE (audit follow-up): backgrounds legitimately live
+/// anywhere (network photo mounts, external drives), and this surface only DISPLAYS the
+/// image locally — the CSP allows no upload/exfil channel. What a crafted/imported config
+/// must not be able to do is read a NON-image through it, so the gate is content-based:
+/// extension AND magic bytes must both say image, the target must be a regular file
+/// (canonicalized, so a symlink still lands on a sniffed real image), capped at 32 MiB.
 #[tauri::command]
 pub fn get_art(path: String) -> Option<String> {
     use base64::Engine;
-    // Only serve image files: this turns a local path into a data URL, so restrict the
-    // extensions (don't let a crafted config read e.g. ~/.ssh/id_rsa), and cap the size so a
-    // huge/unexpected file can't balloon into memory as base64.
     let lower = path.to_ascii_lowercase();
     let mime = if lower.ends_with(".png") {
         "image/png"
@@ -58,12 +62,27 @@ pub fn get_art(path: String) -> Option<String> {
     } else {
         return None;
     };
-    if std::fs::metadata(&path).ok()?.len() > 32 * 1024 * 1024 {
+    let canonical = std::fs::canonicalize(&path).ok()?;
+    let meta = std::fs::metadata(&canonical).ok()?;
+    if !meta.is_file() || meta.len() > 32 * 1024 * 1024 {
         return None;
     }
-    let bytes = std::fs::read(&path).ok()?;
+    let bytes = std::fs::read(&canonical).ok()?;
+    if !sniff_matches(mime, &bytes) {
+        return None;
+    }
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     Some(format!("data:{mime};base64,{b64}"))
+}
+
+/// True when `bytes` starts with the magic signature of the claimed image type.
+fn sniff_matches(mime: &str, bytes: &[u8]) -> bool {
+    match mime {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(b"\xFF\xD8\xFF"),
+        "image/webp" => bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
 }
 
 /// Launch a Steam game by appid. In a gamescope session Steam stamps the game
@@ -131,7 +150,7 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
         exec[0] = browser;
         // Inside a gamescope session a browser PWA opens windowed and doesn't fill the
         // screen; ask it to start fullscreen (Firefox uses --kiosk, Chromium --start-fullscreen).
-        if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+        if crate::session::in_session() {
             exec.insert(1, if is_firefox { "--kiosk".into() } else { "--start-fullscreen".into() });
         }
     }
@@ -148,7 +167,7 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
     // they come up light in a 10-foot dark UI. Claim KDE for launched children so Qt loads
     // plasma-integration and reads ~/.config/kdeglobals (the user's real theme, dark included).
     // Harmless on non-KDE hosts: without the plugin Qt just falls back to its default theme.
-    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+    if crate::session::in_session() {
         if std::env::var_os("XDG_CURRENT_DESKTOP").is_none() {
             command.env("XDG_CURRENT_DESKTOP", "KDE");
         }
@@ -229,7 +248,7 @@ pub fn switch_app() -> bool {
 /// the UI relabel "Exit OmniDeck" as "Log out" — in a session, quitting returns to the greeter.
 #[tauri::command]
 pub fn in_gamescope_session() -> bool {
-    std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
+    crate::session::in_session()
 }
 
 /// Fetch missing vertical box art from SteamGridDB (no-op without a configured key). Cached.

@@ -3,54 +3,53 @@
 // the "current child" (PWAs/native apps we spawned), the Steam exit watchdog (Steam's URI
 // handler returns immediately, so we poll registry.vdf), and the STEAM_GAME atom that drives
 // gamescope's focus-return path.
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use tauri::Emitter;
 
-/// PID of the most-recently-launched foreground app (PWA/native) that OmniDeck spawned,
-/// or 0 for none. Lets the Guide ("Home") button / a UI action close the launched app and
-/// return to OmniDeck — inside gamescope a launched window stacks on top of us with no other
-/// way back. Steam games use a separate path (gamescope refocuses us when the game exits).
-static CURRENT_CHILD: AtomicU32 = AtomicU32::new(0);
-
 /// Process-group ids of ALL still-running launched apps (each launch is its own group
 /// leader via process_group(0)). The switcher matches session windows to these groups to
-/// know which windows belong to launched apps (vs OmniDeck itself or gamescope's own).
+/// know which windows belong to launched apps (vs OmniDeck itself or gamescope's own),
+/// and `return_home` signals every one of them (see its semantics note). Inside gamescope
+/// a launched window stacks on top of us with no other way back; Steam games use a
+/// separate path (gamescope refocuses us when the game exits).
 static LIVE_GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 /// Snapshot of the launched-app process groups that are still alive.
 pub fn live_groups() -> Vec<u32> {
-    LIVE_GROUPS.lock().map(|g| g.clone()).unwrap_or_default()
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").clone()
 }
 
-/// Close the current foreground app so gamescope refocuses OmniDeck. Best-effort SIGTERM by
-/// PID; the child's `watch_child` thread reaps it and emits `app-exited`. Returns true if a
-/// running app was signalled.
+/// Close EVERY still-running launched app so gamescope refocuses OmniDeck. Deliberate
+/// semantics: "close" is the console-style escape hatch — the user wants their launcher
+/// back, and with app B stacked over a still-running app A, closing only the newest (the
+/// old most-recent-child behavior) left A holding the screen with the button apparently
+/// dead. The switcher is the tool for keeping apps alive; close closes.
+///
+/// Best-effort SIGTERM per group; each child's `watch_child` thread reaps its own exit and
+/// emits `app-exited`. Returns true if a signal reached anything.
 pub fn return_home() -> bool {
-    let pid = CURRENT_CHILD.load(Ordering::SeqCst);
-    if pid == 0 {
-        return false;
+    let groups = live_groups();
+    let mut any = false;
+    for pid in groups {
+        // Signal the whole process GROUP (negative pid). Browsers (Brave/Chromium) fork a
+        // persistent main process, so SIGTERM to the single spawned pid can leave a window
+        // behind; the child is spawned as its own group leader (process_group(0) in launch),
+        // so -pid reaches every forked helper. Fall back to the bare pid if that misses.
+        let grp = format!("-{pid}");
+        let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
+        let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
+        any |= grp_ok || pid_ok;
     }
-    // Signal the whole process GROUP (negative pid). Browsers (Brave/Chromium) fork a
-    // persistent main process, so SIGTERM to the single spawned pid can leave a window
-    // behind; the child is spawned as its own group leader (process_group(0) in launch),
-    // so -pid reaches every forked helper. Fall back to the bare pid if that misses.
-    let grp = format!("-{pid}");
-    let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
-    let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
     // Only report success if a signal actually reached something — otherwise the caller would
     // emit "app-closed" / swallow the Guide press while the window is still on screen.
-    grp_ok || pid_ok
+    any
 }
 
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
 /// (Lets the UI show a "now playing" state and know when focus returns.)
 pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: String, id: Option<String>) {
     let pid = child.id();
-    CURRENT_CHILD.store(pid, Ordering::SeqCst); // newest launch becomes the "current" app
-    if let Ok(mut groups) = LIVE_GROUPS.lock() {
-        groups.push(pid);
-    }
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").push(pid);
     // The frontend correlates Now Playing entries by this launch id (the tile id), falling back
     // to the name for any legacy caller, so two same-named launchables don't clobber on exit.
     let exit_key = id.unwrap_or_else(|| name.clone());
@@ -58,10 +57,7 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
     std::thread::spawn(move || {
         let _ = child.wait();
         // Clear only if a newer launch hasn't already replaced us as the current app.
-        let _ = CURRENT_CHILD.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
-        if let Ok(mut groups) = LIVE_GROUPS.lock() {
-            groups.retain(|&g| g != pid);
-        }
+        crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|&g| g != pid);
         let _ = app.emit("app-exited", exit_key);
     });
 }
@@ -83,7 +79,7 @@ fn stamp_steam_atom_once() -> bool {
 /// focus-return works without it — see packaging/M2-RESULTS.md.
 pub fn set_steam_game_atom_if_gamescope() {
     // Only relevant inside a gamescope (steamcompmgr) session.
-    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none() {
+    if !crate::session::in_session() {
         return;
     }
     std::thread::spawn(|| {
@@ -199,7 +195,7 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
         tracing::info!("watchdog: '{name}' exited — refocusing OmniDeck");
         let _ = app.emit("app-exited", exit_key);
         // Best-effort focus recovery in a gamescope session.
-        if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+        if crate::session::in_session() {
             stamp_steam_atom_once();
         }
     });

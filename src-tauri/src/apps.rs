@@ -96,16 +96,26 @@ fn jellyfin_server_url() -> Option<String> {
 }
 
 fn installed_flatpaks() -> std::collections::HashSet<String> {
-    match std::process::Command::new("flatpak")
-        .args(["list", "--app", "--columns=application"])
-        .output()
-    {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .collect(),
-        _ => std::collections::HashSet::new(),
-    }
+    // Cached for the process lifetime: `get_apps` runs at every mount and `flatpak list`
+    // shells out (a slow flatpak remote can stall it) — pay that once, not per paint.
+    // Installing an app mid-session just needs an app restart to show up, same as before
+    // the tile would have needed a rescan anyway.
+    static FLATPAKS: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    FLATPAKS
+        .get_or_init(|| {
+            match std::process::Command::new("flatpak")
+                .args(["list", "--app", "--columns=application"])
+                .output()
+            {
+                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|s| s.trim().to_string())
+                    .collect(),
+                _ => std::collections::HashSet::new(),
+            }
+        })
+        .clone()
 }
 
 /// Native/flatpak media+music+game apps that are ACTUALLY installed (flatpak preferred,

@@ -25,7 +25,7 @@ const XK_END: u32 = 0xff57; // nav-cluster End
 const XK_KP_END: u32 = 0xff9c; // numpad End (1 with NumLock off)
 
 pub fn spawn_if_session(app: tauri::AppHandle) {
-    let in_gamescope = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some();
+    let in_gamescope = crate::session::in_session();
     if !in_gamescope && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none() {
         return;
     }
