@@ -27,10 +27,14 @@ fn app(id: &str, name: &str, icon: &str, accent: &str, category: &str, exec: Vec
     }
 }
 
-fn has(bin: &str) -> bool {
+/// True when `bin` is on PATH (shared with commands::media_play's player pick).
+pub fn has_bin(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
         .unwrap_or(false)
+}
+fn has(bin: &str) -> bool {
+    has_bin(bin)
 }
 
 /// First available browser, preferring Chromium-family (needed for `--app=` PWA mode).

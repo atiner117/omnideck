@@ -31,6 +31,12 @@ fn roots() -> &'static Vec<PathBuf> {
                 v.push(p);
             }
         }
+        if let Some(media) = crate::media_server::poster_cache_dir() {
+            let _ = std::fs::create_dir_all(&media);
+            if let Ok(p) = media.canonicalize() {
+                v.push(p);
+            }
+        }
         v
     })
 }

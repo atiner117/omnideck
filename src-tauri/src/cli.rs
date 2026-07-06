@@ -27,6 +27,8 @@ enum CliCommand {
     Catalog,
     /// Snapshot MPRIS players on the session bus (what Now Playing would show)
     Media,
+    /// Probe the configured media server (sections + first library's items)
+    Mediasrv,
 }
 
 /// Parse argv and run a headless subcommand if one was given. Returns true when a subcommand
@@ -70,6 +72,56 @@ pub fn handle() -> bool {
         }
         CliCommand::Media => {
             print!("{}", tauri::async_runtime::block_on(crate::mpris::report()));
+        }
+        CliCommand::Mediasrv => {
+            let Some(srv) = crate::media_server::server() else {
+                println!("no media server configured (config [media_server] or shim pairing)");
+                return true;
+            };
+            match tauri::async_runtime::block_on(srv.sections()) {
+                Err(e) => println!("sections FAILED: {e}"),
+                Ok(s) => {
+                    println!("server: {}", s.server_name);
+                    println!("resume: {} item(s)", s.resume.len());
+                    for i in s.resume.iter().take(3) {
+                        println!("  · {} [{}] {:.0}%", i.name, i.kind, i.played_pct.unwrap_or(0.0));
+                    }
+                    println!("latest: {} item(s)", s.latest.len());
+                    for i in s.latest.iter().take(3) {
+                        println!("  · {} [{}]", i.name, i.kind);
+                    }
+                    println!("libraries:");
+                    for l in &s.libraries {
+                        println!("  · {} ({}) id={}", l.name, l.kind, l.id);
+                    }
+                    if let Some(l) = s.libraries.first() {
+                        match tauri::async_runtime::block_on(srv.browse(&l.id)) {
+                            Err(e) => println!("browse({}) FAILED: {e}", l.name),
+                            Ok(items) => {
+                                println!("{}: {} item(s), first 5:", l.name, items.len());
+                                for i in items.iter().take(5) {
+                                    println!("  · {} [{}] {} min", i.name, i.kind, i.runtime_mins.unwrap_or(0));
+                                }
+                                if let Some(first) = items.first() {
+                                    let p = tauri::async_runtime::block_on(srv.poster(&first.id));
+                                    println!("poster({}) -> {:?}", first.name, p);
+                                    // One byte of the direct stream proves the play path
+                                    // without printing the tokened URL or downloading a movie.
+                                    let status = tauri::async_runtime::block_on(async {
+                                        crate::http::client()
+                                            .get(srv.stream_url(&first.id))
+                                            .header("Range", "bytes=0-0")
+                                            .send()
+                                            .await
+                                            .map(|r| r.status().to_string())
+                                    });
+                                    println!("stream({}) -> {:?}", first.name, status);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     true

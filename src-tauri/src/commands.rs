@@ -109,7 +109,67 @@ pub fn get_apps() -> Vec<apps::App> {
 
 #[tauri::command]
 pub fn get_config() -> config::Config {
-    config::load_or_create()
+    let mut cfg = config::load_or_create();
+    // The media-server token stays out of the webview: the frontend only needs to know
+    // whether a server is configured (media_available covers that). Masked, not moved —
+    // config.toml keeps the real value.
+    cfg.media_server.token.clear();
+    cfg
+}
+
+/// True when a media server is reachable-by-configuration (config or adopted shim pairing).
+#[tauri::command]
+pub fn media_available() -> bool {
+    crate::media_server::server().is_some()
+}
+
+/// Landing sections for the media library modal (Continue Watching / Latest / libraries).
+#[tauri::command]
+pub async fn media_sections() -> Result<crate::media_server::MediaSections, String> {
+    crate::media_server::server().ok_or("no media server configured")?.sections().await
+}
+
+/// Children of a library / series / season — every drill-down level is the same call.
+#[tauri::command]
+pub async fn media_browse(parent: String) -> Result<Vec<crate::media_server::MediaItem>, String> {
+    crate::media_server::server().ok_or("no media server configured")?.browse(&parent).await
+}
+
+/// Fetch+cache an item's poster; returns the on-disk path for an omnideck:// URL.
+#[tauri::command]
+pub async fn media_poster(id: String) -> Option<String> {
+    let path = crate::media_server::server()?.poster(&id).await?;
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// Play a media item: mpv direct-stream by default (real 4K hwdec), the Jellyfin desktop
+/// client when installed and preferred. The stream URL is built server-side from the item
+/// id — the frontend never supplies a URL, so there's nothing to validate away.
+#[tauri::command]
+pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+    let srv = crate::media_server::server().ok_or("no media server configured")?;
+    let prefer_mpv = {
+        let ms = config::load_or_create().media_server;
+        ms.kind.is_empty() || ms.prefer_mpv // adopted-pairing default: mpv
+    };
+    let has_mpv = apps::has_bin("mpv");
+    let has_client = apps::has_bin("jellyfinmediaplayer");
+    let exec: Vec<String> = if has_mpv && (prefer_mpv || !has_client) {
+        vec![
+            "mpv".into(),
+            "--hwdec=auto-safe".into(),
+            "--force-window=immediate".into(),
+            format!("--force-media-title={name}"),
+            srv.stream_url(&id),
+        ]
+    } else if has_client {
+        vec!["jellyfinmediaplayer".into()]
+    } else {
+        return Err("neither mpv nor jellyfinmediaplayer is installed".into());
+    };
+    // Through the normal launch path: own process group + watch_child, so the Guide
+    // button, the switcher, and the Now Playing card treat playback like any launched app.
+    launch_command(app, exec, Some(name), Some(format!("media-{id}")))
 }
 
 #[tauri::command]
