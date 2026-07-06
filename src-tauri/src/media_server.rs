@@ -58,6 +58,11 @@ pub struct MediaServerConfig {
     pub url: String,   // http(s)://host[:port]
     pub token: String, // Jellyfin API key or user access token; blanked over IPC
     pub prefer_mpv: bool,
+    /// Extra mpv flags for direct-play, e.g. `["--include=~/.config/jellyfin-mpv-shim/mpv.conf"]`
+    /// to reuse an existing profile set (VapourSynth interpolation/denoise, keybinds).
+    /// When set, OmniDeck stops passing its own `--hwdec` so the config's choice rules
+    /// (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it).
+    pub mpv_args: Vec<String>,
 }
 
 impl MediaServerConfig {
@@ -72,6 +77,8 @@ impl MediaServerConfig {
         {
             self.url.clear();
         }
+        // Flags only — a bare word here would be handed to mpv as a filename/URL.
+        self.mpv_args.retain(|a| a.starts_with("--"));
     }
 }
 

@@ -3,4 +3,11 @@
 /**
  * `[media_server]` in config.toml. Empty kind/url = unconfigured (shim fallback applies).
  */
-export type MediaServerConfig = { kind: string, url: string, token: string, prefer_mpv: boolean, };
+export type MediaServerConfig = { kind: string, url: string, token: string, prefer_mpv: boolean, 
+/**
+ * Extra mpv flags for direct-play, e.g. `["--include=~/.config/jellyfin-mpv-shim/mpv.conf"]`
+ * to reuse an existing profile set (VapourSynth interpolation/denoise, keybinds).
+ * When set, OmniDeck stops passing its own `--hwdec` so the config's choice rules
+ * (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it).
+ */
+mpv_args: Array<string>, };
