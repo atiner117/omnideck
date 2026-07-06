@@ -42,6 +42,49 @@ pub fn is_blocked_host(host: &str) -> bool {
     matches!(h, "localhost" | "localhost.localdomain")
 }
 
+/// True when `ip` lands in a range we must not probe (the resolved-address twin of the
+/// literal checks above; IPv6 included since the resolver can hand those back).
+fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.octets()[0] == 0
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(std::net::IpAddr::V4(v4));
+            }
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+        }
+    }
+}
+
+/// The DNS-rebinding closure of `is_blocked_host`: a public-LOOKING domain can resolve to
+/// 127.0.0.1/10.x and walk past the literal-IP check. Resolve the host and re-check every
+/// returned address. Resolution failure is NOT blocked — the request itself will fail with
+/// a clearer error. (The lookup is synchronous; callers are one-shot art/icon fetches and
+/// the redirect policy, where a rare extra resolver round-trip is fine — the OS caches it
+/// for the connect that follows.)
+pub fn is_blocked_host_resolved(host: &str) -> bool {
+    if is_blocked_host(host) {
+        return true;
+    }
+    use std::net::ToSocketAddrs;
+    // Attach a port for the resolver; strip any the host already carries.
+    let bare = host.rsplit_once(':').map(|(a, _)| a).unwrap_or(host);
+    match (bare, 443u16).to_socket_addrs() {
+        Ok(addrs) => addrs.map(|a| a.ip()).any(is_blocked_ip),
+        Err(_) => false,
+    }
+}
+
 /// The shared client. Timeouts: connect 5s (TCP + TLS handshake), read 10s (inactivity between
 /// body reads — this is what kills the streaming `.chunk()` hang when a server accepts the
 /// connection but never sends), total 15s (whole-request budget, incl. `.json()`).
@@ -51,11 +94,12 @@ pub fn is_blocked_host(host: &str) -> bool {
 pub fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            // Re-check each redirect hop against the SSRF blocklist: the initial-URL check in
-            // icons::favicon can't see a public host redirecting to 169.254.169.254 etc. `stop()`
-            // hands back the 3xx response, which the image-sniffing callers reject as not-an-image.
+            // Re-check each redirect hop against the SSRF blocklist — RESOLVED addresses
+            // included (DNS rebinding): the initial-URL check in icons::favicon can't see a
+            // public host redirecting to 169.254.169.254 or to a domain that resolves there.
+            // `stop()` hands back the 3xx response, which the image-sniffing callers reject.
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.url().host_str().map(is_blocked_host).unwrap_or(true) {
+                if attempt.url().host_str().map(is_blocked_host_resolved).unwrap_or(true) {
                     attempt.stop()
                 } else if attempt.previous().len() >= 10 {
                     attempt.error("too many redirects")

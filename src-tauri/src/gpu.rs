@@ -30,12 +30,12 @@ pub fn ensure_gpu_env() {
     // already rely on. The "don't force GDK_BACKEND=x11" warning below is about *desktop
     // Wayland*, where it stays unset. Launched children inherit it, which is also right:
     // the switcher can only hide/show X windows.
-    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+    if crate::session::in_session() {
         cmd.env("GDK_BACKEND", "x11");
     }
     if crate::capability::probe().nvidia_present {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
-        let in_gamescope = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
+        let in_gamescope = crate::session::in_session()
             || std::env::var_os("STEAM_GAMESCOPE").is_some();
         if in_gamescope || session == "x11" {
             // X11/gamescope: the dmabuf renderer paints blank on NVIDIA — disable it.
@@ -69,7 +69,7 @@ pub fn ensure_gpu_env() {}
 /// panel (M2 finding: meter read ~61 on a 165 Hz mode; the 100/240 spikes were rAF burst
 /// noise hitting the meter's clamp).
 pub fn log_session_display_mode() {
-    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none() {
+    if !crate::session::in_session() {
         return;
     }
     if let Err(e) = try_log_mode() {

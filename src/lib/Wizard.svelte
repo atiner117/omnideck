@@ -38,7 +38,7 @@
   {:else}
     <div class="wstep">
       <h2>You're set! 🎮</h2>
-      <ul class="wfacts"><li><b>← →</b> category · <b>↑ ↓</b> items</li><li><b>Enter / ✕</b> launch · <b>□ / F</b> favorite</li><li><b>△ / A</b> add apps · <b>Start / H</b> home · <b>P</b> settings · <b>/ Select</b> search · <b>i / R1</b> info</li></ul>
+      <ul class="wfacts"><li><b>← →</b> category · <b>↑ ↓</b> items</li><li><b>Enter / ✕</b> launch · <b>□ / F</b> favorite</li><li><b>△ / A</b> add apps · <b>Start / H</b> home · <b>P</b> settings · <b>/ Select</b> search · <b>i / R1</b> info</li><li><b>? / F1</b> shows this anytime (bottom-right → help)</li></ul>
       <div class="wnav">Press <b>Enter / ✕</b> to start</div>
     </div>
   {/if}

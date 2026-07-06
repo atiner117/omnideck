@@ -13,6 +13,7 @@
     focus,
     results,
     oskFocus,
+    oskDim,
     appIcons,
     iconBg,
     engineIcon,
@@ -27,6 +28,7 @@
     focus: number;
     results: Tile[];
     oskFocus: number;
+    oskDim: boolean;
     appIcons: Record<string, string>;
     iconBg: Record<string, string>;
     engineIcon: string;
@@ -43,6 +45,7 @@
   <h2 id="dlg-search">Search</h2>
   <div class="csearch active">{query ? `🔎 ${query}` : "Type to search your games, apps & the web…"}</div>
   <div class="catlist">
+    {#if query && !results.length}<div class="cgroup">no library matches — ⏎ searches the web</div>{/if}
     {#each results as t, i (t.id)}
       <button type="button" class="crow" class:focused={i === focus} data-sr={i} onmouseenter={() => onfocus(i)} onclick={() => { onfocus(i); onactivate(); }}>
         <span class="cicon" style="background:{t.kind === 'app' && appIcons[t.app.id] ? (iconBg[t.app.id] ?? '#f4f5f8') : t.kind === 'app' ? t.app.accent : '#22304a'}">{#if t.kind === "app" && appIcons[t.app.id]}<img class="appicon" src={appIcons[t.app.id]} alt="" />{:else}{t.kind === "app" ? t.app.icon : "🎮"}{/if}</span>
@@ -55,7 +58,9 @@
       <span class="cname">Search the web{query ? ` for “${query}”` : "…"}</span>
     </button>
   </div>
-  <div class="osk" role="group" aria-label="On-screen keyboard">
+  <!-- The OSK is controller furniture: it recedes while a physical keyboard is doing the
+       typing and comes back the moment the D-pad touches it (the page tracks the source). -->
+  <div class="osk" class:dim={oskDim} role="group" aria-label="On-screen keyboard">
     {#each OSK_FLAT as k, i}
       <button class="oskkey" class:focused={i === oskFocus} class:special={"␣⌫✕⏎".includes(k)}
         onmouseenter={() => onoskfocus(i)} onclick={() => { onoskfocus(i); onoskpress(k); }}>{k}</button>

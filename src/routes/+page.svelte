@@ -5,20 +5,24 @@
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
   import Wizard from "$lib/Wizard.svelte";
+  import HelpModal from "$lib/HelpModal.svelte";
+  import Icon from "$lib/Icon.svelte";
+  import Waves from "$lib/Waves.svelte";
   import SearchModal from "$lib/SearchModal.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
+  import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
   import type { Tile } from "$lib/tiles";
 
   const CATEGORIES = [
-    { id: "dashboard", label: "Home", icon: "⭐" },
-    { id: "games", label: "Games", icon: "🎮" },
-    { id: "video", label: "Movies & TV", icon: "🎬" },
-    { id: "music", label: "Music", icon: "🎵" },
-    { id: "apps", label: "Apps", icon: "🧩" },
-    { id: "settings", label: "Settings", icon: "⚙" },
-  ];
+    { id: "dashboard", label: "Home", icon: "home" },
+    { id: "games", label: "Games", icon: "games" },
+    { id: "video", label: "Movies & TV", icon: "video" },
+    { id: "music", label: "Music", icon: "music" },
+    { id: "apps", label: "Apps", icon: "apps" },
+    { id: "settings", label: "Settings", icon: "settings" },
+  ] as const;
   const ACCENTS = ["#4cc2ff", "#b14cff", "#6ee7a8", "#ff8a3d", "#ff5d6c", "#ffd166"];
   const SEARCH_MODES = [
     { mode: "duckduckgo", label: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
@@ -33,9 +37,16 @@
   const BG_DEFAULTS = ["color", "image"];
   const BG_COLORS = ["#05070b", "#0d1117", "#161b26", "#1a1a2e", "#000000", "#14110a"];
   const RECENTS_MODES = ["both", "games", "apps"];
+  // Section headers are rows too (type "header"): the settings column positions rows by
+  // focus × --ih, so anything between rows must occupy exactly one row slot. Navigation
+  // skips them (moveItem) and entry lands past them (resetFocus).
   const ALL_SETTINGS = [
+    { key: "hdr-look", label: "Appearance", type: "header" },
     { key: "size", label: "Size", type: "cycle" },
     { key: "custom", label: "Custom size", type: "num" },
+    { key: "accent", label: "Accent", type: "cycle" },
+    { key: "hdr-bg", label: "Background", type: "header" },
+    { key: "livewp", label: "Live wallpaper", type: "cycle" },
     { key: "bgdefault", label: "Default background", type: "cycle" },
     { key: "bgcolor", label: "Background color", type: "cycle" },
     { key: "bgimage", label: "Background image", type: "text" },
@@ -43,23 +54,28 @@
     { key: "appbg", label: "App backgrounds", type: "cycle" },
     { key: "blur", label: "Background blur", type: "num" },
     { key: "bright", label: "Background brightness", type: "num" },
+    { key: "hdr-home", label: "Home & Library", type: "header" },
     { key: "recents", label: "Home recents", type: "num" },
     { key: "recents_show", label: "Recents show", type: "cycle" },
     { key: "sort", label: "Sort", type: "cycle" },
     { key: "runtimes", label: "Show runtimes", type: "cycle" },
-    { key: "accent", label: "Accent", type: "cycle" },
+    { key: "hdr-sound", label: "Sound", type: "header" },
     { key: "sound", label: "Navigation sounds", type: "cycle" },
     { key: "soundvol", label: "Sound volume", type: "num" },
+    { key: "ambient", label: "Ambient music", type: "cycle" },
+    { key: "ambientvol", label: "Ambient volume", type: "num" },
+    { key: "hdr-search", label: "Search", type: "header" },
     { key: "search", label: "Search provider", type: "cycle" },
     { key: "searchurl", label: "Search URL", type: "text" },
+    { key: "hdr-launchers", label: "Launchers", type: "header" },
     { key: "addcustom", label: "Add custom launcher", type: "action" },
   ];
   const POWER = [
-    { key: "exit", label: "Exit OmniDeck", icon: "↩" },
-    { key: "suspend", label: "Suspend", icon: "🌙" },
-    { key: "reboot", label: "Restart", icon: "🔄" },
-    { key: "poweroff", label: "Shut down", icon: "⏻" },
-  ];
+    { key: "exit", label: "Exit OmniDeck", icon: "exit" },
+    { key: "suspend", label: "Suspend", icon: "moon" },
+    { key: "reboot", label: "Restart", icon: "restart" },
+    { key: "poweroff", label: "Shut down", icon: "power" },
+  ] as const;
   const CATORDER: Record<string, number> = { games: 0, video: 1, music: 2, apps: 3 };
   const round2 = (v: number) => Math.round(v * 100) / 100;
   const cap1 = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -80,6 +96,9 @@
     if (key === "runtimes") return s.show_runtimes ? "on" : "off";
     if (key === "sound") return soundLabel();
     if (key === "soundvol") return `${Math.round((s.sound_volume ?? 0.6) * 100)}%`;
+    if (key === "livewp") return (s.live_wallpaper ?? "waves") === "waves" ? "Waves" : "Off";
+    if (key === "ambient") return s.ambient ? "on" : "off";
+    if (key === "ambientvol") return `${Math.round((s.ambient_volume ?? 0.35) * 100)}%`;
     if (key === "search") return SEARCH_MODES.find((m) => m.mode === (s.search_mode ?? "duckduckgo"))?.label ?? "DuckDuckGo";
     if (key === "searchurl") return s.search_provider || "(not set)";
     return "";
@@ -123,7 +142,6 @@
   let fpsLo = $state(9999); // worst frame since reset (the dips)
   let fpsHi = $state(0); // best frame since reset
   function resetFpsStats() { fpsAvg = 0; fpsLo = 9999; fpsHi = 0; }
-  let lastInput = $state("—");
   // user-facing error channel (separate from the transient `status` launch toast)
   let toastErr = $state("");
   let toastErrTimer: ReturnType<typeof setTimeout> | undefined;
@@ -277,9 +295,11 @@
   // hide rows that only apply to a current selection (custom size, bg color/image, custom volume)
   let visibleSettings = $derived(
     ALL_SETTINGS.filter((s) => {
+      if (s.type === "header") return true; // every section keeps ≥1 unconditional row
       const set = cfg?.settings; if (!set) return true;
       if (s.key === "custom") return set.ui_scale === "custom";
       if (s.key === "soundvol") return soundLabel() === "Custom";
+      if (s.key === "ambientvol") return set.ambient;
       if (s.key === "bgcolor") return (set.background_default ?? "color") === "color";
       if (s.key === "bgimage") return set.background_default === "image";
       if (s.key === "searchurl") return set.search_mode === "searxng" || set.search_mode === "custom";
@@ -402,8 +422,21 @@
   }
 
   // ---- navigation (XMB: left/right = category, up/down = item) ----
-  function moveCat(d: number) { const n = CATEGORIES.length; catSel = (catSel + d + n) % n; focus = 0; sfxMove(); }
-  function moveItem(d: number) { settingsEditing = false; if (itemCount) { focus = (focus + d + itemCount) % itemCount; sfxMove(); } }
+  // Entry focus for the current category: settings starts past its leading section header.
+  function resetFocus() { focus = catId === "settings" && visibleSettings[0]?.type === "header" ? 1 : 0; }
+  function moveCat(d: number) { const n = CATEGORIES.length; catSel = (catSel + d + n) % n; resetFocus(); sfxMove(); }
+  function moveItem(d: number) {
+    settingsEditing = false;
+    if (!itemCount) return;
+    let f = (focus + d + itemCount) % itemCount;
+    if (catId === "settings") {
+      // Skip section headers in the pressed direction (they occupy row slots but aren't rows).
+      let guard = 0;
+      while (visibleSettings[f]?.type === "header" && guard++ < itemCount) f = (f + d + itemCount) % itemCount;
+    }
+    focus = f;
+    sfxMove();
+  }
   function onWheel(e: WheelEvent) { e.preventDefault(); if (navGate()) moveItem(e.deltaY > 0 ? 1 : -1); }
   // Apply a partial settings change by MUTATING the reactive cfg.settings in place. Svelte 5
   // $state is fine-grained, so only the touched keys signal — this avoids the old cfg={...cfg}
@@ -423,6 +456,7 @@
     else if (key === "blur") patch.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
     else if (key === "bright") patch.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
     else if (key === "soundvol") { const v = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); patch.sound_volume = v; patch.sound = v > 0; }
+    else if (key === "ambientvol") patch.ambient_volume = round2(clamp((s.ambient_volume ?? 0.35) + dir * 0.05, 0, 1));
     patchSettings(patch);
     if (key === "soundvol") blip(620, 0.06, 0.42, "sine", true);
   }
@@ -437,6 +471,7 @@
     blur: { get: () => cfg?.settings?.bg_blur ?? 0, lo: 0, hi: 24, step: 1, int: true },
     bright: { get: () => cfg?.settings?.bg_brightness ?? 0.82, lo: 0.3, hi: 1.0, step: 0.05 },
     soundvol: { get: () => cfg?.settings?.sound_volume ?? 0.6, lo: 0, hi: 1, step: 0.05 },
+    ambientvol: { get: () => cfg?.settings?.ambient_volume ?? 0.35, lo: 0, hi: 1, step: 0.05 },
   };
   function setNum(key: string, raw: number) {
     const m = NUM_META[key]; if (!cfg || !m || Number.isNaN(raw)) return;
@@ -447,6 +482,7 @@
     else if (key === "blur") patch.bg_blur = v;
     else if (key === "bright") patch.bg_brightness = v;
     else if (key === "soundvol") { patch.sound_volume = v; patch.sound = v > 0; }
+    else if (key === "ambientvol") patch.ambient_volume = v;
     patchSettings(patch);
   }
   // text settings (currently just the custom background image path)
@@ -485,6 +521,7 @@
   function activate() {
     if (catId === "settings") {
       const row = visibleSettings[focus];
+      if (row?.type === "header") return; // section label, not a setting
       if (row?.type === "num" || row?.type === "text") settingsEditing = !settingsEditing; // Enter toggles edit
       else if (row?.type === "action") doAction(row.key);
       else if (row) cycleSetting(row.key);
@@ -508,11 +545,12 @@
     recentApps = [id, ...recentApps.filter((x) => x !== id)].slice(0, 20);
     api.saveRecentApps(recentApps).catch((e) => reportError("Couldn't save recents", e));
   }
-  function gotoSettings() { catSel = CATEGORIES.findIndex((c) => c.id === "settings"); focus = 0; }
-  function goHome() { catSel = CATEGORIES.findIndex((c) => c.id === "dashboard"); focus = 0; }
+  function gotoSettings() { catSel = CATEGORIES.findIndex((c) => c.id === "settings"); resetFocus(); }
+  function goHome() { catSel = CATEGORIES.findIndex((c) => c.id === "dashboard"); resetFocus(); }
 
   // ---- in-app info panel (games + apps) ----
   let infoOpen = $state(false);
+  let helpOpen = $state(false); // controls reference (the old footer hint wall)
   let infoTile = $state<Tile | null>(null);
   function showInfo() { holdStop(); if (catId === "settings") return; const t = items[focus]; if (t) { infoTile = t; infoOpen = true; } }
   function appSource(a: App): string {
@@ -544,6 +582,8 @@
       patch.sound = next.on; patch.sound_volume = next.vol;
       if (next.on) blip(620, 0.06, 0.42, "sine", true);
     }
+    else if (key === "livewp") patch.live_wallpaper = (s.live_wallpaper ?? "waves") === "waves" ? "off" : "waves";
+    else if (key === "ambient") patch.ambient = !s.ambient;
     else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); patch.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
     else if (key === "gamebg") patch.game_backgrounds = !s.game_backgrounds;
     else if (key === "appbg") patch.app_backgrounds = !s.app_backgrounds;
@@ -638,7 +678,7 @@
       .filter((t) => (t.kind === "game" ? t.game.name : t.app.name).toLowerCase().includes(q))
       .slice(0, 40);
   });
-  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; oskFocus = 0; }
+  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; oskFocus = 0; oskDim = false; }
   function searchMove(d: number) {
     searchFocus = clamp(searchFocus + d, 0, searchResults.length); // last index = web-search row
     queueMicrotask(() => document.querySelector(`[data-sr="${searchFocus}"]`)?.scrollIntoView({ block: "nearest" }));
@@ -659,6 +699,7 @@
 
   // ---- on-screen keyboard (layout in $lib/osk.ts; rendered by SearchModal) ----
   let oskFocus = $state(0);
+  let oskDim = $state(false); // recede while a physical keyboard is typing; back on D-pad use
   function oskMove(dx: number, dy: number) {
     const rows = OSK_ROWS.length;
     const col = ((oskFocus % OSK_COLS) + dx + OSK_COLS) % OSK_COLS;
@@ -693,7 +734,7 @@
   // Single source of truth: is any modal/overlay open? Gates base navigation and stops
   // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
   const anyModal = $derived(
-    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen,
+    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen,
   );
 
   function onKey(e: KeyboardEvent) {
@@ -720,6 +761,8 @@
       return;
     }
     if (infoOpen) { if (e.key === "Escape" || e.key === "Enter" || e.key === "i" || e.key === "I") infoOpen = false; return; }
+    if (helpOpen) { if (e.key === "Escape" || e.key === "Enter" || e.key === "?" || e.key === "F1") helpOpen = false; return; }
+    if (e.key === "?" || e.key === "F1") { e.preventDefault(); holdStop(); helpOpen = true; return; }
     if (formOpen) {
       // native inputs handle typing; only intercept Escape to close
       if (e.key === "Escape") { e.preventDefault(); formOpen = false; }
@@ -743,9 +786,9 @@
       else if (e.key === "ArrowDown") searchMove(1);
       else if (e.key === "Enter") searchActivate();
       else if (e.key === "Escape") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
-      else if (e.key === "Backspace") searchQuery = searchQuery.slice(0, -1);
+      else if (e.key === "Backspace") { searchQuery = searchQuery.slice(0, -1); oskDim = true; }
       // preventDefault so Space can't ALSO natively re-activate a mouse-focused result row
-      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) { e.preventDefault(); searchQuery += e.key; }
+      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) { e.preventDefault(); searchQuery += e.key; oskDim = true; }
       return;
     }
     if ((e.key === "a" || e.key === "A") && !catalogOpen) { toggleCatalog(); return; }
@@ -831,7 +874,6 @@
     api.onGamepad((e) => {
       const p = e.payload;
       if (p.kind === "button_pressed") {
-        lastInput = p.code;
         if (wizardActive) {
           if (p.code === "South") wizardNext(); else if (p.code === "East") wizardPrev();
           else if (p.code === "DPadLeft" && wizardStep === 1) wizardAccent(-1);
@@ -845,6 +887,7 @@
           return;
         }
         if (infoOpen) { if (p.code === "East" || p.code === "South") infoOpen = false; return; }
+        if (helpOpen) { if (p.code === "East" || p.code === "South") helpOpen = false; return; }
         if (powerOpen) {
           if (p.code === "DPadUp") holdStart(p.code, () => powerMove(-1));
           else if (p.code === "DPadDown") holdStart(p.code, () => powerMove(1));
@@ -854,6 +897,7 @@
         }
         if (searchOpen) {
           // D-pad drives the on-screen keyboard; bumpers move the result selection.
+          if (["DPadUp", "DPadDown", "DPadLeft", "DPadRight", "South"].includes(p.code)) oskDim = false;
           if (p.code === "DPadUp") holdStart(p.code, () => oskMove(0, -1));
           else if (p.code === "DPadDown") holdStart(p.code, () => oskMove(0, 1));
           else if (p.code === "DPadLeft") holdStart(p.code, () => oskMove(-1, 0));
@@ -918,6 +962,7 @@
       clearTimeout(bgTimer);
       pendingTimers.forEach(clearTimeout);
       holdStop();
+      ambientStop();
       off.forEach((u) => u());
     };
   });
@@ -938,6 +983,10 @@
       api.getArt(path).then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; }).catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
     } else { bgImageUrl = ""; }
   });
+  // Ambient pad follows its settings; idempotent, so this is safe to run on every change.
+  $effect(() => {
+    ambientApply(cfg?.settings?.ambient ?? false, cfg?.settings?.ambient_volume ?? 0.35);
+  });
   // fetch the current web-search provider's favicon (shown on the search "web" row)
   let provSeq = 0;
   $effect(() => {
@@ -952,16 +1001,17 @@
     style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`
       : overlay?.kind === "wash" ? `background-image:radial-gradient(120% 90% at 75% 25%, rgba(${overlay.color},0.55) 0%, rgba(${overlay.color},0.18) 38%, transparent 72%)`
       : ""}></div>
+  {#if cfg?.settings?.live_wallpaper === "waves"}<Waves {accent} />{/if}
   <div class="xbg-fade" class:dim={!hasImagery}></div>
 
   <header>
     <div class="brand">OMNIDECK</div>
     <div class="meta">
       <span class="clock">{clock}</span>
-      <button class="badge gear" onclick={openSearch} title="Search (/)" aria-label="Search">🔍</button>
-      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)" aria-label="Add apps">＋</button>
-      <button class="badge gear" onclick={gotoSettings} title="Settings (P)" aria-label="Settings">⚙</button>
-      <button class="badge gear" onclick={openPower} title="Power" aria-label="Power menu">⏻</button>
+      <button class="badge gear" onclick={openSearch} title="Search (/)" aria-label="Search"><Icon name="search" /></button>
+      <button class="badge gear" onclick={toggleCatalog} title="Add apps (A / Triangle)" aria-label="Add apps"><Icon name="plus" /></button>
+      <button class="badge gear" onclick={gotoSettings} title="Settings (P)" aria-label="Settings"><Icon name="settings" /></button>
+      <button class="badge gear" onclick={openPower} title="Power" aria-label="Power menu"><Icon name="power" /></button>
     </div>
   </header>
 
@@ -969,8 +1019,8 @@
   <div class="xmb">
     <div class="xcats" style="transform: translateX(calc(30vw - {catSel} * var(--cw)))">
       {#each CATEGORIES as c, i}
-        <button class="xcat" class:sel={i === catSel} onclick={() => { catSel = i; focus = 0; }}>
-          <span class="xcicon">{c.icon}</span>
+        <button class="xcat" class:sel={i === catSel} onclick={() => { catSel = i; resetFocus(); }}>
+          <span class="xcicon"><Icon name={c.icon} /></span>
           {#if i === catSel}<span class="xclabel">{c.label}</span>{/if}
         </button>
       {/each}
@@ -980,9 +1030,12 @@
       {#if catId === "settings"}
         <div class="xitems" style="transform: translateY(calc({-focus} * var(--ih)))">
           {#each visibleSettings as s, i}
+            {#if s.type === "header"}
+              <div class="xitem xshead" aria-hidden="true"><span class="xthumb settings hollow"></span><span class="xsheadlbl">{s.label}</span></div>
+            {:else}
             <button class="xitem" class:focused={i === focus} class:editing={settingsEditing && i === focus && (s.type === "num" || s.type === "text")}
               onclick={() => { focus = i; if (s.type === "num" || s.type === "text") settingsEditing = !settingsEditing; else if (s.type === "action") doAction(s.key); else cycleSetting(s.key); }}>
-              <span class="xthumb settings"><span class="xemoji">⚙</span></span>
+              <span class="xthumb settings"><span class="xemoji">{s.type === "action" ? "+" : "›"}</span></span>
               <span class="xname">{s.label}
                 {#if s.type === "num" && settingsEditing && i === focus}
                   <input class="numedit" type="number" use:focusSelect value={NUM_META[s.key].get()} step={NUM_META[s.key].step} min={NUM_META[s.key].lo} max={NUM_META[s.key].hi}
@@ -999,6 +1052,7 @@
                 {#if s.key === "bgcolor"}<span class="swatch" style="background:{cfg?.settings?.background_color ?? '#05070b'}"></span><input class="cwheel" type="color" value={cfg?.settings?.background_color ?? '#05070b'} oninput={onBgColor} onclick={(e) => e.stopPropagation()} />{/if}
               </span>
             </button>
+            {/if}
           {/each}
         </div>
       {:else if !items.length}
@@ -1037,6 +1091,7 @@
       focus={searchFocus}
       results={searchResults}
       {oskFocus}
+      {oskDim}
       {appIcons}
       {iconBg}
       engineIcon={searchEngineIcon}
@@ -1063,6 +1118,10 @@
       onsortswap={() => (catSort = catSort === "group" ? "alpha" : "group")}
       onclose={() => (catalogOpen = false)}
     />
+  {/if}
+
+  {#if helpOpen}
+    <HelpModal {inSession} onclose={() => (helpOpen = false)} />
   {/if}
 
   {#if infoOpen && infoTile}
@@ -1101,7 +1160,7 @@
       <div class="catlist">
         {#each POWER as p, i}
           <button type="button" class="crow" class:focused={i === powerFocus} onmouseenter={() => (powerFocus = i)} onclick={() => { powerFocus = i; powerActivate(); }}>
-            <span class="cicon" style="background:#22304a">{p.icon}</span>
+            <span class="cicon" style="background:#22304a"><Icon name={p.icon} /></span>
             <span class="cname">{p.key === "exit" && inSession ? "Log out" : p.label}</span>
           </button>
         {/each}
@@ -1155,7 +1214,10 @@
   {#if status}<div class="toast">{status}</div>{/if}
   {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
-  <footer><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"} · {lastInput} · <b>← →</b> category · <b>↑ ↓</b> items · <b>Enter/✕</b> launch · <b>□/F</b> favorite · <b>△/A</b> add · <b>/ Select</b> search · <b>i/R1</b> info · <b>Start/H</b> home · <b>P</b> settings</footer>
+  <footer>
+    <span class="fdiag"><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"}</span>
+    <span class="fhints"><b>Enter/✕</b> select · <b>Esc/◯</b> back · <button class="fhelp" onclick={() => { holdStop(); helpOpen = true; }}><b>?</b> help</button></span>
+  </footer>
 </main>
 
 <style>
@@ -1210,6 +1272,11 @@
   .xitem.focused { opacity: 1; transform: translateX(14px) scale(1.2); transform-origin: left center; }
   .xitem.editing { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .xthumb { width: calc(3.1rem * var(--scale)); height: calc(3.1rem * var(--scale)); border-radius: 10px; flex: 0 0 auto; overflow: hidden; display: grid; place-items: center; background: #1a2233; box-shadow: 0 4px 14px #0007; }
+  /* Settings section headers: one row slot (the column transform positions by focus × --ih),
+     label aligned with row names via an invisible thumb-width spacer. */
+  .xthumb.hollow { background: none; box-shadow: none; }
+  .xitem.xshead { opacity: 1; cursor: default; align-items: flex-end; padding-bottom: 6px; }
+  .xsheadlbl { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
   .xthumb img { width: 100%; height: 100%; object-fit: cover; }
   .xthumb img.appicon { object-fit: contain; padding: 18%; box-sizing: border-box; }
   .xthumb .xemoji { font-size: calc(1.5rem * var(--scale)); }
@@ -1260,8 +1327,14 @@
   /* wizard styles live in $lib/Wizard.svelte; .wlead stays — the confirm modal uses it too */
   .wlead { margin: 0; color: #aab6c9; font-size: clamp(15px, 1.7vw, 21px); max-width: 34em; line-height: 1.5; }
 
-  footer { padding: 7px 2.4vw; color: #8a96ab; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
+  footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 7px 2.4vw; color: #8a96ab; font-size: clamp(10px, 0.95vw, 13px); border-top: 1px solid #141d2e44; background: #05070b66; }
   footer b { color: #93a0b6; font-weight: 600; }
+  .fdiag { opacity: 0.75; }
+  .fhints { white-space: nowrap; }
+  .fhelp { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+  .fhelp:hover b, .fhelp:hover { color: var(--accent); }
+  .fhelp:focus { outline: none; }
+  .fhelp:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
   .fpsbtn:hover { color: var(--accent); }
 

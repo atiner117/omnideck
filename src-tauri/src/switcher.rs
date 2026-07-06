@@ -33,7 +33,7 @@ pub fn toggle() -> Option<&'static str> {
     // Session-only, enforced at the chokepoint for every caller (UI command, Guide press,
     // hotkey): on a desktop, unmapping would hide the app's window from the real WM, which
     // has its own idea of window management. (OMNIDECK_FORCE_HOTKEY tests on desktop X11.)
-    if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none()
+    if !crate::session::in_session()
         && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none()
     {
         return None;
@@ -72,20 +72,20 @@ pub fn toggle() -> Option<&'static str> {
         if !failed.is_empty() {
             tracing::warn!("switcher: {} window(s) resisted unmap", failed.len());
         }
-        if let Ok(mut hidden) = HIDDEN.lock() {
-            // APPEND (don't overwrite): an app launched while another was hidden must not
-            // orphan the first one's windows — the next show brings the whole set back.
-            for win in visible {
-                if !hidden.contains(&win) && !failed.contains(&win) {
-                    hidden.push(win);
-                }
+        let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+        // APPEND (don't overwrite): an app launched while another was hidden must not
+        // orphan the first one's windows — the next show brings the whole set back.
+        for win in visible {
+            if !hidden.contains(&win) && !failed.contains(&win) {
+                hidden.push(win);
             }
         }
         return Some("hidden — OmniDeck focused");
     }
 
     // Nothing visible: re-show the set we hid (skip windows that died while hidden).
-    let hidden: Vec<Window> = HIDDEN.lock().map(|mut h| std::mem::take(&mut *h)).unwrap_or_default();
+    let hidden: Vec<Window> =
+        std::mem::take(&mut *crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN"));
     if hidden.is_empty() {
         return None;
     }
@@ -94,9 +94,7 @@ pub fn toggle() -> Option<&'static str> {
         // Put the strays back so the next toggle retries instead of stranding the app
         // invisible with an empty HIDDEN list (Guide would then do nothing forever).
         tracing::warn!("switcher: {} window(s) did not remap — kept for retry", failed.len());
-        if let Ok(mut h) = HIDDEN.lock() {
-            h.extend(failed);
-        }
+        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN").extend(failed);
     }
     Some("re-shown — app focused")
 }
