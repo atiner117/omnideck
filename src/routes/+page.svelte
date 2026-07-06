@@ -8,6 +8,8 @@
   import HelpModal from "$lib/HelpModal.svelte";
   import Icon from "$lib/Icon.svelte";
   import Waves from "$lib/Waves.svelte";
+  import MediaModal, { type MediaRow } from "$lib/MediaModal.svelte";
+  import type { MediaItem } from "$lib/backend";
   import SearchModal from "$lib/SearchModal.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
@@ -282,11 +284,17 @@
     // interleave apps first (most recently launched) then games, capped
     return [...recentAppTiles, ...recentGames].slice(0, n);
   });
+  // Synthetic first tile in Movies & TV when a media server is configured — opens the
+  // in-app library browser instead of exec'ing anything (intercepted in launchTile).
+  const MEDIA_TILE: Tile = {
+    kind: "app", id: "media-library", cat: "video",
+    app: { id: "media-library", name: "Media Library", icon: "🎞️", exec: [], accent: "#7b5cff", category: "video" },
+  };
   let items = $derived.by<Tile[]>(() => {
     switch (catId) {
       case "dashboard": return [...allTiles.filter((t) => favorites.includes(t.id)), ...recentTiles];
       case "games": return allTiles.filter((t) => t.cat === "games");
-      case "video": return appTiles.filter((t) => t.cat === "video");
+      case "video": return [...(mediaAvail ? [MEDIA_TILE] : []), ...appTiles.filter((t) => t.cat === "video")];
       case "music": return appTiles.filter((t) => t.cat === "music");
       case "apps": return appTiles.filter((t) => t.cat === "apps");
       default: return [];
@@ -530,7 +538,89 @@
     const t = items[focus];
     if (t) { sfxEnter(); launchTile(t); }
   }
+  // ---- media library (Jellyfin browse/play — MediaModal) ----
+  let mediaAvail = $state(false);
+  let mediaOpen = $state(false);
+  let mediaLoading = $state(false);
+  let mediaStack = $state<{ title: string; rows: MediaRow[] }[]>([]);
+  let mediaFocus = $state(0);
+  let mediaPosters = $state<Record<string, string>>({});
+  const mediaView = $derived(mediaStack[mediaStack.length - 1]);
+  function mediaRow(i: MediaItem, group?: string): MediaRow {
+    const browse = ["Series", "Season", "Folder", "BoxSet", "CollectionFolder"].includes(i.kind);
+    const pct = i.played_pct ? `${Math.round(i.played_pct)}% · ` : "";
+    const mins = i.runtime_mins ? `${i.runtime_mins} min` : i.kind.toLowerCase();
+    const sub = i.series ? `${pct}${i.series}` : `${pct}${mins}`;
+    return { id: i.id, name: i.name, sub, group, browse };
+  }
+  async function openMedia() {
+    holdStop();
+    mediaOpen = true;
+    mediaLoading = true;
+    mediaStack = [];
+    mediaFocus = 0;
+    try {
+      const s = await api.mediaSections();
+      // An item can be in BOTH resume and latest — drop the duplicate (also: a keyed
+      // {#each} throws on duplicate keys, which silently blanks the whole list).
+      const seen = new Set(s.resume.map((i) => i.id));
+      mediaStack = [{
+        title: s.server_name,
+        rows: [
+          ...s.resume.map((i) => mediaRow(i, "Continue watching")),
+          ...s.latest.filter((i) => !seen.has(i.id)).map((i) => mediaRow(i, "Latest")),
+          ...s.libraries.map((l) => ({ id: l.id, name: l.name, sub: l.kind, group: "Libraries", browse: true })),
+        ],
+      }];
+    } catch (e) { reportError("Media library", e); mediaOpen = false; }
+    mediaLoading = false;
+  }
+  async function mediaActivate() {
+    const r = mediaView?.rows[mediaFocus];
+    if (!r || mediaLoading) return;
+    if (r.browse) {
+      mediaLoading = true;
+      try {
+        const items = await api.mediaBrowse(r.id);
+        mediaStack = [...mediaStack, { title: r.name, rows: items.map((i) => mediaRow(i)) }];
+        mediaFocus = 0;
+      } catch (e) { reportError("Media library", e); }
+      mediaLoading = false;
+    } else {
+      mediaOpen = false;
+      status = `▶ ${r.name}…`;
+      const key = `media-${r.id}`;
+      api.mediaPlay(r.id, r.name)
+        .then(() => { nowList = [{ id: key, kind: "app", name: r.name, category: "video" }, ...nowList.filter((e) => e.id !== key)].slice(0, 3); })
+        .catch((e) => reportError("Playback failed", e));
+      later(() => (status = ""), 3500);
+    }
+  }
+  function mediaBack() {
+    if (mediaStack.length > 1) { mediaStack = mediaStack.slice(0, -1); mediaFocus = 0; }
+    else mediaOpen = false;
+  }
+  function mediaMove(d: number) {
+    const n = mediaView?.rows.length ?? 0;
+    if (!n) return;
+    mediaFocus = clamp(mediaFocus + d, 0, n - 1);
+    queueMicrotask(() => document.querySelector(`[data-med="${mediaFocus}"]`)?.scrollIntoView({ block: "nearest" }));
+  }
+  // Posters for the rows around the focus (windowed like the game rail's art loading).
+  $effect(() => {
+    if (!mediaOpen || !mediaView) return;
+    const win = mediaView.rows.slice(Math.max(0, mediaFocus - 4), mediaFocus + 14);
+    for (const r of win) {
+      if (mediaPosters[r.id] !== undefined) continue;
+      mediaPosters[r.id] = ""; // inflight marker (renders the fallback glyph meanwhile)
+      api.mediaPoster(r.id)
+        .then((p) => { if (p) mediaPosters = { ...mediaPosters, [r.id]: artUrl(p) }; })
+        .catch(() => {});
+    }
+  });
+
   async function launchTile(t: Tile) {
+    if (t.kind === "app" && t.app.id === "media-library") { openMedia(); return; }
     const name = t.kind === "game" ? t.game.name : t.app.name;
     const id = t.id; // tile id doubles as the launch / now-playing correlation key
     try {
@@ -734,7 +824,7 @@
   // Single source of truth: is any modal/overlay open? Gates base navigation and stops
   // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
   const anyModal = $derived(
-    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen,
+    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
   );
 
   function onKey(e: KeyboardEvent) {
@@ -780,6 +870,13 @@
       else if (e.key === "Escape") powerOpen = false;
       return;
     }
+    if (mediaOpen) {
+      if (e.key === "ArrowUp" && navGate()) mediaMove(-1);
+      else if (e.key === "ArrowDown" && navGate()) mediaMove(1);
+      else if (e.key === "Enter") mediaActivate();
+      else if (e.key === "Escape" || e.key === "Backspace") mediaBack();
+      return;
+    }
     if (e.key === "/" && !searchOpen && !catalogOpen) { e.preventDefault(); openSearch(); return; }
     if (searchOpen) {
       if (e.key === "ArrowUp") searchMove(-1);
@@ -818,6 +915,7 @@
   onMount(() => {
     window.addEventListener("keydown", onKey);
     api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
+    api.mediaAvailable().then((v) => (mediaAvail = v)).catch(() => {}); // adds the Media Library tile
     api.inGamescopeSession().then((v) => (inSession = v)).catch((e) => console.debug("[omnideck] inGamescopeSession probe failed", e));
     api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
     api.getConfig()
@@ -895,6 +993,13 @@
           else if (p.code === "East") powerOpen = false;
           return;
         }
+        if (mediaOpen) {
+          if (p.code === "DPadUp") holdStart(p.code, () => mediaMove(-1));
+          else if (p.code === "DPadDown") holdStart(p.code, () => mediaMove(1));
+          else if (p.code === "South") mediaActivate();
+          else if (p.code === "East") mediaBack();
+          return;
+        }
         if (searchOpen) {
           // D-pad drives the on-screen keyboard; bumpers move the result selection.
           if (["DPadUp", "DPadDown", "DPadLeft", "DPadRight", "South"].includes(p.code)) oskDim = false;
@@ -944,7 +1049,7 @@
         if (p.code === "LeftStickY") {
           // In the list modals the stick drives the row selection (the D-pad keeps its
           // modal-specific job, e.g. the OSK in search). Other overlays swallow the stick.
-          const rowMove = powerOpen ? powerMove : searchOpen ? searchMove : catalogOpen ? catMove : null;
+          const rowMove = powerOpen ? powerMove : searchOpen ? searchMove : catalogOpen ? catMove : mediaOpen ? mediaMove : null;
           if (anyModal && !rowMove) { holdStop(); return; }
           const fn = rowMove ?? moveItem;
           if (heldCode !== code) holdStart(code, () => fn(dir));
@@ -1122,6 +1227,20 @@
 
   {#if helpOpen}
     <HelpModal {inSession} onclose={() => (helpOpen = false)} />
+  {/if}
+
+  {#if mediaOpen}
+    <MediaModal
+      title={mediaView?.title ?? "Media"}
+      rows={mediaView?.rows ?? []}
+      focus={mediaFocus}
+      posters={mediaPosters}
+      loading={mediaLoading}
+      depth={mediaStack.length}
+      onfocus={(i) => (mediaFocus = i)}
+      onactivate={mediaActivate}
+      onclose={() => (mediaOpen = false)}
+    />
   {/if}
 
   {#if infoOpen && infoTile}
