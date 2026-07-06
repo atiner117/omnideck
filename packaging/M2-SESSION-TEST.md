@@ -37,6 +37,13 @@ Steam the first time (slow) and *may* not stamp the window. For a clean test, ei
 - Log out → at SDDM, pick the **"OmniDeck"** session → log in.
 
 ## 4. What to observe (report back each)
+0. **Display mode**: don't trust the footer fps meter for this — WebKitGTK paces the UI at
+   ~60 fps under the default software compositing regardless of the panel (spikes of
+   100/240 are frame-timing noise). The ground truth is one log line:
+   `grep "session display mode" ~/.local/state/omnideck/omnideck.$(date +%F).log`
+   (and gamescope's own view in `~/.local/state/omnideck/gamescope-session.log`).
+   To let the UI itself animate above 60, try `export OMNIDECK_GPU_COMPOSITING=1` in
+   `~/.config/omnideck/session.conf` — revert if the screen comes up black.
 1. **Does the OmniDeck UI appear, or BLACK SCREEN?**
    - In **plain** gamescope mode a black screen is almost always a **GPU/render** issue, *not*
      the atom (the atom drives focus-*return* after a game exits, not first paint). See §6.

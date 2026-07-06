@@ -12,7 +12,8 @@
 #   4. kbd-close   Ctrl+Alt+End closes it              (watchdog pgid kill)
 #   5. pad-hide    Guide short-press hides it          (uinput virtual pad → gilrs)
 #   6. pad-show    Guide short-press again shows it
-#   7. pad-close   Guide hold >= 800 ms closes it
+#   7. pad-close   Guide hold closes it AT the 800 ms threshold, while still held
+#   8. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
 #
 # Still bare-metal only: display-mode/165 Hz (real EDID), real Steam launch + focus return
 # (STEAM_GAME atom), suspend, SDDM login. Everything else regresses HERE first.
@@ -71,7 +72,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "── nested gamescope session (1280x720 window will appear) ──"
-OMNIDECK_TEST_CONTROL="$FIFO" gamescope -W 1280 -H 720 --xwayland-count 1 \
+# gamepad=debug exposes the normalized axis values in the log for the stick check.
+OMNIDECK_TEST_CONTROL="$FIFO" RUST_LOG="info,omnideck_lib::gamepad=debug" \
+  gamescope -W 1280 -H 720 --xwayland-count 1 \
   -- "$BIN" >"$GSLOG" 2>&1 &
 GS_PID=$!
 
@@ -153,8 +156,23 @@ if [ -w /dev/uinput ]; then
   if stub_launch; then
     toggle_expect "$PAD guide-short" hidden && ok "pad-hide: Guide short-press hid the app" || bad "pad-hide: app still visible"
     toggle_expect "$PAD guide-short" shown  && ok "pad-show: Guide short-press brought it back" || bad "pad-show: app did not remap"
-    eval "$PAD guide-hold 1200"
-    if wait_for 8 "! stub_alive"; then ok "pad-close: Guide hold closed the app"; else bad "pad-close: process still running"; stub_kill; fi
+    # Hold long (3 s): the close must fire AT the 800 ms threshold — i.e. while the button
+    # is still down — so the stub dies while the injector process is still holding.
+    eval "$PAD guide-hold 3000" & PAD_PID=$!
+    if wait_for 6 "! stub_alive" && kill -0 "$PAD_PID" 2>/dev/null; then
+      ok "pad-close: Guide hold closed the app at the threshold (while held)"
+    else
+      bad "pad-close: app survived the hold, or it only closed after release"; stub_kill
+    fi
+    wait "$PAD_PID" 2>/dev/null
+    # Stick sign convention end to end: raw ABS_Y min (= physically up) must reach the app
+    # as gilrs LeftStickY +1 — the value the UI (negating once) turns into "move up".
+    eval "$PAD stick-up"
+    if wait_for 3 "grep -qE 'axis LeftStickY = (0\.[89][0-9]?|1\.0*)' '$GSLOG'"; then
+      ok "stick: up arrives as LeftStickY +1 (gilrs convention)"
+    else
+      bad "stick: LeftStickY +1 never seen in the log — sign convention broken"
+    fi
   else
     bad "pad: stub app never appeared on relaunch"
   fi

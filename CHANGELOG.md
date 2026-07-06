@@ -55,6 +55,13 @@ All notable changes to OmniDeck are documented here. Format follows
 - **Config error surfacing**: a `config.toml` that fails to parse now shows a toast with
   the parse error ("using defaults until fixed") instead of silently reverting — and the
   app **refuses to overwrite** the broken file until it's fixed.
+- **Session display-mode ground truth**: at session startup the app logs the mode
+  gamescope actually set (via its Xwayland RandR) — `session display mode: 2560x1440 @
+  165 Hz` — because the UI fps meter cannot prove it: WebKitGTK's software-compositing
+  frame clock paces rAF at ~60 regardless of the panel (the meter's 100/240 "highs" are
+  burst-frame noise). The generated session launcher also keeps gamescope's own output in
+  `$XDG_STATE_HOME/omnideck/gamescope-session.log` (one previous session retained);
+  re-run `install-session.sh` to pick that up.
 - **Automated session pre-flight** (`packaging/test-session.sh`): boots OmniDeck in a
   *nested* gamescope on the desktop and drives the real input paths end to end — first
   paint, `Ctrl+Alt+Home/End` chords (X grabs), and the gamepad Guide short-press/hold via
@@ -100,6 +107,21 @@ All notable changes to OmniDeck are documented here. Format follows
   caught by the new supply-chain gate on its first CI run.
 
 ### Fixed
+- **Left-stick Y was inverted** (M2, DualShock 4): gilrs's convention is positive Y =
+  stick up; the UI consumed it unnegated, so up moved down. Now negated exactly once, and
+  the harness asserts the convention end to end through a virtual pad (raw `ABS_Y` min →
+  `LeftStickY +1` → focus up).
+- **The stick now navigates the search / add-apps / power dialogs** (rows), instead of
+  being swallowed by every modal; the D-pad keeps its modal-specific role (the on-screen
+  keyboard in search). Bumpers still page the search results.
+- **Guide hold closes at the 800 ms threshold — while the button is still down** —
+  instead of waiting for release (release-time close felt laggy and unconfirmed on
+  hardware). A release already in the event queue still wins, so a ~790 ms press can't
+  misfire as a hold.
+- **The Jellyfin tile no longer launches `jellyfin-mpv-shim`** (a background cast target
+  with no UI — the tile appeared to do nothing). It now opens the desktop client when
+  installed, else the server's web client as a PWA, reading the server address from the
+  shim's own pairing config.
 - **App switcher hide/show is now verified, not fire-and-forget**: map/unmap of a
   launched app's windows goes through gamescope's compositor asynchronously, and a
   request landing while it digests the previous transition could be swallowed — stranding

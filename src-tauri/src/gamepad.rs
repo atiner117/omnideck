@@ -43,10 +43,13 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
 
     // Guide/Home button, console-style: SHORT press switches between OmniDeck and the
     // launched app (it keeps running — music keeps playing); LONG hold (>= 800 ms) closes
-    // it. Decided on release, so we time the press. gilrs reads evdev directly, so this
-    // works even while the launched app holds window focus.
+    // it. The close fires the moment the hold crosses the threshold — while the button is
+    // still down, like a console power chord — not at release (M2 feedback: release-time
+    // close feels laggy and unconfirmed). The short-press switch still decides at release
+    // (that's the only way to know it STAYED short). gilrs reads evdev directly, so all of
+    // this works even while the launched app holds window focus.
     const GUIDE_HOLD_CLOSE: std::time::Duration = std::time::Duration::from_millis(800);
-    let mut guide_down: Option<std::time::Instant> = None;
+    let mut guide_down: Option<std::time::Instant> = None; // Some = held, hold not yet fired
 
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
@@ -54,18 +57,15 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
             match &event {
                 gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) => {
                     guide_down = Some(std::time::Instant::now());
-                    continue; // swallow; acted on at release
+                    continue; // swallow; acted on at threshold (close) or release (switch)
                 }
                 gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
-                    let long = guide_down.take().is_some_and(|t| t.elapsed() >= GUIDE_HOLD_CLOSE);
-                    if long {
-                        if crate::watchdog::return_home() {
-                            tracing::info!("guide (hold): closed the current app");
-                            let _ = handle.emit("app-closed", ());
-                        }
-                    } else if let Some(what) = crate::switcher::toggle() {
-                        tracing::info!("guide: app {what}");
-                    } // nothing launched — ignore quietly
+                    // None here means the hold already fired (or a stray release) — ignore.
+                    if guide_down.take().is_some() {
+                        if let Some(what) = crate::switcher::toggle() {
+                            tracing::info!("guide: app {what}");
+                        } // nothing launched — ignore quietly
+                    }
                     continue; // swallow; never forward Guide as a UI event
                 }
                 _ => {}
@@ -89,6 +89,9 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     ("button_changed".to_string(), format!("{b:?}"), v)
                 }
                 gilrs::EventType::AxisChanged(a, v, _) => {
+                    // debug-level so RUST_LOG can expose the normalized sign convention
+                    // (gilrs: +Y = up) when chasing per-controller inversion reports.
+                    tracing::debug!("axis {a:?} = {v:.2}");
                     ("axis_changed".to_string(), format!("{a:?}"), v)
                 }
                 gilrs::EventType::Connected => ("connected".to_string(), String::new(), 0.0),
@@ -107,6 +110,17 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     name,
                 },
             );
+        }
+        // Threshold check AFTER draining the queue (the loop wakes every 8 ms): a release
+        // already sitting in the queue must win — otherwise a ~790 ms press whose release
+        // we haven't read yet would misfire as a hold. Fire the close mid-hold and consume
+        // the press so the eventual release is a no-op.
+        if guide_down.is_some_and(|t| t.elapsed() >= GUIDE_HOLD_CLOSE) {
+            guide_down = None;
+            if crate::watchdog::return_home() {
+                tracing::info!("guide (hold): closed the current app");
+                let _ = handle.emit("app-closed", ());
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
     }

@@ -888,14 +888,26 @@
         if (p.code === heldCode) holdStop();
       } else if (p.kind === "axis_changed" && (p.code === "LeftStickX" || p.code === "LeftStickY")) {
         // One deadzone (no 0.3–0.6 dead band) + the same hold-repeat the D-pad uses. Track the
-        // active axis:direction so a held stick auto-repeats once, and recentering or any modal
-        // opening stops it — fixes drift-stuck nav and phantom nav behind a modal.
-        if (anyModal) { holdStop(); return; }
+        // active axis:direction so a held stick auto-repeats once, and recentering or an
+        // unhandled overlay opening stops it — fixes drift-stuck nav and phantom nav.
         const DZ = 0.6;
-        const dir = p.value > DZ ? 1 : p.value < -DZ ? -1 : 0;
+        const raw = p.value > DZ ? 1 : p.value < -DZ ? -1 : 0;
+        // gilrs convention: positive Y = stick pushed UP (M2 finding: a DS4 navigated
+        // upside-down because this was consumed unnegated). List/rail "down" is +1.
+        const dir = p.code === "LeftStickY" ? -raw : raw;
         const code = `${p.code}:${dir}`;
-        if (dir === 0) { if (heldCode.startsWith(p.code)) holdStop(); }
-        else if (heldCode !== code) holdStart(code, () => { if (p.code === "LeftStickX") horiz(dir); else moveItem(dir); });
+        if (dir === 0) { if (heldCode.startsWith(p.code)) holdStop(); return; }
+        if (p.code === "LeftStickY") {
+          // In the list modals the stick drives the row selection (the D-pad keeps its
+          // modal-specific job, e.g. the OSK in search). Other overlays swallow the stick.
+          const rowMove = powerOpen ? powerMove : searchOpen ? searchMove : catalogOpen ? catMove : null;
+          if (anyModal && !rowMove) { holdStop(); return; }
+          const fn = rowMove ?? moveItem;
+          if (heldCode !== code) holdStart(code, () => fn(dir));
+        } else {
+          if (anyModal) { holdStop(); return; } // stick X has no modal meaning (OSK is D-pad)
+          if (heldCode !== code) holdStart(code, () => horiz(dir));
+        }
       }
     }).then((u) => off.push(u));
 
