@@ -6,6 +6,8 @@
 //
 //   cargo run --example virtual-pad -- guide-short        # press+release (< hold threshold)
 //   cargo run --example virtual-pad -- guide-hold [ms]    # hold BTN_MODE (default 1000 ms)
+//   cargo run --example virtual-pad -- stick-up [ms]      # left stick full up (default 300 ms)
+//   cargo run --example virtual-pad -- stick-down [ms]    # left stick full down
 //
 // Needs write access to /dev/uinput (root:input on Arch — be in the `input` group).
 use evdev::uinput::VirtualDeviceBuilder;
@@ -15,12 +17,13 @@ use std::time::Duration;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let action = args.next().unwrap_or_default();
-    let hold_ms: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(1000);
+    let arg_ms: Option<u64> = args.next().and_then(|s| s.parse().ok());
     let press_ms = match action.as_str() {
         "guide-short" => 120,
-        "guide-hold" => hold_ms,
+        "guide-hold" => arg_ms.unwrap_or(1000),
+        "stick-up" | "stick-down" => arg_ms.unwrap_or(300),
         _ => {
-            eprintln!("usage: virtual-pad guide-short | guide-hold [ms]");
+            eprintln!("usage: virtual-pad guide-short | guide-hold [ms] | stick-up [ms] | stick-down [ms]");
             std::process::exit(2);
         }
     };
@@ -57,12 +60,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Give udev + gilrs's hotplug monitor time to enumerate the new pad before pressing.
     std::thread::sleep(Duration::from_millis(1500));
 
-    let key = evdev::EventType::KEY;
-    dev.emit(&[InputEvent::new(key, Key::BTN_MODE.code(), 1)])?;
-    eprintln!("virtual-pad: BTN_MODE down ({press_ms} ms)");
-    std::thread::sleep(Duration::from_millis(press_ms));
-    dev.emit(&[InputEvent::new(key, Key::BTN_MODE.code(), 0)])?;
-    eprintln!("virtual-pad: BTN_MODE up");
+    if action.starts_with("stick-") {
+        // evdev Y axis: NEGATIVE raw = stick pushed up (gilrs normalizes to LeftStickY +1).
+        let raw: i32 = if action == "stick-up" { -32768 } else { 32767 };
+        let abs = evdev::EventType::ABSOLUTE;
+        dev.emit(&[InputEvent::new(abs, AbsoluteAxisType::ABS_Y.0, raw)])?;
+        eprintln!("virtual-pad: ABS_Y {raw} ({press_ms} ms)");
+        std::thread::sleep(Duration::from_millis(press_ms));
+        dev.emit(&[InputEvent::new(abs, AbsoluteAxisType::ABS_Y.0, 0)])?;
+        eprintln!("virtual-pad: ABS_Y recentered");
+    } else {
+        let key = evdev::EventType::KEY;
+        dev.emit(&[InputEvent::new(key, Key::BTN_MODE.code(), 1)])?;
+        eprintln!("virtual-pad: BTN_MODE down ({press_ms} ms)");
+        std::thread::sleep(Duration::from_millis(press_ms));
+        dev.emit(&[InputEvent::new(key, Key::BTN_MODE.code(), 0)])?;
+        eprintln!("virtual-pad: BTN_MODE up");
+    }
 
     // Keep the device alive long enough for the reader to drain the release event.
     std::thread::sleep(Duration::from_millis(500));

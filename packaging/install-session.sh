@@ -56,9 +56,14 @@ sudo tee "$LAUNCHER" >/dev/null <<EOF
 GAMESCOPE_FLAGS=""
 CONF="\${XDG_CONFIG_HOME:-\$HOME/.config}/omnideck/session.conf"
 [ -r "\$CONF" ] && . "\$CONF"
+# Keep gamescope's own output (mode selection, VRR, Xwayland) — SDDM's session log is
+# truncated per login, which left "did -r 165 apply?" unanswerable after the fact.
+GSLOG="\${XDG_STATE_HOME:-\$HOME/.local/state}/omnideck/gamescope-session.log"
+mkdir -p "\$(dirname "\$GSLOG")"
+[ -f "\$GSLOG" ] && mv -f "\$GSLOG" "\$GSLOG.old"   # keep one previous session
 # shellcheck disable=SC2086  # word-splitting GAMESCOPE_FLAGS is the point
 exec gamescope -f --force-windows-fullscreen --adaptive-sync \\
-  --xwayland-count 1 --hide-cursor-delay 3000 \$GAMESCOPE_FLAGS -- "$BIN"
+  --xwayland-count 1 --hide-cursor-delay 3000 \$GAMESCOPE_FLAGS -- "$BIN" > "\$GSLOG" 2>&1
 EOF
 sudo chmod +x "$LAUNCHER"
 
