@@ -23,8 +23,10 @@ mod icons;
 mod library;
 mod logging;
 mod mpris;
+mod session;
 mod steamgriddb;
 mod switcher;
+mod sync;
 mod testhook;
 mod watchdog;
 
@@ -91,7 +93,7 @@ pub fn run() {
             // toplevel gets scaled/letterboxed by gamescope, so request real fullscreen
             // and let the webview render at the monitor's native resolution. On the
             // desktop we stay windowed (this only triggers inside gamescope).
-            if std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() {
+            if crate::session::in_session() {
                 use tauri::Manager;
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.set_fullscreen(true);

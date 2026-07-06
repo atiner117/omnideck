@@ -3,7 +3,7 @@
 // in the real brand icon at runtime from DuckDuckGo's favicon service (privacy-friendly,
 // normalized PNGs). Results are cached on disk so each domain is fetched at most once.
 // We never bundle trademarked logos — icons are fetched on the user's machine on demand.
-use crate::http::is_blocked_host;
+use crate::http::is_blocked_host_resolved;
 use std::path::{Path, PathBuf};
 
 fn cache_dir() -> Option<PathBuf> {
@@ -45,8 +45,10 @@ fn root_domain(host: &str) -> Option<String> {
 /// real image. DuckDuckGo sometimes returns junk for a subdomain, so we also try the root.
 pub async fn favicon(url: &str) -> Option<String> {
     let host = domain_of(url)?;
-    if is_blocked_host(&host) {
-        return None; // don't probe internal/loopback services from a crafted tile URL (SSRF)
+    if is_blocked_host_resolved(&host) {
+        // Don't probe internal/loopback services from a crafted tile URL (SSRF) — including
+        // a public-looking domain that RESOLVES to an internal address (DNS rebinding).
+        return None;
     }
     let dir = cache_dir()?;
     let _ = std::fs::create_dir_all(&dir);
@@ -164,7 +166,8 @@ fn to_data_url(p: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{domain_of, is_blocked_host};
+    use super::domain_of;
+    use crate::http::is_blocked_host;
     #[test]
     fn extracts_domain() {
         assert_eq!(domain_of("--app=https://www.netflix.com").as_deref(), Some("www.netflix.com"));
