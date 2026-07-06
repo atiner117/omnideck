@@ -148,20 +148,25 @@ pub async fn media_poster(id: String) -> Option<String> {
 #[tauri::command]
 pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
     let srv = crate::media_server::server().ok_or("no media server configured")?;
-    let prefer_mpv = {
-        let ms = config::load_or_create().media_server;
-        ms.kind.is_empty() || ms.prefer_mpv // adopted-pairing default: mpv
-    };
+    let ms = config::load_or_create().media_server;
+    let prefer_mpv = ms.kind.is_empty() || ms.prefer_mpv; // adopted-pairing default: mpv
     let has_mpv = apps::has_bin("mpv");
     let has_client = apps::has_bin("jellyfinmediaplayer");
     let exec: Vec<String> = if has_mpv && (prefer_mpv || !has_client) {
-        vec![
-            "mpv".into(),
-            "--hwdec=auto-safe".into(),
-            "--force-window=immediate".into(),
-            format!("--force-media-title={name}"),
-            srv.stream_url(&id),
-        ]
+        let mut exec = vec!["mpv".to_string()];
+        if ms.mpv_args.is_empty() {
+            // Bare launch: non-copy hardware decode is the fastest correct default.
+            exec.push("--hwdec=auto-safe".into());
+        } else {
+            // User-supplied config (e.g. --include of a shim profile set): its hwdec
+            // choice must rule — VapourSynth filters need auto-copy, and a CLI --hwdec
+            // here would silently override the config and disable the whole vf chain.
+            exec.extend(ms.mpv_args.iter().cloned());
+        }
+        exec.push("--force-window=immediate".into());
+        exec.push(format!("--force-media-title={name}"));
+        exec.push(srv.stream_url(&id));
+        exec
     } else if has_client {
         vec!["jellyfinmediaplayer".into()]
     } else {

@@ -18,6 +18,10 @@ All notable changes to OmniDeck are documented here. Format follows
   is adopted automatically** (server + token), so a shim user gets a working library with
   zero setup. The token never reaches the webview or the logs. `omnideck mediasrv`
   probes the whole path (sections, browse, poster, one byte of the stream) headlessly.
+  `[media_server] mpv_args` passes extra flags to the direct-play mpv (e.g. `--include=`
+  an existing jellyfin-mpv-shim profile set for VapourSynth interpolation/denoise); when
+  set, OmniDeck's own `--hwdec` default steps aside so the profile's `auto-copy`
+  (required by VapourSynth filters) isn't overridden from the command line.
 - **AUR packaging, validated in CI**: corrected `PKGBUILD` (release tarball + `b2sums`,
   full hicolor icon set, `.install` post-install hint, `StartupWMClass`, `options=(!lto)`),
   committed `.SRCINFO`, and a `packaging.yml` workflow that lints (`namcap`), checks
