@@ -11,11 +11,15 @@ one controller. Easy enough for anyone in the house, deep enough to make tinkere
 
 [![CI](https://github.com/atiner117/omnideck/actions/workflows/ci.yml/badge.svg)](https://github.com/atiner117/omnideck/actions/workflows/ci.yml)
 
-> ⚠️ **Early development.** Core works (library, launching, theming, config, power menu,
-> game exit watchdog); the full gamescope **session boot** and packaging are still being
-> validated on hardware. Not yet release-ready.
+> **v0.2.0** — session-validated on hardware: gamescope session boot, app switcher,
+> global hotkeys, Jellyfin media library with mpv direct-play, AUR packaging built in CI.
 
 </div>
+
+<p align="center">
+  <img src="docs/img/rail.png" width="49%" alt="XMB rail — Games category" />
+  <img src="docs/img/media-library.png" width="49%" alt="Jellyfin media library — Continue Watching" />
+</p>
 
 ---
 
@@ -43,8 +47,16 @@ profiles when the hardware can handle it.
   you want from an in-app **Add apps** screen.
 - 🕹️ **Controller + keyboard navigation** — XMB-style cross (category axis + item
   cascade), focus states, hold-to-repeat, plus mouse/wheel.
+- 🍿 **Jellyfin media library** — browse Continue Watching / Latest / your libraries
+  (series → seasons → episodes) inside OmniDeck and **direct-play through mpv** with
+  hardware decode; an existing `jellyfin-mpv-shim` pairing is adopted automatically
+  (zero setup), and `[media_server] mpv_args` can reuse your mpv/VapourSynth profiles.
 - 🔎 **Global search** — find games & apps instantly, with a configurable web-search
   fallback (DuckDuckGo / Google / Brave / Bing, or your own SearXNG via config).
+- 🌊 **Live wallpaper & ambient music** — PSP-style wave ribbons and a synthesized
+  ambient pad (no bundled audio), both opt-in/out in Settings.
+- ❓ **Help overlay** — the full keyboard/controller reference on `?`/F1, so the footer
+  stays clean.
 - ▶️ **Now Playing + exit watchdog** — launches a Steam game, watches Steam's running
   state, shows a "now playing" card, and detects when you quit back to the launcher.
 - ⏻ **Power menu** — Exit / Suspend / Restart / Shut down (with confirm) via `systemctl`.
