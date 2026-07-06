@@ -7,9 +7,11 @@
   import Wizard from "$lib/Wizard.svelte";
   import HelpModal from "$lib/HelpModal.svelte";
   import Icon from "$lib/Icon.svelte";
+  import Waves from "$lib/Waves.svelte";
   import SearchModal from "$lib/SearchModal.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
+  import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
   import type { Tile } from "$lib/tiles";
 
@@ -44,6 +46,7 @@
     { key: "custom", label: "Custom size", type: "num" },
     { key: "accent", label: "Accent", type: "cycle" },
     { key: "hdr-bg", label: "Background", type: "header" },
+    { key: "livewp", label: "Live wallpaper", type: "cycle" },
     { key: "bgdefault", label: "Default background", type: "cycle" },
     { key: "bgcolor", label: "Background color", type: "cycle" },
     { key: "bgimage", label: "Background image", type: "text" },
@@ -59,6 +62,8 @@
     { key: "hdr-sound", label: "Sound", type: "header" },
     { key: "sound", label: "Navigation sounds", type: "cycle" },
     { key: "soundvol", label: "Sound volume", type: "num" },
+    { key: "ambient", label: "Ambient music", type: "cycle" },
+    { key: "ambientvol", label: "Ambient volume", type: "num" },
     { key: "hdr-search", label: "Search", type: "header" },
     { key: "search", label: "Search provider", type: "cycle" },
     { key: "searchurl", label: "Search URL", type: "text" },
@@ -91,6 +96,9 @@
     if (key === "runtimes") return s.show_runtimes ? "on" : "off";
     if (key === "sound") return soundLabel();
     if (key === "soundvol") return `${Math.round((s.sound_volume ?? 0.6) * 100)}%`;
+    if (key === "livewp") return (s.live_wallpaper ?? "waves") === "waves" ? "Waves" : "Off";
+    if (key === "ambient") return s.ambient ? "on" : "off";
+    if (key === "ambientvol") return `${Math.round((s.ambient_volume ?? 0.35) * 100)}%`;
     if (key === "search") return SEARCH_MODES.find((m) => m.mode === (s.search_mode ?? "duckduckgo"))?.label ?? "DuckDuckGo";
     if (key === "searchurl") return s.search_provider || "(not set)";
     return "";
@@ -291,6 +299,7 @@
       const set = cfg?.settings; if (!set) return true;
       if (s.key === "custom") return set.ui_scale === "custom";
       if (s.key === "soundvol") return soundLabel() === "Custom";
+      if (s.key === "ambientvol") return set.ambient;
       if (s.key === "bgcolor") return (set.background_default ?? "color") === "color";
       if (s.key === "bgimage") return set.background_default === "image";
       if (s.key === "searchurl") return set.search_mode === "searxng" || set.search_mode === "custom";
@@ -447,6 +456,7 @@
     else if (key === "blur") patch.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
     else if (key === "bright") patch.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
     else if (key === "soundvol") { const v = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); patch.sound_volume = v; patch.sound = v > 0; }
+    else if (key === "ambientvol") patch.ambient_volume = round2(clamp((s.ambient_volume ?? 0.35) + dir * 0.05, 0, 1));
     patchSettings(patch);
     if (key === "soundvol") blip(620, 0.06, 0.42, "sine", true);
   }
@@ -461,6 +471,7 @@
     blur: { get: () => cfg?.settings?.bg_blur ?? 0, lo: 0, hi: 24, step: 1, int: true },
     bright: { get: () => cfg?.settings?.bg_brightness ?? 0.82, lo: 0.3, hi: 1.0, step: 0.05 },
     soundvol: { get: () => cfg?.settings?.sound_volume ?? 0.6, lo: 0, hi: 1, step: 0.05 },
+    ambientvol: { get: () => cfg?.settings?.ambient_volume ?? 0.35, lo: 0, hi: 1, step: 0.05 },
   };
   function setNum(key: string, raw: number) {
     const m = NUM_META[key]; if (!cfg || !m || Number.isNaN(raw)) return;
@@ -471,6 +482,7 @@
     else if (key === "blur") patch.bg_blur = v;
     else if (key === "bright") patch.bg_brightness = v;
     else if (key === "soundvol") { patch.sound_volume = v; patch.sound = v > 0; }
+    else if (key === "ambientvol") patch.ambient_volume = v;
     patchSettings(patch);
   }
   // text settings (currently just the custom background image path)
@@ -570,6 +582,8 @@
       patch.sound = next.on; patch.sound_volume = next.vol;
       if (next.on) blip(620, 0.06, 0.42, "sine", true);
     }
+    else if (key === "livewp") patch.live_wallpaper = (s.live_wallpaper ?? "waves") === "waves" ? "off" : "waves";
+    else if (key === "ambient") patch.ambient = !s.ambient;
     else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); patch.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
     else if (key === "gamebg") patch.game_backgrounds = !s.game_backgrounds;
     else if (key === "appbg") patch.app_backgrounds = !s.app_backgrounds;
@@ -948,6 +962,7 @@
       clearTimeout(bgTimer);
       pendingTimers.forEach(clearTimeout);
       holdStop();
+      ambientStop();
       off.forEach((u) => u());
     };
   });
@@ -968,6 +983,10 @@
       api.getArt(path).then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; }).catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
     } else { bgImageUrl = ""; }
   });
+  // Ambient pad follows its settings; idempotent, so this is safe to run on every change.
+  $effect(() => {
+    ambientApply(cfg?.settings?.ambient ?? false, cfg?.settings?.ambient_volume ?? 0.35);
+  });
   // fetch the current web-search provider's favicon (shown on the search "web" row)
   let provSeq = 0;
   $effect(() => {
@@ -982,6 +1001,7 @@
     style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`
       : overlay?.kind === "wash" ? `background-image:radial-gradient(120% 90% at 75% 25%, rgba(${overlay.color},0.55) 0%, rgba(${overlay.color},0.18) 38%, transparent 72%)`
       : ""}></div>
+  {#if cfg?.settings?.live_wallpaper === "waves"}<Waves {accent} />{/if}
   <div class="xbg-fade" class:dim={!hasImagery}></div>
 
   <header>
