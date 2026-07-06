@@ -22,6 +22,7 @@ mod http;
 mod icons;
 mod library;
 mod logging;
+mod media_server;
 mod mpris;
 mod session;
 mod steamgriddb;
@@ -75,7 +76,12 @@ pub fn run() {
             commands::switch_app,
             commands::in_gamescope_session,
             commands::power_action,
-            commands::app_icon
+            commands::app_icon,
+            commands::media_available,
+            commands::media_sections,
+            commands::media_browse,
+            commands::media_poster,
+            commands::media_play
         ])
         .setup(|app| {
             let handle = app.handle().clone();

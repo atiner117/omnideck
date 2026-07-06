@@ -7,6 +7,17 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **Jellyfin media library — "play your own 4K media", delivered** (Appendix B of the
+  2026-07 review): a **Media Library** tile in Movies & TV opens an in-app browser —
+  Continue Watching (with resume %), Latest, and your libraries, drilling
+  series → seasons → episodes — and plays through **mpv with a direct stream**
+  (`--hwdec=auto-safe`, no transcode, no browser), wired into the existing watchdog so
+  Guide-close and Now Playing just work. Posters are fetched lazily, sniffed, cached
+  (100 MiB, oldest-evicted) and served over the rooted `omnideck://` protocol. Configure
+  via `[media_server]` in config.toml — or don't: an existing **jellyfin-mpv-shim pairing
+  is adopted automatically** (server + token), so a shim user gets a working library with
+  zero setup. The token never reaches the webview or the logs. `omnideck mediasrv`
+  probes the whole path (sections, browse, poster, one byte of the stream) headlessly.
 - **AUR packaging, validated in CI**: corrected `PKGBUILD` (release tarball + `b2sums`,
   full hicolor icon set, `.install` post-install hint, `StartupWMClass`, `options=(!lto)`),
   committed `.SRCINFO`, and a `packaging.yml` workflow that lints (`namcap`), checks

@@ -131,6 +131,10 @@ impl Settings {
 #[serde(default)]
 pub struct Config {
     pub settings: Settings,
+    /// `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
+    /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
+    #[serde(default)]
+    pub media_server: crate::media_server::MediaServerConfig,
     pub apps: Vec<apps::App>,
     /// Favorited tile ids (shown on the Home category).
     pub favorites: Vec<String>,
@@ -167,6 +171,7 @@ fn defaults() -> Config {
             onboarded: false, // a fresh install runs the onboarding wizard
             ..Default::default()
         },
+        media_server: Default::default(),
         apps: apps::list(),
         favorites: Vec::new(),
         recent_apps: Vec::new(),
@@ -210,6 +215,7 @@ pub fn load_or_create() -> Config {
             }
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
+        cfg.media_server.normalize();
         cfg.config_path = path_str;
         return cfg;
     }
