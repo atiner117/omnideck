@@ -57,9 +57,11 @@ custom set back afterwards if you prefer it. If `pgrep` shows `--hwdec=auto-safe
       says `display 2560x1440 @ 165.0 Hz`
 - [ ] **F4** (basic interpolation) → mpv stats (`i`, page 1) show the filter output
       near the panel rate (~165 fps, NOT 60 — the display-detection fix)
-- [ ] **F6** (ultra) → output ~82.5 fps; watch 15+ min: **audio stays in sync** (the
-      desync fix — ultra deliberately caps at display/2 above 100 Hz). If on LDAC
-      headphones and it drifts: pause/unpause resyncs = Bluetooth, not us
+- [ ] **F6** (ultra) → output ~82.5 fps on a 1080p source; watch 15+ min: **audio stays
+      in sync** (the desync fix — ultra caps at display/2 above 100 Hz AND a per-CPU
+      pixel-rate budget; on a **4K source** it deliberately passes through at native rate
+      — use F4 for smooth 4K). If on LDAC headphones and it drifts: pause/unpause
+      resyncs = Bluetooth, not us
 - [ ] **F1** → back to passthrough; compare feel
 - [ ] `./packaging/test-profiles.sh` → all `OK` (headless rate check of every filter)
 

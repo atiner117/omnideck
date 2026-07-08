@@ -58,8 +58,10 @@ profiles when the hardware can handle it.
   panel's real refresh rate** (read from the session's display, e.g. 165 Hz — not a
   hardcoded 60). During playback: `F1` passthrough · `F3` denoise · `F4` smooth
   (full display rate) · `F6` ultra (optical flow; deliberately targets display/2 above
-  100 Hz — full-rate optical flow starves even fast CPUs over a long movie and desyncs
-  audio). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
+  100 Hz and stays inside a per-CPU pixel-rate budget — full-rate optical flow starves
+  even fast CPUs over a long movie and desyncs audio, and a 4K source can max a modest
+  CPU even at 60 Hz, so ultra declines those rather than drift; `F4` still takes them to
+  the full display rate). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
   your own set; `omnideck mpvprofiles` renders + reports what was detected, and deleting
   the `# omnideck-generated` header line in any rendered file makes it yours to edit.
 - 🔎 **Global search** — find games & apps instantly, with a configurable web-search
