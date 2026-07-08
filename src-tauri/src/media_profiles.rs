@@ -7,7 +7,12 @@
 // driving 1440p @ 165 Hz:
 //   * BASIC interpolation (MVTools BlockFPS) targets the full display rate.
 //   * ULTRA (FlowFPS, optical flow) targets display/2 above 100 Hz — full-rate FlowFPS
-//     starves the CPU over a long movie and audio walks away from video.
+//     starves the CPU over a long movie and audio walks away from video — AND stays
+//     inside a pixel-rate budget of cpu_threads × 12 Mpx/s (src_px × target_fps): a 60 Hz
+//     display never trips the halving, but a 4K source targeting 60 measured 13.5 of 16
+//     cores on a 7800X3D with easy synthetic motion (2026-07-08 two-host bench) — real
+//     film desyncs there. Under-budget targets pass; over-budget ones are lowered, and
+//     below 2× the source rate the .vpy passes through instead.
 //   * The GPU side (upscale, tone-map, deband, present at display rate) is cheap by
 //     comparison — mpv.conf `profile=high-quality` + `vo=gpu-next` own it.
 // The display rate itself reaches the .vpy scripts at runtime via mpv's injected
@@ -86,10 +91,16 @@ fn render(template: &str, dir: &Path, tier: &Tier) -> String {
     // Floor at 30, matching the `.vpy` consumers: a rate they'd reject as "unknown" (<=30)
     // must not be baked as if it were real, or mpv paces at it while interpolation targets 60.
     let hint = tier.display.map(|(_, _, hz)| hz).filter(|hz| *hz > 30.0).unwrap_or(0.0);
+    // Ultra's sustainability budget: src_pixels × target_fps the CPU can be trusted to
+    // FlowFPS through real film. 12 Mpx/s per thread, anchored to ares' known-good
+    // (1080p→82.5 on 28t) and known-desync (1080p→165) real-world data points; 0
+    // (unknown thread count) disables the cap in the script.
+    let budget_px = tier.cpu_threads as f64 * 12_000_000.0;
     template
         .replace("{{PROFILE_DIR}}", &dir.to_string_lossy())
         .replace("{{TIER_INFO}}", &tier_info(tier))
         .replace("{{DISPLAY_FPS_HINT}}", &format!("{hint:.3}"))
+        .replace("{{ULTRA_BUDGET_PX}}", &format!("{budget_px:.0}"))
 }
 
 /// Render the profile set for this hardware into ~/.config/omnideck/mpv-profiles/,
@@ -210,6 +221,15 @@ mod tests {
             .unwrap()
             .1;
         assert!(ultra.contains("dfps / 2 if dfps > 100 else dfps"));
+        // Cap #2 (2026-07-08 two-host bench): the pixel-rate budget and its 2×-source
+        // floor — a 60 Hz display never trips the halving, but a 4K source can max the
+        // CPU anyway. Baked as threads × 12 Mpx/s (28t → 336M), 0 disables.
+        assert!(ultra.contains("w * h * target > budget"), "ultra: pixel budget dropped");
+        assert!(ultra.contains("target < 2 * src_fps"), "ultra: 2x-source floor dropped");
+        let dir = Path::new("/cfg/omnideck/mpv-profiles");
+        assert!(render(ultra, dir, &tier_165()).contains("float(\"336000000\")"));
+        let unknown_cpu = Tier { display: None, cpu_threads: 0, gpu: "x".into(), usable: true };
+        assert!(render(ultra, dir, &unknown_cpu).contains("float(\"0\")"));
         let basic = TEMPLATES
             .iter()
             .find(|(n, _)| *n == "interpolate-basic.vpy")

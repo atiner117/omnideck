@@ -11,8 +11,12 @@ All notable changes to OmniDeck are documented here. Format follows
   mpv, direct-play now auto-generates and `--include=`s a display-aware profile set under
   `~/.config/omnideck/mpv-profiles/` — GPU upscale/tone-map/deband (`high-quality` +
   `vo=gpu-next`) with F-key–switchable motion interpolation (F4 basic targets the panel's
-  full refresh rate, F6 ultra targets display/2 above 100 Hz — the empirically sustainable
-  optical-flow ceiling). The session's real mode (RandR ground truth, e.g. 2560x1440@165)
+  full refresh rate; F6 ultra targets display/2 above 100 Hz AND a per-CPU pixel-rate
+  budget of `threads × 12 Mpx/s` — both empirically anchored: full-rate optical flow
+  desyncs on a 14700K at 1080p→165, and a 4K source→60 measured 13.5 of 16 cores on a
+  7800X3D with easy synthetic motion, so ultra lowers or declines over-budget targets
+  instead of drifting; `packaging/bench-profiles.sh` reproduces the measurements on any
+  host). The session's real mode (RandR ground truth, e.g. 2560x1440@165)
   is baked into the scripts, because mpv injects `display_fps=0` at filter init and does
   not forward `--display-fps-override` into VapourSynth — this is what un-sticks
   interpolation from the 60 fps fallback on high-refresh panels. Rendered files keep a

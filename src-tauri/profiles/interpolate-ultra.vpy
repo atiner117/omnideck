@@ -35,8 +35,24 @@ if dfps > 30:
 else:
     target_num, target_den = 60, 1
 
+# Sustainability cap #2 (2026-07-08, two-host bench): FlowFPS cost scales with SOURCE
+# pixels × TARGET rate, and a 60 Hz display never trips the halving above — yet a 4K
+# source targeting 60 measured 13.5 of 16 cores on a 7800X3D with EASY synthetic motion;
+# real film costs a multiple of that and desyncs. Budget = cpu_threads × 12 Mpx/s (baked
+# by OmniDeck), anchored to ares (14700K/28t = 336 Mpx/s): its known-good 1080p→82.5
+# fits (171M), its known-desync 1080p→165 doesn't (342M). Over budget: lower the target
+# to fit. 0 = CPU thread count unknown, cap disabled.
+budget = float("{{ULTRA_BUDGET_PX}}")
+target = target_num / target_den
+if budget > 0 and w * h * target > budget:
+    target = budget / (w * h)
+    target_num, target_den = int(round(target * 1000)), 1000
+
 src_fps = clip.fps.numerator / clip.fps.denominator if clip.fps.denominator else 0
-if src_fps > 59:
+# Interpolate only when it at least DOUBLES the source rate — a capped target below that
+# buys judder, not smoothness (a 4K source on a modest CPU lands here; F4 basic still
+# offers the full display target, and native 24 looks better than starved 40).
+if src_fps > 59 or target < 2 * src_fps:
     clip.set_output()
 else:
     sup = core.mv.Super(clip, pel=2, sharp=2)
