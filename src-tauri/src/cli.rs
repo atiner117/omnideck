@@ -29,6 +29,8 @@ enum CliCommand {
     Media,
     /// Probe the configured media server (sections + first library's items)
     Mediasrv,
+    /// Render + report the auto-generated mpv profile set (VapourSynth interpolation)
+    Mpvprofiles,
 }
 
 /// Parse argv and run a headless subcommand if one was given. Returns true when a subcommand
@@ -72,6 +74,9 @@ pub fn handle() -> bool {
         }
         CliCommand::Media => {
             print!("{}", tauri::async_runtime::block_on(crate::mpris::report()));
+        }
+        CliCommand::Mpvprofiles => {
+            print!("{}", crate::media_profiles::report());
         }
         CliCommand::Mediasrv => {
             let Some(srv) = crate::media_server::server() else {

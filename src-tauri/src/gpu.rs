@@ -72,12 +72,35 @@ pub fn log_session_display_mode() {
     if !crate::session::in_session() {
         return;
     }
-    if let Err(e) = try_log_mode() {
-        tracing::warn!("display-mode probe failed (cosmetic): {e}");
+    match query_display_modes() {
+        Err(e) => tracing::warn!("display-mode probe failed (cosmetic): {e}"),
+        Ok(modes) => {
+            for (w, h, hz) in modes {
+                tracing::info!(
+                    "session display mode: {w}x{h} @ {hz:.0} Hz (gamescope Xwayland RandR)"
+                );
+            }
+        }
     }
 }
 
-fn try_log_mode() -> Result<(), Box<dyn std::error::Error>> {
+/// `(width, height, hz)` of an enabled CRTC.
+pub type DisplayMode = (u32, u32, f64);
+
+/// The session's ACTUAL output mode `(width, height, hz)` — same RandR ground truth the
+/// startup log uses, for callers that act on it (media_play's `--display-fps-override`).
+/// Session-only: on a desktop there is no gamescope Xwayland of ours to ask, and the
+/// answer would be whichever monitor X happens to call first — `None` instead.
+pub fn session_display_mode() -> Option<DisplayMode> {
+    if !crate::session::in_session() {
+        return None;
+    }
+    query_display_modes().ok()?.into_iter().next()
+}
+
+/// Every enabled CRTC's mode via gamescope's Xwayland RandR (gamescope reports its real
+/// output mode there). `hz = dot_clock / (htotal * vtotal)`.
+fn query_display_modes() -> Result<Vec<DisplayMode>, Box<dyn std::error::Error>> {
     use x11rb::connection::Connection;
     use x11rb::protocol::randr::ConnectionExt as _;
     let (conn, screen_num) = x11rb::connect(None)?;
@@ -85,6 +108,7 @@ fn try_log_mode() -> Result<(), Box<dyn std::error::Error>> {
     let res = conn.randr_get_screen_resources_current(root)?.reply()?;
     let modes: std::collections::HashMap<u32, _> =
         res.modes.iter().map(|m| (m.id, m)).collect();
+    let mut out = Vec::new();
     for &crtc in &res.crtcs {
         let info = conn.randr_get_crtc_info(crtc, res.config_timestamp)?.reply()?;
         if info.mode == 0 {
@@ -93,11 +117,8 @@ fn try_log_mode() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(m) = modes.get(&info.mode) {
             let denom = u64::from(m.htotal) * u64::from(m.vtotal);
             let hz = if denom > 0 { m.dot_clock as f64 / denom as f64 } else { 0.0 };
-            tracing::info!(
-                "session display mode: {}x{} @ {hz:.0} Hz (gamescope Xwayland RandR)",
-                m.width, m.height
-            );
+            out.push((u32::from(m.width), u32::from(m.height), hz));
         }
     }
-    Ok(())
+    Ok(out)
 }

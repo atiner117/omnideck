@@ -7,11 +7,27 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **Auto-tuned mpv playback profiles** (`media_profiles.rs`): with a VapourSynth-enabled
+  mpv, direct-play now auto-generates and `--include=`s a display-aware profile set under
+  `~/.config/omnideck/mpv-profiles/` — GPU upscale/tone-map/deband (`high-quality` +
+  `vo=gpu-next`) with F-key–switchable motion interpolation (F4 basic targets the panel's
+  full refresh rate, F6 ultra targets display/2 above 100 Hz — the empirically sustainable
+  optical-flow ceiling). The session's real mode (RandR ground truth, e.g. 2560x1440@165)
+  is baked into the scripts, because mpv injects `display_fps=0` at filter init and does
+  not forward `--display-fps-override` into VapourSynth — this is what un-sticks
+  interpolation from the 60 fps fallback on high-refresh panels. Rendered files keep a
+  `# omnideck-generated` header; strip it and OmniDeck never rewrites that file. Opt out
+  with `[media_server] auto_profiles = false` (or set `mpv_args`, which always wins).
+  `omnideck mpvprofiles` renders + reports the set; `packaging/test-profiles.sh`
+  validates each filter's output rate headlessly. media_play additionally passes
+  `--display-fps-override` from the session mode so mpv's `display-resample` pacing is
+  deterministic too.
 - **Jellyfin media library — "play your own 4K media", delivered** (Appendix B of the
   2026-07 review): a **Media Library** tile in Movies & TV opens an in-app browser —
   Continue Watching (with resume %), Latest, and your libraries, drilling
   series → seasons → episodes — and plays through **mpv with a direct stream**
-  (`--hwdec=auto-safe`, no transcode, no browser), wired into the existing watchdog so
+  (hardware decode, no transcode, no browser — the exact `--hwdec` depends on the profile
+  path above), wired into the existing watchdog so
   Guide-close and Now Playing just work. Posters are fetched lazily, sniffed, cached
   (100 MiB, oldest-evicted) and served over the rooted `omnideck://` protocol. Configure
   via `[media_server]` in config.toml — or don't: an existing **jellyfin-mpv-shim pairing
@@ -40,7 +56,8 @@ All notable changes to OmniDeck are documented here. Format follows
   spacer), so navigation cost is constant regardless of library size, and game art loads
   just ahead of visibility instead of all at once at startup.
 - **Proper CLI** (clap): `omnideck probe | scan | config | catalog | gridart <appid> |
-  media`, plus `--help`/`--version`; unknown flags are rejected instead of ignored.
+  media | mediasrv | mpvprofiles`, plus `--help`/`--version`; unknown flags are rejected
+  instead of ignored.
 - **Generated IPC types** (ts-rs): the TypeScript side of the Rust↔JS contract is generated
   from the Rust structs into `src/lib/bindings/`; CI fails if they drift, so a Rust field
   rename breaks the build instead of silently becoming `undefined` in the frontend.

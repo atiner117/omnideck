@@ -154,14 +154,33 @@ pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(),
     let has_client = apps::has_bin("jellyfinmediaplayer");
     let exec: Vec<String> = if has_mpv && (prefer_mpv || !has_client) {
         let mut exec = vec!["mpv".to_string()];
-        if ms.mpv_args.is_empty() {
-            // Bare launch: non-copy hardware decode is the fastest correct default.
-            exec.push("--hwdec=auto-safe".into());
-        } else {
+        // Resolve the session's real refresh rate once and reuse it for both the CLI
+        // override and the auto-profile tier (avoids a second X11/RandR round-trip).
+        let display = crate::gpu::session_display_mode();
+        // Injected FIRST so any explicit flag later on the line wins (mpv: last occurrence
+        // rules). The VapourSynth interpolation profiles read mpv's display_fps at filter
+        // init — usually before mpv has detected the panel — and silently fall back to 60
+        // without this. Floor at 30, matching the .vpy scripts: a rate they treat as
+        // "unknown" (<=30) must not be forced as the pacing target either.
+        if let Some((_, _, hz)) = display {
+            if hz > 30.0 {
+                exec.push(format!("--display-fps-override={hz:.3}"));
+            }
+        }
+        if !ms.mpv_args.is_empty() {
             // User-supplied config (e.g. --include of a shim profile set): its hwdec
             // choice must rule — VapourSynth filters need auto-copy, and a CLI --hwdec
             // here would silently override the config and disable the whole vf chain.
             exec.extend(ms.mpv_args.iter().cloned());
+        } else {
+            let auto = if ms.auto_profiles { crate::media_profiles::auto_include(display) } else { None };
+            match auto {
+                // OmniDeck's generated display-aware profile set (F-keys switch
+                // interpolation/denoise); hwdec=auto-copy comes from the included conf.
+                Some(conf) => exec.push(format!("--include={}", conf.display())),
+                // Bare launch: non-copy hardware decode is the fastest correct default.
+                None => exec.push("--hwdec=auto-safe".into()),
+            }
         }
         exec.push("--force-window=immediate".into());
         exec.push(format!("--force-media-title={name}"));
