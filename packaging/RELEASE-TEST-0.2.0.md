@@ -44,12 +44,24 @@ last install), then log out → pick **OmniDeck** at SDDM.
 - [ ] Posters fill in as you scroll
 - [ ] **Play a movie** → mpv fullscreen, hardware decode
       (`Shift+I` in mpv → hwdec active, not "no")
-- [ ] **F4** during playback → motion interpolation kicks in (165 fps smooth)
-- [ ] **F8** (ultra) → watch 15+ min: **audio stays in sync** (the desync fix — capped
-      at 82.5 fps now). If on LDAC headphones and it drifts: pause/unpause resyncs =
-      Bluetooth, not us
-- [ ] **F1** → back to passthrough; compare feel
 - [ ] Guide-hold during playback closes mpv, launcher front, Now Playing clears
+
+### 6b. Auto-generated playback profiles (new — test with `mpv_args` REMOVED from
+config.toml **and** `auto_profiles` not set to `false`, so the auto path runs; put your
+custom set back afterwards if you prefer it. If `pgrep` shows `--hwdec=auto-safe` and no
+`--include=`, the auto path was opted out — not a detection failure)
+- [ ] `omnideck mpvprofiles` (terminal) → "vapoursynth mpv: true", renders
+      `~/.config/omnideck/mpv-profiles/`, tier line shows the real GPU
+- [ ] In-session playback: `pgrep -af mpv` shows `--display-fps-override=165…` and
+      `--include=…/omnideck/mpv-profiles/mpv.conf`; the rendered `mpv.conf` header
+      says `display 2560x1440 @ 165.0 Hz`
+- [ ] **F4** (basic interpolation) → mpv stats (`i`, page 1) show the filter output
+      near the panel rate (~165 fps, NOT 60 — the display-detection fix)
+- [ ] **F6** (ultra) → output ~82.5 fps; watch 15+ min: **audio stays in sync** (the
+      desync fix — ultra deliberately caps at display/2 above 100 Hz). If on LDAC
+      headphones and it drifts: pause/unpause resyncs = Bluetooth, not us
+- [ ] **F1** → back to passthrough; compare feel
+- [ ] `./packaging/test-profiles.sh` → all `OK` (headless rate check of every filter)
 
 ## 7. Settings — walk every section
 - [ ] Section headers (Appearance/Background/…) — navigation skips them cleanly

@@ -1,0 +1,226 @@
+// OmniDeck — auto-generated, display-aware mpv playback profiles (media direct-play).
+//
+// Renders an embedded profile set (mpv.conf + input.conf + VapourSynth .vpy filters)
+// into ~/.config/omnideck/mpv-profiles/ and hands media_play the --include path, so
+// interpolation/denoise/tone-mapping work out of the box on any host with mpv built
+// against VapourSynth. Policy v1, kept honest to measurements on a 14700K + RTX 3070
+// driving 1440p @ 165 Hz:
+//   * BASIC interpolation (MVTools BlockFPS) targets the full display rate.
+//   * ULTRA (FlowFPS, optical flow) targets display/2 above 100 Hz — full-rate FlowFPS
+//     starves the CPU over a long movie and audio walks away from video.
+//   * The GPU side (upscale, tone-map, deband, present at display rate) is cheap by
+//     comparison — mpv.conf `profile=high-quality` + `vo=gpu-next` own it.
+// The display rate itself reaches the .vpy scripts at runtime via mpv's injected
+// `display_fps`, made deterministic by the `--display-fps-override` media_play passes
+// from the session's RandR mode — the profiles never bake a refresh rate in.
+use std::path::{Path, PathBuf};
+
+/// What the profile set is generated FOR — recorded in every rendered header so a
+/// support bundle (or the user) can see what OmniDeck detected, and so the set is
+/// re-rendered when the hardware story changes.
+pub struct Tier {
+    pub display: Option<crate::gpu::DisplayMode>,
+    pub cpu_threads: usize,
+    pub gpu: String,
+    pub usable: bool, // a real (non-lavapipe) GPU — software render can't feed gpu-next
+}
+
+/// Build the tier from an already-resolved display mode. The caller passes the mode it
+/// already probed (media_play needs it for `--display-fps-override` anyway) so playback
+/// doesn't open a second X11/RandR connection for the same answer.
+pub fn probe_tier(display: Option<crate::gpu::DisplayMode>) -> Tier {
+    let cap = crate::capability::probe();
+    let gpu = cap
+        .gpus
+        .first()
+        .map(|g| format!("{} ({})", g.vendor, g.driver))
+        .unwrap_or_else(|| "none".into());
+    Tier {
+        display,
+        cpu_threads: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+        gpu,
+        usable: cap.has_real_gpu,
+    }
+}
+
+fn tier_info(t: &Tier) -> String {
+    let disp = match t.display {
+        Some((w, h, hz)) => format!("{w}x{h} @ {hz:.1} Hz"),
+        None => "unknown (not in session; profiles use mpv's own display_fps)".into(),
+    };
+    format!("generated for: display {disp} | cpu threads {} | gpu {}", t.cpu_threads, t.gpu)
+}
+
+/// mpv built with the VapourSynth filter? Cached for the process lifetime — this shells
+/// out to `mpv --no-config --vf=help` once.
+pub fn vapoursynth_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let out = std::process::Command::new("mpv")
+            .args(["--no-config", "--vf=help"])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains("vapoursynth"),
+            Err(_) => false,
+        }
+    })
+}
+
+const TEMPLATES: &[(&str, &str)] = &[
+    ("mpv.conf", include_str!("../profiles/mpv.conf")),
+    ("input.conf", include_str!("../profiles/input.conf")),
+    ("interpolate-basic.vpy", include_str!("../profiles/interpolate-basic.vpy")),
+    ("interpolate-ultra.vpy", include_str!("../profiles/interpolate-ultra.vpy")),
+    ("denoise.vpy", include_str!("../profiles/denoise.vpy")),
+];
+
+/// Files starting with this line belong to OmniDeck and are rewritten freely; a file
+/// whose header was removed is user-owned and never touched again.
+const GENERATED_HEADER: &str = "# omnideck-generated";
+
+fn render(template: &str, dir: &Path, tier: &Tier) -> String {
+    // The .vpy scripts can't be handed the panel rate at runtime: mpv's vapoursynth
+    // filter injects display_fps from the VO only (0 at init; --display-fps-override is
+    // NOT forwarded — measured on mpv 0.40). So the session's RandR rate is baked here,
+    // 0.0 when unknown (desktop) — the scripts then use mpv's value or their 60 fallback.
+    // Floor at 30, matching the `.vpy` consumers: a rate they'd reject as "unknown" (<=30)
+    // must not be baked as if it were real, or mpv paces at it while interpolation targets 60.
+    let hint = tier.display.map(|(_, _, hz)| hz).filter(|hz| *hz > 30.0).unwrap_or(0.0);
+    template
+        .replace("{{PROFILE_DIR}}", &dir.to_string_lossy())
+        .replace("{{TIER_INFO}}", &tier_info(tier))
+        .replace("{{DISPLAY_FPS_HINT}}", &format!("{hint:.3}"))
+}
+
+/// Render the profile set for this hardware into ~/.config/omnideck/mpv-profiles/,
+/// returning the mpv.conf path to `--include`. Idempotent and cheap: files are only
+/// written when their rendered content changed, and user-owned files are skipped.
+pub fn ensure_profiles(tier: &Tier) -> Option<PathBuf> {
+    if !tier.usable {
+        tracing::info!("mpv-profiles: no usable GPU — skipping auto-profiles");
+        return None;
+    }
+    let dir = crate::config::config_base()?.join("omnideck/mpv-profiles");
+    std::fs::create_dir_all(&dir).ok()?;
+    for (name, template) in TEMPLATES {
+        let path = dir.join(name);
+        let content = render(template, &dir, tier);
+        match std::fs::read_to_string(&path) {
+            Ok(cur) if !cur.starts_with(GENERATED_HEADER) => {
+                tracing::debug!("mpv-profiles: {name} is user-owned (header removed), keeping it");
+                continue;
+            }
+            Ok(cur) if cur == content => continue,
+            Ok(_) => {}                                    // ours and stale — rewrite below
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // missing — (re)create
+            Err(e) => {
+                // Any other read error (permissions, non-UTF-8 content a user pasted after
+                // stripping the header, transient I/O): the file may be user-owned, and the
+                // contract is "OmniDeck never touches it". Skip rather than clobber it.
+                tracing::warn!("mpv-profiles: can't read {name} ({e}) — not overwriting");
+                continue;
+            }
+        }
+        if let Err(e) = std::fs::write(&path, &content) {
+            tracing::warn!("mpv-profiles: writing {name} failed: {e}");
+            return None;
+        }
+    }
+    Some(dir.join("mpv.conf"))
+}
+
+/// The `--include=` path for media_play's auto-profile launch, or None when the host
+/// can't run the set (no VapourSynth mpv, no real GPU, no writable config dir). Takes the
+/// display mode the caller already resolved, so playback doesn't re-probe RandR here.
+pub fn auto_include(display: Option<crate::gpu::DisplayMode>) -> Option<PathBuf> {
+    if !vapoursynth_available() {
+        tracing::info!(
+            "mpv-profiles: mpv lacks the vapoursynth filter — bare launch \
+             (install a VapourSynth-enabled mpv for interpolation profiles)"
+        );
+        return None;
+    }
+    ensure_profiles(&probe_tier(display))
+}
+
+/// Human-readable report for the `omnideck mpvprofiles` CLI.
+pub fn report() -> String {
+    let tier = probe_tier(crate::gpu::session_display_mode());
+    let mut s = String::from("OmniDeck mpv profile set\n");
+    s.push_str(&format!("  vapoursynth mpv: {}\n", vapoursynth_available()));
+    s.push_str(&format!("  {}\n", tier_info(&tier)));
+    match ensure_profiles(&tier) {
+        Some(conf) => {
+            s.push_str(&format!("  rendered:        {}\n", conf.parent().unwrap_or(&conf).display()));
+            s.push_str("  mpv usage:       mpv --include=");
+            s.push_str(&conf.to_string_lossy());
+            s.push_str(" <file>\n");
+        }
+        None => s.push_str("  rendered:        NO (no usable GPU or config dir)\n"),
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tier_165() -> Tier {
+        Tier {
+            display: Some((2560, 1440, 165.0)),
+            cpu_threads: 28,
+            gpu: "NVIDIA (nvidia)".into(),
+            usable: true,
+        }
+    }
+
+    #[test]
+    fn render_bakes_dir_tier_and_rate_and_keeps_header() {
+        let dir = Path::new("/cfg/omnideck/mpv-profiles");
+        let tier = tier_165();
+        for (name, template) in TEMPLATES {
+            let out = render(template, dir, &tier);
+            assert!(out.starts_with(GENERATED_HEADER), "{name}: generated header missing");
+            assert!(!out.contains("{{"), "{name}: unrendered placeholder");
+            assert!(out.contains("2560x1440 @ 165.0 Hz"), "{name}: tier info missing");
+            // Nothing host-personal may leak from the template source.
+            assert!(!out.contains("/home/"), "{name}: hardcoded home path");
+        }
+        let conf = render(TEMPLATES[0].1, dir, &tier);
+        assert!(conf.contains("input-conf=/cfg/omnideck/mpv-profiles/input.conf"));
+        assert!(conf.contains("vf=vapoursynth:/cfg/omnideck/mpv-profiles/interpolate-basic.vpy"));
+        // The session rate is baked into the interpolation scripts (mpv does not forward
+        // --display-fps-override into VapourSynth) — and 0.0 when there is no session.
+        for vpy in ["interpolate-basic.vpy", "interpolate-ultra.vpy"] {
+            let t = TEMPLATES.iter().find(|(n, _)| *n == vpy).unwrap().1;
+            assert!(render(t, dir, &tier).contains("float(\"165.000\")"), "{vpy}: hint not baked");
+            let no_display =
+                Tier { display: None, cpu_threads: 8, gpu: "x".into(), usable: true };
+            assert!(render(t, dir, &no_display).contains("float(\"0.000\")"));
+        }
+    }
+
+    #[test]
+    fn ultra_profile_halves_only_above_100hz() {
+        // The policy lives in the .vpy (rate resolved at runtime); pin the template
+        // text so a rework can't silently drop the sustainability cap.
+        let ultra = TEMPLATES
+            .iter()
+            .find(|(n, _)| *n == "interpolate-ultra.vpy")
+            .unwrap()
+            .1;
+        assert!(ultra.contains("dfps / 2 if dfps > 100 else dfps"));
+        let basic = TEMPLATES
+            .iter()
+            .find(|(n, _)| *n == "interpolate-basic.vpy")
+            .unwrap()
+            .1;
+        assert!(!basic.contains("/ 2"), "basic must keep the full display target");
+    }
+
+    #[test]
+    fn tier_info_without_display_says_so() {
+        let t = Tier { display: None, cpu_threads: 8, gpu: "AMD (amdgpu)".into(), usable: true };
+        assert!(tier_info(&t).contains("unknown"));
+    }
+}

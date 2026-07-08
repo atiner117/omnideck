@@ -51,6 +51,17 @@ profiles when the hardware can handle it.
   (series → seasons → episodes) inside OmniDeck and **direct-play through mpv** with
   hardware decode; an existing `jellyfin-mpv-shim` pairing is adopted automatically
   (zero setup), and `[media_server] mpv_args` can reuse your mpv/VapourSynth profiles.
+- 🎞️ **Auto-tuned playback profiles** — when mpv is built with VapourSynth, OmniDeck
+  generates a display-aware profile set (`~/.config/omnideck/mpv-profiles/`) and uses it
+  for direct-play automatically: GPU upscaling + HDR tone mapping + debanding
+  (`profile=high-quality`, `vo=gpu-next`), plus motion interpolation targeting **your
+  panel's real refresh rate** (read from the session's display, e.g. 165 Hz — not a
+  hardcoded 60). During playback: `F1` passthrough · `F3` denoise · `F4` smooth
+  (full display rate) · `F6` ultra (optical flow; deliberately targets display/2 above
+  100 Hz — full-rate optical flow starves even fast CPUs over a long movie and desyncs
+  audio). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
+  your own set; `omnideck mpvprofiles` renders + reports what was detected, and deleting
+  the `# omnideck-generated` header line in any rendered file makes it yours to edit.
 - 🔎 **Global search** — find games & apps instantly, with a configurable web-search
   fallback (DuckDuckGo / Google / Brave / Bing, or your own SearXNG via config).
 - 🌊 **Live wallpaper & ambient music** — PSP-style wave ribbons and a synthesized
@@ -159,7 +170,8 @@ Most of these are also editable in-app (**Settings**), including an **Add custom
 form for your own commands.
 
 Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
-`catalog`, `gridart <appid>`, `media` (and `omnideck --help` / `--version`).
+`catalog`, `gridart <appid>`, `media`, `mediasrv`, `mpvprofiles`
+(and `omnideck --help` / `--version`).
 
 ## A note on streaming quality
 

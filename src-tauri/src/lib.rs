@@ -22,6 +22,7 @@ mod http;
 mod icons;
 mod library;
 mod logging;
+mod media_profiles;
 mod media_server;
 mod mpris;
 mod session;

@@ -50,7 +50,7 @@ pub struct MediaSections {
 }
 
 /// `[media_server]` in config.toml. Empty kind/url = unconfigured (shim fallback applies).
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
 pub struct MediaServerConfig {
@@ -61,8 +61,27 @@ pub struct MediaServerConfig {
     /// Extra mpv flags for direct-play, e.g. `["--include=~/.config/jellyfin-mpv-shim/mpv.conf"]`
     /// to reuse an existing profile set (VapourSynth interpolation/denoise, keybinds).
     /// When set, OmniDeck stops passing its own `--hwdec` so the config's choice rules
-    /// (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it).
+    /// (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it),
+    /// and the auto-generated profile set below is not used.
     pub mpv_args: Vec<String>,
+    /// Use OmniDeck's generated display-aware profile set (media_profiles.rs) when
+    /// `mpv_args` is empty and mpv has VapourSynth. Default true; false = bare launch.
+    pub auto_profiles: bool,
+}
+
+/// Manual impl (not derived): `auto_profiles` must default ON — the derive would pick
+/// `false`, silently disabling the feature for every config that doesn't mention it.
+impl Default for MediaServerConfig {
+    fn default() -> Self {
+        Self {
+            kind: String::new(),
+            url: String::new(),
+            token: String::new(),
+            prefer_mpv: false,
+            mpv_args: Vec::new(),
+            auto_profiles: true,
+        }
+    }
 }
 
 impl MediaServerConfig {
@@ -316,5 +335,22 @@ fn prune(dir: &Path, max_bytes: u64) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MediaServerConfig;
+
+    #[test]
+    fn auto_profiles_defaults_on_for_configs_that_dont_mention_it() {
+        // Every pre-0.2.0 config.toml lacks the key; the serde(default) container
+        // fallback must come from OUR Default impl (true), not the derive's false.
+        let ms: MediaServerConfig = toml::from_str("").unwrap();
+        assert!(ms.auto_profiles);
+        assert!(MediaServerConfig::default().auto_profiles);
+
+        let ms: MediaServerConfig = toml::from_str("auto_profiles = false").unwrap();
+        assert!(!ms.auto_profiles);
     }
 }

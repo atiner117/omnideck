@@ -8,6 +8,12 @@ export type MediaServerConfig = { kind: string, url: string, token: string, pref
  * Extra mpv flags for direct-play, e.g. `["--include=~/.config/jellyfin-mpv-shim/mpv.conf"]`
  * to reuse an existing profile set (VapourSynth interpolation/denoise, keybinds).
  * When set, OmniDeck stops passing its own `--hwdec` so the config's choice rules
- * (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it).
+ * (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it),
+ * and the auto-generated profile set below is not used.
  */
-mpv_args: Array<string>, };
+mpv_args: Array<string>, 
+/**
+ * Use OmniDeck's generated display-aware profile set (media_profiles.rs) when
+ * `mpv_args` is empty and mpv has VapourSynth. Default true; false = bare launch.
+ */
+auto_profiles: boolean, };
