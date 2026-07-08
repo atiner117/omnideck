@@ -1,12 +1,16 @@
 name: packaging
 
 # Validates the AUR PKGBUILD: lints it, checks .SRCINFO is in sync, builds the package in a
-# clean Arch container, and lints the result. The PKGBUILD builds the *released tag* tarball
-# (source=...v$pkgver.tar.gz), so this proves "a stranger running makepkg gets a working
-# package" for the version the PKGBUILD currently points at.
-#
-# Note: after bumping pkgver for a release you must push the matching git tag *first*, else the
-# tarball URL 404s and this job (correctly) fails.
+# clean Arch container, and lints the result. Two modes, chosen automatically:
+#   * release tarball for $pkgver EXISTS  -> strict: download it, verify b2sums, build —
+#     proves "a stranger running makepkg gets a working package".
+#   * tag not pushed yet (pre-release)    -> build the CURRENT CHECKOUT as the source
+#     (checksums skipped; they belong to the future tarball) — proves the PKGBUILD still
+#     builds this tree instead of failing red on a guaranteed 404 until the tag lands.
+# Release flow stays: bump pkgver -> tag v$pkgver -> updpkgsums + regenerate .SRCINFO;
+# that post-tag updpkgsums push touches packaging/** and runs the strict mode against the
+# real artifact. (No `tags:` trigger on purpose: combined with `paths:` filters GitHub
+# skips tag pushes of already-pushed commits — the post-tag push is the reliable hook.)
 
 on:
   push:
@@ -22,10 +26,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Pick the mode (see header): strict release-tarball validation when the tag for
+      # $pkgver exists, otherwise synthesize the source from this checkout so the job
+      # proves the PKGBUILD builds the tree it rides with. git archive uses the same
+      # top-level dir name (omnideck-$pkgver/) as GitHub's tag tarballs, so prepare()
+      # and build() are byte-for-byte the same paths either way.
+      - name: Select source (release tarball vs current checkout)
+        run: |
+          pkgver=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${pkgver}.tar.gz"
+          if curl -sfIL "$url" >/dev/null; then
+            echo "release tarball for v${pkgver} exists — strict mode (download + b2sums)"
+            echo "MAKEPKG_EXTRA=" >> "$GITHUB_ENV"
+          else
+            echo "no v${pkgver} tag yet — building the current checkout (checksums skipped)"
+            git archive --format=tar.gz --prefix="omnideck-${pkgver}/" \
+              -o "packaging/omnideck-${pkgver}.tar.gz" HEAD
+            echo "MAKEPKG_EXTRA=--skipchecksums" >> "$GITHUB_ENV"
+          fi
       # Run the Arch toolchain in a container; checkout stays on the host (which has git).
       - name: makepkg + namcap
         run: |
-          docker run --rm -v "$PWD:/repo:ro" archlinux:latest bash -euo pipefail -c '
+          docker run --rm -e MAKEPKG_EXTRA -v "$PWD:/repo:ro" archlinux:latest bash -euo pipefail -c '
             pacman -Syu --noconfirm --needed \
               base-devel sudo rust pkgconf webkit2gtk-4.1 hicolor-icon-theme namcap curl ca-certificates unzip
             # bun is declared as the AUR makedep bun-bin; install the official binary for CI.
@@ -51,7 +73,9 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::makepkg build"
-            runuser -u builder -- makepkg -f --noconfirm --nodeps
+            # $MAKEPKG_EXTRA is expanded by THIS (root) shell before runuser execs, so
+            # builder does not need the env var (and must not inherit root HOME).
+            runuser -u builder -- makepkg -f --noconfirm --nodeps $MAKEPKG_EXTRA
             echo "::endgroup::"
 
             echo "::group::namcap package"
