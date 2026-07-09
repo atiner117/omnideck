@@ -236,6 +236,14 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
         // screen; ask it to start fullscreen (Firefox uses --kiosk, Chromium --start-fullscreen).
         if crate::session::in_session() {
             exec.insert(1, if is_firefox { "--kiosk".into() } else { "--start-fullscreen".into() });
+            if !is_firefox {
+                // Pin Chromium-family to Xwayland: gamescope exports a Wayland socket, and a
+                // browser that picks it puts its window where NONE of our machinery can reach
+                // it — the switcher/watchdog manage windows through X (_NET_WM_PID, unmap/map),
+                // and the navpad's virtual keyboard is delivered via Xwayland focus. (Firefox
+                // is already pinned by the GDK_BACKEND=x11 we inherit from gpu.rs.)
+                exec.insert(2, "--ozone-platform=x11".into());
+            }
         }
     }
     let (cmd, args) = exec.split_first().ok_or("empty command")?;

@@ -64,6 +64,16 @@ profiles when the hardware can handle it.
   the full display rate). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
   your own set; `omnideck mpvprofiles` renders + reports what was detected, and deleting
   the `# omnideck-generated` header line in any rendered file makes it yours to edit.
+- 🎮➡️🖱️ **Controller drives launched apps too** (session) — while a launched PWA/browser/
+  app is in front, the pad becomes a virtual keyboard+mouse (`/dev/uinput`): dpad/left
+  stick = arrow keys with console-style repeat (Jellyfin-web and every TV-style UI is
+  arrow-driven), `A` = Enter, `B` = Back/Esc, `X` = play/pause, **right stick = mouse
+  pointer** with `R2` = click-and-hold and `L1`/`R1` = scroll — the PlayStation-browser
+  experience. Guide still switches/closes; needs your user in the `input` group.
+- 🧊 **Silent hidden apps are frozen** (session) — switching away keeps *audible* apps
+  running (background music is a feature), but a hidden app with no active audio stream
+  is SIGSTOPped until you switch back — a hidden software-rendering PWA no longer burns
+  hundreds of watts behind the dashboard.
 - 🔎 **Global search** — find games & apps instantly, with a configurable web-search
   fallback (DuckDuckGo / Google / Brave / Bing, or your own SearXNG via config).
 - 🌊 **Live wallpaper & ambient music** — PSP-style wave ribbons and a synthesized

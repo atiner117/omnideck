@@ -25,6 +25,7 @@ mod logging;
 mod media_profiles;
 mod media_server;
 mod mpris;
+mod navpad;
 mod session;
 mod steamgriddb;
 mod switcher;
