@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "$lib/backend";
-  import type { App, Game, Config, Capability, MediaInfo, Settings } from "$lib/backend";
+  import type { App, Game, Config, Capability, MediaInfo, Settings, LiveApp } from "$lib/backend";
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
   import Wizard from "$lib/Wizard.svelte";
@@ -545,6 +545,45 @@
   let mediaStack = $state<{ title: string; rows: MediaRow[] }[]>([]);
   let mediaFocus = $state(0);
   let mediaPosters = $state<Record<string, string>>({});
+
+  // Deck switcher (iOS-style app cards): Guide tap opens it (backend hides the apps so this
+  // overlay is what shows); pick a card to bring that app forward, Select to close it.
+  let deckOpen = $state(false);
+  let deckApps = $state<LiveApp[]>([]);
+  let deckFocus = $state(0);
+  // An app's launcher icon/emoji for its card, matched by launch id then name (games show 🎮).
+  function deckIcon(a: LiveApp): string {
+    const app = apps.find((x) => x.id === a.id) ?? apps.find((x) => x.name === a.name);
+    return app?.icon ?? "🎮";
+  }
+  async function openDeck() {
+    try { deckApps = await api.deckOpen(); } catch (e) { deckApps = []; console.debug("[omnideck] deck open failed", e); }
+    if (deckApps.length === 0) return; // nothing running — don't show an empty deck
+    deckFocus = 0;
+    deckOpen = true;
+  }
+  function closeDeck() { deckOpen = false; }
+  function deckMove(d: number) { if (deckApps.length) deckFocus = clamp(deckFocus + d, 0, deckApps.length - 1); }
+  // Focus the selected card so a real-session keyboard reaches the deck (and for a11y) and it
+  // scrolls into view. The gamepad path doesn't need this (events arrive via gilrs regardless).
+  $effect(() => {
+    if (!deckOpen) return;
+    const i = deckFocus;
+    queueMicrotask(() => (document.querySelector(`[data-deck="${i}"]`) as HTMLElement | null)?.focus());
+  });
+  async function deckSelect() {
+    const a = deckApps[deckFocus];
+    deckOpen = false;
+    if (a) await api.deckShow(a.group).catch((e) => reportError("Couldn't open app", e));
+  }
+  async function deckKill() {
+    const a = deckApps[deckFocus];
+    if (!a) return;
+    await api.deckClose(a.group).catch((e) => console.debug("[omnideck] deck close failed", e));
+    deckApps = deckApps.filter((x) => x.group !== a.group);
+    if (deckApps.length === 0) { deckOpen = false; return; }
+    deckFocus = clamp(deckFocus, 0, deckApps.length - 1);
+  }
   const mediaView = $derived(mediaStack[mediaStack.length - 1]);
   function mediaRow(i: MediaItem, group?: string): MediaRow {
     const browse = ["Series", "Season", "Folder", "BoxSet", "CollectionFolder"].includes(i.kind);
@@ -824,7 +863,7 @@
   // Single source of truth: is any modal/overlay open? Gates base navigation and stops
   // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
   const anyModal = $derived(
-    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
+    deckOpen || wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
   );
 
   function onKey(e: KeyboardEvent) {
@@ -843,6 +882,16 @@
     // Allow hold-to-repeat for arrows (throttled by navGate); ignore auto-repeat for
     // action keys so holding Enter can't launch a dozen times.
     if (e.repeat && !arrow) return;
+    if (deckOpen) {
+      // Deck switcher, keyboard twin of the gamepad gate: arrows pick, Enter opens,
+      // Delete/Backspace closes the card, Escape dismisses.
+      if (e.key === "ArrowLeft" && navGate()) deckMove(-1);
+      else if (e.key === "ArrowRight" && navGate()) deckMove(1);
+      else if (e.key === "Enter") deckSelect();
+      else if (e.key === "Delete" || e.key === "Backspace") deckKill();
+      else if (e.key === "Escape") closeDeck();
+      return;
+    }
     if (wizardActive) {
       if (e.key === "Enter") wizardNext();
       else if (e.key === "Escape") wizardPrev();
@@ -962,7 +1011,14 @@
     const off: Array<() => void> = [];
     // We add to nowList when we launch (we know game vs app there); the backend tells us when
     // the process/game exits — correlate by the launch id (the tile id), not the display name.
-    api.onAppExited((e) => { const id = String(e.payload ?? ""); nowList = nowList.filter((x) => x.id !== id); }).then((u) => off.push(u));
+    api.onAppExited((e) => {
+      const id = String(e.payload ?? "");
+      nowList = nowList.filter((x) => x.id !== id);
+      // Keep the deck honest if an app dies while it's open (e.g. we just closed one).
+      if (deckOpen) api.deckList().then((a) => { deckApps = a; if (a.length === 0) deckOpen = false; else deckFocus = clamp(deckFocus, 0, a.length - 1); }).catch(() => {});
+    }).then((u) => off.push(u));
+    // Guide tap (gamepad) or Ctrl+Alt+Home → toggle the deck switcher.
+    api.onGuideTap(() => { if (deckOpen) closeDeck(); else openDeck(); }).then((u) => off.push(u));
     // MPRIS Now Playing is event-driven (backend zbus watcher). One initial fetch covers the
     // window between mount and the listener attaching; after that, `media-changed` pushes
     // every track/status change in ms (works for native players + browser PWAs).
@@ -972,6 +1028,15 @@
     api.onGamepad((e) => {
       const p = e.payload;
       if (p.kind === "button_pressed") {
+        if (deckOpen) {
+          // Card deck: L/R picks a card, A/X opens it, Select closes it, B/Guide dismisses.
+          if (p.code === "DPadLeft") holdStart(p.code, () => deckMove(-1));
+          else if (p.code === "DPadRight") holdStart(p.code, () => deckMove(1));
+          else if (p.code === "South" || p.code === "West") deckSelect();
+          else if (p.code === "Select") deckKill();
+          else if (p.code === "East" || p.code === "Start") closeDeck();
+          return;
+        }
         if (wizardActive) {
           if (p.code === "South") wizardNext(); else if (p.code === "East") wizardPrev();
           else if (p.code === "DPadLeft" && wizardStep === 1) wizardAccent(-1);
@@ -1046,6 +1111,12 @@
         const dir = p.code === "LeftStickY" ? -raw : raw;
         const code = `${p.code}:${dir}`;
         if (dir === 0) { if (heldCode.startsWith(p.code)) holdStop(); return; }
+        if (deckOpen) {
+          // Deck: horizontal stick moves the card selection; vertical does nothing.
+          if (p.code === "LeftStickX" && heldCode !== code) holdStart(code, () => deckMove(dir));
+          else if (p.code === "LeftStickY") holdStop();
+          return;
+        }
         if (p.code === "LeftStickY") {
           // In the list modals the stick drives the row selection (the D-pad keeps its
           // modal-specific job, e.g. the OSK in search). Other overlays swallow the stick.
@@ -1246,6 +1317,29 @@
       onactivate={mediaActivate}
       onclose={() => (mediaOpen = false)}
     />
+  {/if}
+
+  {#if deckOpen}
+    <!-- Deck switcher: iOS-style row of running-app cards. Guide/B dismisses, A opens the
+         focused card, Select closes it. Pointer/click works too (mouse or navpad pointer). -->
+    <div class="deck-scrim" role="button" tabindex="-1" aria-label="Close app switcher"
+         onclick={closeDeck} onkeydown={(e) => { if (e.key === "Escape") closeDeck(); }}></div>
+    <section class="deck" aria-label="App switcher">
+      <div class="deck-row">
+        {#each deckApps as a, i (a.group)}
+          <div class="deck-card" class:sel={i === deckFocus}>
+            <button class="deck-open" title="Open {a.name}" data-deck={i}
+              onclick={() => { deckFocus = i; deckSelect(); }} onmouseenter={() => (deckFocus = i)}>
+              <span class="deck-icon">{deckIcon(a)}</span>
+              <span class="deck-name">{a.name}</span>
+            </button>
+            <button class="deck-x" title="Close {a.name}" aria-label="Close {a.name}"
+              onclick={(e) => { e.stopPropagation(); deckFocus = i; deckKill(); }}>✕</button>
+          </div>
+        {/each}
+      </div>
+      <p class="deck-hint">A open · Select ✕ close · B back</p>
+    </section>
   {/if}
 
   {#if infoOpen && infoTile}
@@ -1462,9 +1556,34 @@
   .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
   .fpsbtn:hover { color: var(--accent); }
 
+  /* --- Deck switcher (iOS-style app cards) --- */
+  .deck-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(3,5,11,0.72); border: 0; }
+  .deck { position: fixed; inset: 0; z-index: 41; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 24px; pointer-events: none; }
+  .deck-row { display: flex; gap: 22px; padding: 0 6vw; max-width: 100vw; overflow-x: auto;
+    align-items: center; pointer-events: auto; scrollbar-width: none; }
+  .deck-row::-webkit-scrollbar { display: none; }
+  .deck-card { position: relative; flex: 0 0 auto; }
+  .deck-open { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; width: calc(240px * var(--scale)); height: calc(150px * var(--scale));
+    border-radius: 18px; border: 2px solid rgba(255,255,255,0.08);
+    background: linear-gradient(160deg, #141a26, #0c1119); color: #e7ecf6; cursor: pointer;
+    transition: transform .16s cubic-bezier(.2,.7,.2,1), border-color .16s, box-shadow .16s; }
+  .deck-card.sel .deck-open { transform: translateY(-14px) scale(1.06); border-color: var(--accent);
+    box-shadow: 0 18px 50px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .deck-icon { font-size: calc(46px * var(--scale)); line-height: 1; }
+  .deck-name { font-size: calc(17px * var(--scale)); font-weight: 600; max-width: 90%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deck-x { position: absolute; top: -12px; right: -12px; width: 34px; height: 34px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.14); background: #05070b; color: #c2cbdb; cursor: pointer;
+    font-size: 15px; opacity: 0; transition: opacity .16s; }
+  .deck-card.sel .deck-x { opacity: 1; }
+  .deck-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale));
+    letter-spacing: .02em; }
+
   /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
      transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
   @media (prefers-reduced-motion: reduce) {
-    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon { transition: none !important; }
+    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon, .deck-open { transition: none !important; }
   }
 </style>

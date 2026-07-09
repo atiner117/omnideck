@@ -64,12 +64,15 @@ profiles when the hardware can handle it.
   the full display rate). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
   your own set; `omnideck mpvprofiles` renders + reports what was detected, and deleting
   the `# omnideck-generated` header line in any rendered file makes it yours to edit.
+- 🃏 **App switcher, iOS-style** (session) — tap **Guide** (or `Ctrl+Alt+Home`) for a row of
+  cards, one per running app: pick one to jump to it, **Select** (or the ✕) to close it,
+  **B** to drop back to the dashboard. Guide-**hold** still closes everything at once.
 - 🎮➡️🖱️ **Controller drives launched apps too** (session) — while a launched PWA/browser/
-  app is in front, the pad becomes a virtual keyboard+mouse (`/dev/uinput`): dpad/left
+  app is in front, the pad becomes a virtual keyboard+mouse (`/dev/uinput`): **right stick =
+  mouse pointer** (the primary way to navigate any web UI), `A`/cross = click, dpad/left
   stick = arrow keys with console-style repeat (Jellyfin-web and every TV-style UI is
-  arrow-driven), `A` = Enter, `B` = Back/Esc, `X` = play/pause, **right stick = mouse
-  pointer** with `R2` = click-and-hold and `L1`/`R1` = scroll — the PlayStation-browser
-  experience. Guide still switches/closes; needs your user in the `input` group.
+  arrow-driven), `X` = Enter, `B` = Back/Esc, `Y` = play/pause, `R2` = click-and-hold,
+  `L1`/`R1` = scroll — the PlayStation-browser experience. Needs your user in the `input` group.
 - 🧊 **Silent hidden apps are frozen** (session) — switching away keeps *audible* apps
   running (background music is a feature), but a hidden app with no active audio stream
   is SIGSTOPped until you switch back — a hidden software-rendering PWA no longer burns
@@ -144,14 +147,14 @@ bun run tauri build --no-bundle    # release binary -> src-tauri/target/release/
 | Add apps | `A` | △ / Y (North) |
 | Settings | `P` | Start / Options |
 | Back / close panel / cancel | Esc | ◯ / B (East) |
-| Switch app ⇄ OmniDeck (session; app keeps running) | `Ctrl+Alt+Home` | Guide (press) |
-| Close the launched app & return (session) | `Ctrl+Alt+End` | Guide (hold ≥ 0.8 s) |
+| Open the app-switcher deck (session) | `Ctrl+Alt+Home` | Guide (press) |
+| Close all launched apps & return (session) | `Ctrl+Alt+End` | Guide (hold ≥ 0.8 s) |
 
 Power (Exit / Suspend / Restart / Shut down) is in the **⏻** menu in the top bar.
-The switch/close rows work **while the launched app has focus** — the Guide button reads the
-controller hardware directly, and the chords are global X grabs in the session. Switching
-hides the app instead of killing it: music keeps playing while you browse, and switching
-again brings it back.
+The deck/close rows work **while the launched app has focus** — the Guide button reads the
+controller hardware directly, and the chords are global X grabs in the session. The switcher
+hides apps instead of killing them: audible apps (music) keep playing in the background while
+you browse, and a card brings any app back exactly where you left it.
 
 On a controller, **Select** opens search with an **on-screen keyboard** (D-pad to move,
 ✕/A to type, bumpers to pick a result) — search and launch without a keyboard.

@@ -7,6 +7,12 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **Deck switcher — iOS-style app cards** (`switcher.rs`/`watchdog.rs` + `+page.svelte`):
+  a Guide tap (or Ctrl+Alt+Home) now opens a row of cards, one per running app — pick one
+  to bring it forward, **Select** (or the card's ✕) to close it, **B/Guide** to dismiss.
+  Replaces the old blind "toggle to the most-recent app". The backend hides every app when
+  the deck opens (so its overlay shows) and maps just the chosen one; Guide-**hold** still
+  closes everything. Verified end-to-end in the nested harness (`pad-deck`/`pad-pick`).
 - **Custom wallpaper is downscaled once, not decoded huge every launch** (`background.rs`):
   a big photo (the couch-test host's was 4000x3000 / 3.9 MB) was loaded as a base64
   `data:` URL — a ~5 MB DOM string plus a 12 MP main-thread decode — which stalled the
@@ -16,6 +22,12 @@ All notable changes to OmniDeck are documented here. Format follows
   `omnideck bgprep <path>` reports the result.
 
 ### Changed
+- **Controller click is A/cross, not R2** (navpad): the right stick is the primary pointer,
+  so A now left-clicks where it is (what the user expects). Enter moved to X, play/pause to
+  Y. R2/L2 still click too (for hold/drag).
+- **Hidden apps only stay running while audibly playing** — the switcher's silence check now
+  matches an audio stream to its launch app by process *ancestry*, not exact group, so an
+  Electron app's `setsid`'d audio child is found; Feishin no longer gets frozen mid-song.
 - **Browsers in-session get `--force-device-scale-factor=1`** so a Chromium PWA fills the
   panel instead of rendering into a corner/half (Xwayland HiDPI auto-scale — the
   couch-test "PWA on the left half").

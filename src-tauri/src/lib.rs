@@ -85,7 +85,11 @@ pub fn run() {
             commands::media_browse,
             commands::media_poster,
             commands::media_play,
-            commands::bg_image
+            commands::bg_image,
+            commands::deck_open,
+            commands::deck_list,
+            commands::deck_show,
+            commands::deck_close
         ])
         .setup(|app| {
             let handle = app.handle().clone();
