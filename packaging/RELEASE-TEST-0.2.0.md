@@ -65,6 +65,20 @@ custom set back afterwards if you prefer it. If `pgrep` shows `--hwdec=auto-safe
 - [ ] **F1** → back to passthrough; compare feel
 - [ ] `./packaging/test-profiles.sh` → all `OK` (headless rate check of every filter)
 
+### 6c. Controller in launched apps + hidden-app freeze (new)
+- [ ] Launch the Jellyfin PWA (or any web app) → **dpad/left stick moves the focus**,
+      A selects, B goes back (log line at boot: "navpad: virtual keyboard/mouse ready")
+- [ ] **Right stick moves a mouse pointer**; R2 clicks (hold R2 = press-and-hold);
+      L1/R1 scroll a page
+- [ ] Guide back to dashboard while a SILENT app is open → power draw drops to idle
+      within seconds (log: "switcher: froze silent hidden group"); Guide again →
+      app resumes exactly where it was
+- [ ] Start music (YT Music / Feishin), Guide to dashboard → **music keeps playing**
+      (audible apps are never frozen); Guide-hold still closes a hidden frozen app
+- [ ] Dashboard idle power/fps re-check: with no apps launched, is the UI smooth and
+      the draw sane? (If not: comment `OMNIDECK_GPU_COMPOSITING=1` out of session.conf
+      and compare — the GPU-compositing win was validated on the previous driver)
+
 ## 7. Settings — walk every section
 - [ ] Section headers (Appearance/Background/…) — navigation skips them cleanly
 - [ ] **Live wallpaper: Off** → waves gone instantly; back **On** → return

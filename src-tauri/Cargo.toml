@@ -45,10 +45,11 @@ x11rb = { version = "0.13", features = ["randr"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# navpad.rs: virtual keyboard/mouse over /dev/uinput so the controller can navigate
+# launched PWAs/browsers console-style; also examples/virtual-pad.rs (uinput gamepad
+# injector for the nested-session harness — gilrs sees it as a real evdev pad)
+evdev = "0.12"
 
 [dev-dependencies]
 ts-rs = "12.0.1"
-# examples/virtual-pad.rs — uinput gamepad injector for the nested-session harness
-# (packaging/test-session.sh); gilrs in the app sees it as a real evdev pad
-evdev = "0.12"
 

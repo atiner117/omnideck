@@ -35,7 +35,10 @@ pub fn return_home() -> bool {
         // persistent main process, so SIGTERM to the single spawned pid can leave a window
         // behind; the child is spawned as its own group leader (process_group(0) in launch),
         // so -pid reaches every forked helper. Fall back to the bare pid if that misses.
+        // CONT first: a group the switcher paused on hide (SIGSTOP) can't act on TERM
+        // until it's continued — without this, close on a hidden app looks ignored.
         let grp = format!("-{pid}");
+        let _ = std::process::Command::new("kill").args(["-CONT", &grp]).status();
         let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
         let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
         any |= grp_ok || pid_ok;

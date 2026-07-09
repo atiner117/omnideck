@@ -7,6 +7,25 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **navpad — the controller drives launched apps** (`navpad.rs`): a virtual
+  keyboard/mouse over `/dev/uinput`, active only while a launched app's window is in
+  front (the switcher's visibility ground truth). Dpad/left stick → arrow-key pulses
+  with 400 ms/90 ms console repeat, A → Enter, B → Esc, X → Space, right stick → mouse
+  pointer (squared response), R2/L2 → left/right mouse button (hold = drag/long-press),
+  L1/R1 → scroll wheel. Kernel-level delivery, so it works for any client — Chromium,
+  Firefox, mpv, Qt — with zero per-app integration. Everything held is auto-released if
+  the app vanishes mid-press. Requires membership in the `input` group; without it the
+  bridge logs once and stays off.
+- **Silent hidden apps are frozen**: the switcher still keeps hidden apps *running* when
+  they're audibly playing (background music stays a feature — checked via the PipeWire
+  pulse shim, uncorked streams matched to the launch process group), but silent hidden
+  groups get SIGSTOP and are SIGCONTed on re-show; `return_home` CONTs before TERM so
+  Guide-hold close works on frozen apps. Root cause of the 2026-07-09 couch finding:
+  a hidden software-rendering PWA kept drawing ~300 W behind the dashboard.
+- **Browsers pinned to Xwayland in-session** (`--ozone-platform=x11` for
+  Chromium-family): gamescope exports a Wayland socket, and a browser that picks it
+  escapes every piece of session machinery (switcher unmap/map, `_NET_WM_PID`
+  ownership, navpad focus). Firefox is already pinned via inherited `GDK_BACKEND=x11`.
 - **Auto-tuned mpv playback profiles** (`media_profiles.rs`): with a VapourSynth-enabled
   mpv, direct-play now auto-generates and `--include=`s a display-aware profile set under
   `~/.config/omnideck/mpv-profiles/` — GPU upscale/tone-map/deband (`high-quality` +

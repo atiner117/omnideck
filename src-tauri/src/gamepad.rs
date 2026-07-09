@@ -51,6 +51,11 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
     const GUIDE_HOLD_CLOSE: std::time::Duration = std::time::Duration::from_millis(800);
     let mut guide_down: Option<std::time::Instant> = None; // Some = held, hold not yet fired
 
+    // Virtual keyboard/mouse bridge: while a launched app is in front, the pad drives IT
+    // (arrows/Enter/Esc, pointer on the right stick — see navpad.rs). None when /dev/uinput
+    // isn't writable; everything else works without it.
+    let mut navpad = crate::navpad::NavPad::new();
+
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
@@ -69,6 +74,12 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     continue; // swallow; never forward Guide as a UI event
                 }
                 _ => {}
+            }
+            // App in front → the pad drives the app through the uinput bridge. Events are
+            // STILL forwarded to the webview below (existing behavior — it's hidden and
+            // ignores them); Guide never reaches here.
+            if let Some(np) = navpad.as_mut() {
+                np.handle(&event);
             }
             // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
             if let gilrs::EventType::AxisChanged(a, v, _) = &event {
@@ -121,6 +132,11 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                 tracing::info!("guide (hold): closed the current app");
                 let _ = handle.emit("app-closed", ());
             }
+        }
+        // Bridge housekeeping each tick: arrow auto-repeat, right-stick pointer motion,
+        // and releasing anything held if the app vanished mid-press.
+        if let Some(np) = navpad.as_mut() {
+            np.tick();
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
     }
