@@ -171,12 +171,17 @@ pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(),
         // Injected FIRST so any explicit flag later on the line wins (mpv: last occurrence
         // rules). The VapourSynth interpolation profiles read mpv's display_fps at filter
         // init — usually before mpv has detected the panel — and silently fall back to 60
-        // without this. Floor at 30, matching the .vpy scripts: a rate they treat as
-        // "unknown" (<=30) must not be forced as the pacing target either.
-        if let Some((_, _, hz)) = display {
-            if hz > 30.0 {
-                exec.push(format!("--display-fps-override={hz:.3}"));
-            }
+        // without this. The explicit `[media_server] display_fps` config value wins over the
+        // session probe (it's how daily use outside the session gets the real rate); floor at
+        // 30, matching the .vpy scripts — a rate they treat as "unknown" (<=30) must not be
+        // forced as the pacing target either.
+        let fps_override = if ms.display_fps > 30.0 {
+            ms.display_fps
+        } else {
+            display.map(|(_, _, hz)| hz).unwrap_or(0.0)
+        };
+        if fps_override > 30.0 {
+            exec.push(format!("--display-fps-override={fps_override:.3}"));
         }
         if !ms.mpv_args.is_empty() {
             // User-supplied config (e.g. --include of a shim profile set): its hwdec
@@ -184,7 +189,11 @@ pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(),
             // here would silently override the config and disable the whole vf chain.
             exec.extend(ms.mpv_args.iter().cloned());
         } else {
-            let auto = if ms.auto_profiles { crate::media_profiles::auto_include(display) } else { None };
+            let auto = if ms.auto_profiles {
+                crate::media_profiles::auto_include(display, ms.display_fps, ms.audio_samplerate)
+            } else {
+                None
+            };
             match auto {
                 // OmniDeck's generated display-aware profile set (F-keys switch
                 // interpolation/denoise); hwdec=auto-copy comes from the included conf.

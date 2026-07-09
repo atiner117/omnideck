@@ -67,10 +67,21 @@ pub struct MediaServerConfig {
     /// Use OmniDeck's generated display-aware profile set (media_profiles.rs) when
     /// `mpv_args` is empty and mpv has VapourSynth. Default true; false = bare launch.
     pub auto_profiles: bool,
+    /// Force mpv's audio output samplerate (Hz) in the generated profile set — e.g. 96000 for
+    /// a fixed-rate DAC or LDAC headphones. 0 (default) leaves mpv's native rate (bit-perfect;
+    /// forcing a rate resamples everything, so only set it when your gear wants a fixed rate).
+    pub audio_samplerate: u32,
+    /// Display refresh rate (Hz) to bake into the generated profiles and pass as
+    /// `--display-fps-override`, for when OmniDeck can't detect it — i.e. daily use *outside*
+    /// the gamescope session, where the RandR probe is unavailable and the profiles would
+    /// otherwise fall back to 60. 0 (default) = auto-detect from the session's RandR mode.
+    pub display_fps: f64,
 }
 
 /// Manual impl (not derived): `auto_profiles` must default ON — the derive would pick
 /// `false`, silently disabling the feature for every config that doesn't mention it.
+/// (`audio_samplerate`/`display_fps` default to 0 = "leave it alone", which the derive
+/// would also give, but they ride along here to keep the whole default in one place.)
 impl Default for MediaServerConfig {
     fn default() -> Self {
         Self {
@@ -80,6 +91,8 @@ impl Default for MediaServerConfig {
             prefer_mpv: false,
             mpv_args: Vec::new(),
             auto_profiles: true,
+            audio_samplerate: 0,
+            display_fps: 0.0,
         }
     }
 }
@@ -352,5 +365,18 @@ mod tests {
 
         let ms: MediaServerConfig = toml::from_str("auto_profiles = false").unwrap();
         assert!(!ms.auto_profiles);
+    }
+
+    #[test]
+    fn audio_and_display_fps_default_off_and_parse() {
+        // Absent → 0 = "leave it alone" (no forced samplerate, auto-detect the refresh).
+        let ms: MediaServerConfig = toml::from_str("").unwrap();
+        assert_eq!(ms.audio_samplerate, 0);
+        assert_eq!(ms.display_fps, 0.0);
+
+        let ms: MediaServerConfig =
+            toml::from_str("audio_samplerate = 96000\ndisplay_fps = 165.08").unwrap();
+        assert_eq!(ms.audio_samplerate, 96000);
+        assert!((ms.display_fps - 165.08).abs() < 1e-9);
     }
 }

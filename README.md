@@ -63,7 +63,11 @@ profiles when the hardware can handle it.
   CPU even at 60 Hz, so ultra declines those rather than drift; `F4` still takes them to
   the full display rate). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
   your own set; `omnideck mpvprofiles` renders + reports what was detected, and deleting
-  the `# omnideck-generated` header line in any rendered file makes it yours to edit.
+  the `# omnideck-generated` header line in any rendered file makes it yours to edit. For
+  daily use *outside* the session (e.g. casting via jellyfin-mpv-shim, where the panel rate
+  can't be auto-probed), set `[media_server] display_fps = 165.08` so the set bakes your real
+  refresh instead of the 60 fallback; `audio_samplerate = 96000` forces mpv's output rate for
+  a fixed-rate DAC / LDAC (both default off).
 - 🃏 **App switcher, iOS-style** (session) — tap **Guide** (or `Ctrl+Alt+Home`) for a row of
   cards, one per running app: pick one to jump to it, **Select** (or the ✕) to close it,
   **B** to drop back to the dashboard. Guide-**hold** still closes everything at once.

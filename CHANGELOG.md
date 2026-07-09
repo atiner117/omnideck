@@ -74,7 +74,12 @@ All notable changes to OmniDeck are documented here. Format follows
   `omnideck mpvprofiles` renders + reports the set; `packaging/test-profiles.sh`
   validates each filter's output rate headlessly. media_play additionally passes
   `--display-fps-override` from the session mode so mpv's `display-resample` pacing is
-  deterministic too.
+  deterministic too. Two `[media_server]` knobs tune the generated set: `display_fps`
+  (Hz) bakes an explicit panel rate for daily use *outside* the session — where the RandR
+  probe is unavailable and the profiles would otherwise fall back to 60 — and is also
+  passed as `--display-fps-override`; `audio_samplerate` (Hz) forces mpv's output rate
+  (e.g. `96000` for a fixed-rate DAC / LDAC), left native (bit-perfect) when unset. Both
+  default to 0 = off, so nothing changes for configs that don't set them.
 - **Jellyfin media library — "play your own 4K media", delivered** (Appendix B of the
   2026-07 review): a **Media Library** tile in Movies & TV opens an in-app browser —
   Continue Watching (with resume %), Latest, and your libraries, drilling
