@@ -116,6 +116,11 @@ profiles when the hardware can handle it.
 2. **Fullscreen "Big Picture" from your desktop** — `gamescope -f -- omnideck`.
    The complete 10-foot experience (switcher, Guide button, chords, fullscreen apps)
    inside your existing desktop session, no logout. Add `-W/-H/-r` flags to taste.
+   ⚠ Needs a nested-capable gamescope: on a **Wayland** desktop this just works; on an
+   **X11** desktop gamescope must be built with its SDL backend — some distro builds
+   (e.g. CachyOS 3.16.x) omit it and silently fall back to `headless`, i.e. OmniDeck
+   runs with **no visible window**. If `gamescope` logs "Creating headless backend",
+   use mode 1 or 3 instead.
 3. **Dedicated session** — `sudo ./packaging/install-session.sh`, then pick
    **OmniDeck** at your display manager's session list. The console mode.
 
