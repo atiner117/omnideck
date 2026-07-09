@@ -28,6 +28,9 @@ gilrs = "0.11"
 keyvalues-serde = "0.2"
 # M4 UI: serve local art to the webview as data URLs
 base64 = "0.22"
+# background.rs: downscale a big custom wallpaper to display size once (a 12 MP photo as a
+# base64 data URL was the dashboard's startup stall). jpeg+png decoders only — no default codecs.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # config: hand-editable ~/.config/omnideck/config.toml
 toml = "0.8"
 # SteamGridDB: fetch missing box art over HTTPS

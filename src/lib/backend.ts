@@ -30,6 +30,8 @@ export const getConfig = () => invoke<Config>("get_config");
 export const getApps = () => invoke<App[]>("get_apps");
 export const getCatalog = () => invoke<App[]>("get_catalog");
 export const getArt = (path: string) => invoke<string | null>("get_art", { path });
+/** Downscaled, cached copy of the custom wallpaper; resolves to an on-disk path for an omnideck:// URL (null → caller falls back to getArt). */
+export const bgImage = (path: string) => invoke<string | null>("bg_image", { path });
 export const gridArt = (appid: string) => invoke<string | null>("grid_art", { appid });
 export const appIcon = (url: string) => invoke<string | null>("app_icon", { url });
 export const mediaNowPlaying = () => invoke<MediaInfo | null>("media_now_playing");

@@ -37,9 +37,19 @@ pub fn ensure_gpu_env() {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
         let in_gamescope = crate::session::in_session()
             || std::env::var_os("STEAM_GAMESCOPE").is_some();
-        if in_gamescope || session == "x11" {
+        // Escape hatch for the dashboard-smoothness experiment: disabling the dmabuf
+        // renderer is what keeps WebKitGTK off its zero-copy GPU path on NVIDIA (the ~78 fps
+        // ceiling and jank the couch test hit). It was a hard requirement because dmabuf
+        // painted BLANK on the old driver — but that's driver-version-specific. Set
+        // OMNIDECK_WEBKIT_DMABUF=1 to KEEP the fast path enabled and see if a newer driver
+        // renders correctly: if the screen is fine, you get the smooth path; if it's blank,
+        // unset it. (Left opt-in until a given driver is confirmed good on this hardware.)
+        let force_dmabuf = std::env::var_os("OMNIDECK_WEBKIT_DMABUF").is_some();
+        if (in_gamescope || session == "x11") && !force_dmabuf {
             // X11/gamescope: the dmabuf renderer paints blank on NVIDIA — disable it.
             cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        } else if force_dmabuf {
+            tracing::info!("gpu: OMNIDECK_WEBKIT_DMABUF set — leaving the dmabuf renderer ON (fast path experiment)");
         } else if session == "wayland" {
             // Wayland: WebKitGTK won't start on NVIDIA without this (explicit-sync crash); keeps
             // the hardware-accelerated fast path, unlike disabling dmabuf.

@@ -117,6 +117,17 @@ pub fn get_config() -> config::Config {
     cfg
 }
 
+/// Prepare the custom wallpaper: a display-sized, cached copy served over `omnideck://`
+/// (the frontend wraps the returned path in its `artUrl`). Returns None when the source is
+/// unreadable/undecodable — the frontend then falls back to the full-image `get_art` path,
+/// so a failure is never worse than before, just not faster. See background.rs for why.
+#[tauri::command]
+pub fn bg_image(path: String) -> Option<String> {
+    let display = crate::gpu::session_display_mode().map(|(w, h, _)| (w, h));
+    let out = crate::background::prepared(&path, display)?;
+    Some(out.to_string_lossy().into_owned())
+}
+
 /// True when a media server is reachable-by-configuration (config or adopted shim pairing).
 #[tauri::command]
 pub fn media_available() -> bool {
@@ -243,6 +254,11 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
                 // and the navpad's virtual keyboard is delivered via Xwayland focus. (Firefox
                 // is already pinned by the GDK_BACKEND=x11 we inherit from gpu.rs.)
                 exec.insert(2, "--ozone-platform=x11".into());
+                // Pin the device scale to 1: under Xwayland at 2560x1440 Chromium can
+                // auto-detect a 2x HiDPI scale and render the page into the top-left
+                // quarter/half of the output (the couch-test "PWA on the left half"). We
+                // drive one known display; force 1:1 so the page fills it.
+                exec.insert(3, "--force-device-scale-factor=1".into());
             }
         }
     }
