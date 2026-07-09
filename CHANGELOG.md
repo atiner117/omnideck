@@ -7,6 +7,24 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **Custom wallpaper is downscaled once, not decoded huge every launch** (`background.rs`):
+  a big photo (the couch-test host's was 4000x3000 / 3.9 MB) was loaded as a base64
+  `data:` URL — a ~5 MB DOM string plus a 12 MP main-thread decode — which stalled the
+  dashboard to 12-18 fps at startup. It's now resized to display size once, cached under
+  `~/.cache/omnideck/bg/`, and served over `omnideck://` (measured 4 MB → 761 KB,
+  2560x1920). Falls back to the old full-image path if a source can't be prepared.
+  `omnideck bgprep <path>` reports the result.
+
+### Changed
+- **Browsers in-session get `--force-device-scale-factor=1`** so a Chromium PWA fills the
+  panel instead of rendering into a corner/half (Xwayland HiDPI auto-scale — the
+  couch-test "PWA on the left half").
+- **`OMNIDECK_WEBKIT_DMABUF=1` escape hatch** (gpu.rs): keeps WebKitGTK's zero-copy dmabuf
+  renderer ON on NVIDIA instead of the blank-screen workaround that also caps smoothness
+  (~78 fps). Opt-in per driver — the fast path to a truly 165 Hz dashboard where a newer
+  driver renders it correctly.
+
+### Added
 - **navpad — the controller drives launched apps** (`navpad.rs`): a virtual
   keyboard/mouse over `/dev/uinput`, active only while a launched app's window is in
   front (the switcher's visibility ground truth). Dpad/left stick → arrow-key pulses

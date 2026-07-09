@@ -1085,7 +1085,12 @@
     const path = cfg?.settings?.background_image;
     if (cfg?.settings?.background_default === "image" && path) {
       const seq = ++bgSeq; // drop a stale resolve if the path changed before this one returned
-      api.getArt(path).then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; }).catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
+      // Prefer the downscaled, display-sized cache (served over omnideck://, cheap to decode);
+      // fall back to the full-image data URL if preparation failed (bad/unreadable source).
+      api.bgImage(path)
+        .then((p) => p ? artUrl(p) : api.getArt(path))
+        .then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; })
+        .catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
     } else { bgImageUrl = ""; }
   });
   // Ambient pad follows its settings; idempotent, so this is safe to run on every change.

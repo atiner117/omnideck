@@ -63,6 +63,8 @@ pub struct NavPad {
     // Activation gate (cached — an X round-trip per input event would be silly).
     cached_active: bool,
     last_check: Instant,
+    logged_active: bool, // last active-state we logged, so transitions log once each
+    emitted_since_active: bool, // did we deliver anything this activation? (diagnostic)
     // Navigation state.
     dirs: [Dir; 4],
     ptr_x: f32,
@@ -101,6 +103,8 @@ impl NavPad {
                     dev,
                     cached_active: false,
                     last_check: Instant::now() - ACTIVE_CACHE,
+                    logged_active: false,
+                    emitted_since_active: false,
                     dirs: Default::default(),
                     ptr_x: 0.0,
                     ptr_y: 0.0,
@@ -129,6 +133,20 @@ impl NavPad {
         if self.last_check.elapsed() >= ACTIVE_CACHE {
             self.cached_active = crate::switcher::any_app_visible();
             self.last_check = Instant::now();
+            // Log each transition once so a session log answers "did the bridge engage?"
+            // (the couch test couldn't tell whether the gate or the delivery was the issue).
+            if self.cached_active != self.logged_active {
+                if self.cached_active {
+                    tracing::info!("navpad: ACTIVE — launched app in front, pad now drives it");
+                    self.emitted_since_active = false;
+                } else {
+                    tracing::info!(
+                        "navpad: inactive — OmniDeck in front (delivered input this activation: {})",
+                        self.emitted_since_active
+                    );
+                }
+                self.logged_active = self.cached_active;
+            }
         }
         self.cached_active
     }
@@ -136,6 +154,10 @@ impl NavPad {
     fn emit(&mut self, events: &[InputEvent]) {
         if let Err(e) = self.dev.emit(events) {
             tracing::warn!("navpad: emit failed: {e}");
+        } else if !self.emitted_since_active {
+            // First delivery of an activation — proves the uinput device is being read.
+            tracing::info!("navpad: delivered first input to the focused app");
+            self.emitted_since_active = true;
         }
     }
 

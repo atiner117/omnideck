@@ -11,6 +11,7 @@
 //   apps, capability, config, http, icons, library, steamgriddb — domain modules
 mod apps;
 mod asset;
+mod background;
 mod capability;
 mod cli;
 mod commands;
@@ -83,7 +84,8 @@ pub fn run() {
             commands::media_sections,
             commands::media_browse,
             commands::media_poster,
-            commands::media_play
+            commands::media_play,
+            commands::bg_image
         ])
         .setup(|app| {
             let handle = app.handle().clone();
