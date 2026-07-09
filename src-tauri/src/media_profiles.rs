@@ -28,12 +28,21 @@ pub struct Tier {
     pub cpu_threads: usize,
     pub gpu: String,
     pub usable: bool, // a real (non-lavapipe) GPU — software render can't feed gpu-next
+    /// Explicit refresh rate (Hz) from `[media_server] display_fps`; 0 = none. Overrides the
+    /// baked hint so daily desktop use (no session RandR) still targets the real panel rate.
+    pub display_fps_override: f64,
+    /// Forced audio samplerate (Hz) from `[media_server] audio_samplerate`; 0 = leave native.
+    pub audio_samplerate: u32,
 }
 
-/// Build the tier from an already-resolved display mode. The caller passes the mode it
-/// already probed (media_play needs it for `--display-fps-override` anyway) so playback
-/// doesn't open a second X11/RandR connection for the same answer.
-pub fn probe_tier(display: Option<crate::gpu::DisplayMode>) -> Tier {
+/// Build the tier from an already-resolved display mode plus the two config knobs. The caller
+/// passes the mode it already probed (media_play needs it for `--display-fps-override` anyway)
+/// so playback doesn't open a second X11/RandR connection for the same answer.
+pub fn probe_tier(
+    display: Option<crate::gpu::DisplayMode>,
+    display_fps_override: f64,
+    audio_samplerate: u32,
+) -> Tier {
     let cap = crate::capability::probe();
     let gpu = cap
         .gpus
@@ -45,15 +54,34 @@ pub fn probe_tier(display: Option<crate::gpu::DisplayMode>) -> Tier {
         cpu_threads: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
         gpu,
         usable: cap.has_real_gpu,
+        display_fps_override,
+        audio_samplerate,
     }
 }
 
+/// The refresh rate to bake into the profiles: the explicit config override wins, else the
+/// detected session mode, else 0 (unknown). Floored at 30 to match the `.vpy` consumers.
+fn effective_hz(t: &Tier) -> f64 {
+    if t.display_fps_override > 30.0 {
+        return t.display_fps_override;
+    }
+    t.display.map(|(_, _, hz)| hz).filter(|hz| *hz > 30.0).unwrap_or(0.0)
+}
+
 fn tier_info(t: &Tier) -> String {
-    let disp = match t.display {
-        Some((w, h, hz)) => format!("{w}x{h} @ {hz:.1} Hz"),
-        None => "unknown (not in session; profiles use mpv's own display_fps)".into(),
+    let disp = match (t.display, effective_hz(t)) {
+        // Override present: show it, keep the detected geometry if we have it.
+        (Some((w, h, _)), hz) if t.display_fps_override > 30.0 => format!("{w}x{h} @ {hz:.1} Hz (config)"),
+        (None, hz) if hz > 30.0 => format!("{hz:.1} Hz (config)"),
+        (Some((w, h, hz)), _) => format!("{w}x{h} @ {hz:.1} Hz"),
+        (None, _) => "unknown (not in session; profiles use mpv's own display_fps)".into(),
     };
-    format!("generated for: display {disp} | cpu threads {} | gpu {}", t.cpu_threads, t.gpu)
+    let audio = if t.audio_samplerate > 0 {
+        format!(" | audio {} Hz", t.audio_samplerate)
+    } else {
+        String::new()
+    };
+    format!("generated for: display {disp} | cpu threads {} | gpu {}{audio}", t.cpu_threads, t.gpu)
 }
 
 /// mpv built with the VapourSynth filter? Cached for the process lifetime — this shells
@@ -90,17 +118,25 @@ fn render(template: &str, dir: &Path, tier: &Tier) -> String {
     // 0.0 when unknown (desktop) — the scripts then use mpv's value or their 60 fallback.
     // Floor at 30, matching the `.vpy` consumers: a rate they'd reject as "unknown" (<=30)
     // must not be baked as if it were real, or mpv paces at it while interpolation targets 60.
-    let hint = tier.display.map(|(_, _, hz)| hz).filter(|hz| *hz > 30.0).unwrap_or(0.0);
+    let hint = effective_hz(tier);
     // Ultra's sustainability budget: src_pixels × target_fps the CPU can be trusted to
     // FlowFPS through real film. 12 Mpx/s per thread, anchored to ares' known-good
     // (1080p→82.5 on 28t) and known-desync (1080p→165) real-world data points; 0
     // (unknown thread count) disables the cap in the script.
     let budget_px = tier.cpu_threads as f64 * 12_000_000.0;
+    // Optional forced-samplerate directive; empty (no line) when 0, so the DAC's native rate
+    // is left bit-perfect for everyone who doesn't opt in.
+    let audio_line = if tier.audio_samplerate > 0 {
+        format!("audio-samplerate={}", tier.audio_samplerate)
+    } else {
+        String::new()
+    };
     template
         .replace("{{PROFILE_DIR}}", &dir.to_string_lossy())
         .replace("{{TIER_INFO}}", &tier_info(tier))
         .replace("{{DISPLAY_FPS_HINT}}", &format!("{hint:.3}"))
         .replace("{{ULTRA_BUDGET_PX}}", &format!("{budget_px:.0}"))
+        .replace("{{AUDIO_SAMPLERATE_LINE}}", &audio_line)
 }
 
 /// Render the profile set for this hardware into ~/.config/omnideck/mpv-profiles/,
@@ -143,7 +179,11 @@ pub fn ensure_profiles(tier: &Tier) -> Option<PathBuf> {
 /// The `--include=` path for media_play's auto-profile launch, or None when the host
 /// can't run the set (no VapourSynth mpv, no real GPU, no writable config dir). Takes the
 /// display mode the caller already resolved, so playback doesn't re-probe RandR here.
-pub fn auto_include(display: Option<crate::gpu::DisplayMode>) -> Option<PathBuf> {
+pub fn auto_include(
+    display: Option<crate::gpu::DisplayMode>,
+    display_fps_override: f64,
+    audio_samplerate: u32,
+) -> Option<PathBuf> {
     if !vapoursynth_available() {
         tracing::info!(
             "mpv-profiles: mpv lacks the vapoursynth filter — bare launch \
@@ -151,12 +191,13 @@ pub fn auto_include(display: Option<crate::gpu::DisplayMode>) -> Option<PathBuf>
         );
         return None;
     }
-    ensure_profiles(&probe_tier(display))
+    ensure_profiles(&probe_tier(display, display_fps_override, audio_samplerate))
 }
 
 /// Human-readable report for the `omnideck mpvprofiles` CLI.
 pub fn report() -> String {
-    let tier = probe_tier(crate::gpu::session_display_mode());
+    let ms = crate::config::load_or_create().media_server;
+    let tier = probe_tier(crate::gpu::session_display_mode(), ms.display_fps, ms.audio_samplerate);
     let mut s = String::from("OmniDeck mpv profile set\n");
     s.push_str(&format!("  vapoursynth mpv: {}\n", vapoursynth_available()));
     s.push_str(&format!("  {}\n", tier_info(&tier)));
@@ -182,6 +223,8 @@ mod tests {
             cpu_threads: 28,
             gpu: "NVIDIA (nvidia)".into(),
             usable: true,
+            display_fps_override: 0.0,
+            audio_samplerate: 0,
         }
     }
 
@@ -205,8 +248,14 @@ mod tests {
         for vpy in ["interpolate-basic.vpy", "interpolate-ultra.vpy"] {
             let t = TEMPLATES.iter().find(|(n, _)| *n == vpy).unwrap().1;
             assert!(render(t, dir, &tier).contains("float(\"165.000\")"), "{vpy}: hint not baked");
-            let no_display =
-                Tier { display: None, cpu_threads: 8, gpu: "x".into(), usable: true };
+            let no_display = Tier {
+                display: None,
+                cpu_threads: 8,
+                gpu: "x".into(),
+                usable: true,
+                display_fps_override: 0.0,
+                audio_samplerate: 0,
+            };
             assert!(render(t, dir, &no_display).contains("float(\"0.000\")"));
         }
     }
@@ -228,7 +277,14 @@ mod tests {
         assert!(ultra.contains("target < 2 * src_fps"), "ultra: 2x-source floor dropped");
         let dir = Path::new("/cfg/omnideck/mpv-profiles");
         assert!(render(ultra, dir, &tier_165()).contains("float(\"336000000\")"));
-        let unknown_cpu = Tier { display: None, cpu_threads: 0, gpu: "x".into(), usable: true };
+        let unknown_cpu = Tier {
+            display: None,
+            cpu_threads: 0,
+            gpu: "x".into(),
+            usable: true,
+            display_fps_override: 0.0,
+            audio_samplerate: 0,
+        };
         assert!(render(ultra, dir, &unknown_cpu).contains("float(\"0\")"));
         let basic = TEMPLATES
             .iter()
@@ -240,7 +296,42 @@ mod tests {
 
     #[test]
     fn tier_info_without_display_says_so() {
-        let t = Tier { display: None, cpu_threads: 8, gpu: "AMD (amdgpu)".into(), usable: true };
+        let t = Tier {
+            display: None,
+            cpu_threads: 8,
+            gpu: "AMD (amdgpu)".into(),
+            usable: true,
+            display_fps_override: 0.0,
+            audio_samplerate: 0,
+        };
         assert!(tier_info(&t).contains("unknown"));
+    }
+
+    #[test]
+    fn audio_samplerate_line_present_only_when_set() {
+        let dir = Path::new("/cfg/omnideck/mpv-profiles");
+        let mut t = tier_165();
+        // 0 → no forced-samplerate directive (native rate stays bit-perfect).
+        assert!(!render(TEMPLATES[0].1, dir, &t).contains("audio-samplerate"));
+        t.audio_samplerate = 96000;
+        assert!(render(TEMPLATES[0].1, dir, &t).contains("audio-samplerate=96000"));
+    }
+
+    #[test]
+    fn display_fps_override_wins_over_detected_and_reaches_the_vpy() {
+        let dir = Path::new("/cfg/omnideck/mpv-profiles");
+        // Detected panel says 60, but the explicit config override is 165.08 → the .vpy hint
+        // must bake the override (this is the daily-desktop / no-session path).
+        let mut t = tier_165();
+        t.display = Some((2560, 1440, 60.0));
+        t.display_fps_override = 165.08;
+        let basic = TEMPLATES.iter().find(|(n, _)| *n == "interpolate-basic.vpy").unwrap().1;
+        assert!(render(basic, dir, &t).contains("float(\"165.080\")"));
+        assert!(tier_info(&t).contains("165.1 Hz (config)"));
+        // A sub-30 override is treated as "unknown" and does NOT win over a real detected rate.
+        let mut t2 = tier_165(); // detected 165
+        t2.display_fps_override = 24.0;
+        let basic_out = render(basic, dir, &t2);
+        assert!(basic_out.contains("float(\"165.000\")"), "sub-30 override must not clobber the detected rate");
     }
 }

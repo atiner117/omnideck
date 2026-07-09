@@ -16,4 +16,17 @@ mpv_args: Array<string>,
  * Use OmniDeck's generated display-aware profile set (media_profiles.rs) when
  * `mpv_args` is empty and mpv has VapourSynth. Default true; false = bare launch.
  */
-auto_profiles: boolean, };
+auto_profiles: boolean, 
+/**
+ * Force mpv's audio output samplerate (Hz) in the generated profile set — e.g. 96000 for
+ * a fixed-rate DAC or LDAC headphones. 0 (default) leaves mpv's native rate (bit-perfect;
+ * forcing a rate resamples everything, so only set it when your gear wants a fixed rate).
+ */
+audio_samplerate: number, 
+/**
+ * Display refresh rate (Hz) to bake into the generated profiles and pass as
+ * `--display-fps-override`, for when OmniDeck can't detect it — i.e. daily use *outside*
+ * the gamescope session, where the RandR probe is unavailable and the profiles would
+ * otherwise fall back to 60. 0 (default) = auto-detect from the session's RandR mode.
+ */
+display_fps: number, };
