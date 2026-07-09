@@ -67,9 +67,11 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                 gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
                     // None here means the hold already fired (or a stray release) — ignore.
                     if guide_down.take().is_some() {
-                        if let Some(what) = crate::switcher::toggle() {
-                            tracing::info!("guide: app {what}");
-                        } // nothing launched — ignore quietly
+                        // Short press opens/closes the deck switcher (iOS-style app cards);
+                        // the frontend owns the overlay and calls deck_open (which hides the
+                        // apps so the overlay shows). Guide HOLD still closes-all below.
+                        tracing::info!("guide: tap — toggle deck");
+                        let _ = handle.emit("guide-tap", ());
                     }
                     continue; // swallow; never forward Guide as a UI event
                 }

@@ -212,6 +212,38 @@ pub fn save_settings(settings: config::Settings) -> Result<(), String> {
     config::save_settings(settings)
 }
 
+// --- Deck switcher (iOS-style app cards) ---
+//
+// The frontend owns the overlay UI + card navigation; these four commands are the window/
+// process actions behind it. Opening the deck hides every app so OmniDeck's overlay is what
+// shows; picking a card maps that one app; the close card SIGTERMs its group.
+
+/// Open the deck: hide all launched apps (so the overlay is visible) and return the live-app
+/// cards. An empty list means nothing is running — the frontend can skip showing the deck.
+#[tauri::command]
+pub fn deck_open() -> Vec<watchdog::LiveApp> {
+    crate::switcher::hide_all();
+    watchdog::live_apps()
+}
+
+/// Current live-app cards without touching window state (e.g. refreshing after one closes).
+#[tauri::command]
+pub fn deck_list() -> Vec<watchdog::LiveApp> {
+    watchdog::live_apps()
+}
+
+/// Bring one app group to the front (deck card selected).
+#[tauri::command]
+pub fn deck_show(group: u32) -> Result<(), String> {
+    if crate::switcher::show_group(group) { Ok(()) } else { Err("could not show that app".into()) }
+}
+
+/// Close one app group (deck card's close affordance / Select).
+#[tauri::command]
+pub fn deck_close(group: u32) -> Result<(), String> {
+    if watchdog::close_group(group) { Ok(()) } else { Err("could not close that app".into()) }
+}
+
 /// True if `arg` is safe to pass to a browser after the BROWSER token: an http(s) URL, or
 /// our `--app=<http(s) URL>` PWA form. Rejects flags so a crafted `search_provider` or a
 /// hand-edited config can't inject e.g. Chromium's `--renderer-cmd-prefix` (arbitrary exec).

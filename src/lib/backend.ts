@@ -53,6 +53,18 @@ export const switchApp = () => invoke<boolean>("switch_app");
 export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
 
+// ---- deck switcher (iOS-style app cards — switcher.rs / watchdog.rs) ----
+/** A live launched app the deck shows as a card. */
+export type LiveApp = { group: number; name: string; id: string | null };
+/** Open the deck: hides all apps so the overlay shows, returns the live-app cards. */
+export const deckOpen = () => invoke<LiveApp[]>("deck_open");
+/** Re-fetch the live-app cards without changing window state. */
+export const deckList = () => invoke<LiveApp[]>("deck_list");
+/** Bring one app group to the front (a card was chosen). */
+export const deckShow = (group: number) => invoke<void>("deck_show", { group });
+/** Close one app group (a card's close / Select). */
+export const deckClose = (group: number) => invoke<void>("deck_close", { group });
+
 // ---- media server (Jellyfin browse/play — media_server.rs) ----
 export const mediaAvailable = () => invoke<boolean>("media_available");
 export const mediaSections = () => invoke<MediaSections>("media_sections");
@@ -69,3 +81,5 @@ export const onGamepad = (cb: EventCallback<GamepadEvent>): Promise<UnlistenFn> 
 /** MPRIS state changed (track/status/player) — pushed by the backend watcher, no polling. */
 export const onMediaChanged = (cb: EventCallback<MediaInfo | null>): Promise<UnlistenFn> =>
   listen<MediaInfo | null>("media-changed", cb);
+/** Guide button tapped (or Ctrl+Alt+Home) — the frontend toggles the deck switcher. */
+export const onGuideTap = (cb: EventCallback<null>): Promise<UnlistenFn> => listen<null>("guide-tap", cb);

@@ -29,12 +29,42 @@ static HIDDEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 /// group that was audibly playing at hide time. Drained + SIGCONTed on the next re-show.
 static STOPPED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-/// Process-group id for `pid` from /proc/<pid>/stat field 5 (0 when gone/unreadable).
+/// `(ppid, pgid)` for `pid` from /proc/<pid>/stat fields 4 and 5 (0s when gone/unreadable).
+fn parent_and_pgid(pid: u32) -> (u32, u32) {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return (0, 0) };
+    // comm (field 2) can contain spaces/parens — split after the LAST ')'. After that the
+    // remaining whitespace fields are: state(0) ppid(1) pgrp(2) ...
+    let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else { return (0, 0) };
+    let mut it = rest.split_whitespace();
+    let ppid = it.nth(1).and_then(|s| s.parse().ok()).unwrap_or(0); // skip state, take ppid
+    let pgid = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (ppid, pgid)
+}
+
+/// Process-group id for `pid` (0 when gone/unreadable).
 fn pgid_of(pid: u32) -> u32 {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return 0 };
-    // comm (field 2) can contain spaces/parens — split after the LAST ')'.
-    let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else { return 0 };
-    rest.split_whitespace().nth(2).and_then(|s| s.parse().ok()).unwrap_or(0)
+    parent_and_pgid(pid).1
+}
+
+/// Which of `groups` owns `pid`, matching its process group OR any ANCESTOR's — Electron
+/// apps (Feishin) run their audio in a child that `setsid`s into its own group, so an exact
+/// pgid match misses it and the app looks silent. Walks up to 16 parents (cycle/runaway
+/// guard). Returns the owning group, or None.
+fn owning_group(mut pid: u32, groups: &[u32]) -> Option<u32> {
+    for _ in 0..16 {
+        if pid <= 1 {
+            break;
+        }
+        let (ppid, pgid) = parent_and_pgid(pid);
+        if groups.contains(&pid) {
+            return Some(pid);
+        }
+        if groups.contains(&pgid) {
+            return Some(pgid);
+        }
+        pid = ppid;
+    }
+    None
 }
 
 /// The launched apps' currently-viewable toplevels as `(window, process group)`.
@@ -137,6 +167,92 @@ pub fn toggle() -> Option<&'static str> {
     Some("re-shown — app focused")
 }
 
+/// Session gate shared by the deck entry points (see toggle's note).
+fn session_ok() -> bool {
+    crate::session::in_session() || std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_some()
+}
+
+/// Hide EVERY launched app so OmniDeck (and the deck overlay) is what's on screen — the
+/// deck-switcher's "open" step. Same as toggle's hide half: unmap owned toplevels, remember
+/// them, freeze the silent ones. Returns true if anything was hidden.
+pub fn hide_all() -> bool {
+    if !session_ok() {
+        return false;
+    }
+    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
+    let root = conn.setup().roots[screen_num].root;
+    let visible = visible_owned(&conn, root, &crate::watchdog::live_groups());
+    if visible.is_empty() {
+        return false;
+    }
+    let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
+    let failed = set_mapped(&conn, &wins, false);
+    {
+        let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+        for &(win, _) in &visible {
+            if !hidden.contains(&win) && !failed.contains(&win) {
+                hidden.push(win);
+            }
+        }
+    }
+    freeze_silent_groups(&visible, &failed);
+    true
+}
+
+/// Bring ONE launched app group to the front (the deck-switcher's "open this card"): resume
+/// it if frozen, then map its toplevels. Other apps stay hidden. Returns true on success.
+pub fn show_group(group: u32) -> bool {
+    if !session_ok() {
+        return false;
+    }
+    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
+    let root = conn.setup().roots[screen_num].root;
+
+    // Resume this group first so its windows can repaint/focus when mapped.
+    let _ = std::process::Command::new("kill").args(["-CONT", &format!("-{group}")]).status();
+    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|&g| g != group);
+
+    let wins = windows_of_group(&conn, root, group);
+    if wins.is_empty() {
+        return false;
+    }
+    let failed = set_mapped(&conn, &wins, true);
+    // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
+    crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
+        .retain(|w| !wins.contains(w) || failed.contains(w));
+    failed.len() < wins.len()
+}
+
+/// All toplevels (any map state) whose _NET_WM_PID belongs to `group` — used to re-map a
+/// specific app's windows after they were unmapped (they're not VIEWABLE, so visible_owned
+/// can't find them).
+fn windows_of_group(
+    conn: &x11rb::rust_connection::RustConnection,
+    root: Window,
+    group: u32,
+) -> Vec<Window> {
+    let Ok(Ok(net_wm_pid)) = conn.intern_atom(false, b"_NET_WM_PID").map(|c| c.reply()) else {
+        return Vec::new();
+    };
+    let net_wm_pid = net_wm_pid.atom;
+    let Ok(Ok(tree)) = conn.query_tree(root).map(|c| c.reply()) else { return Vec::new() };
+    let mut out = Vec::new();
+    for &win in &tree.children {
+        let Ok(Ok(prop)) = conn
+            .get_property(false, win, net_wm_pid, AtomEnum::CARDINAL, 0, 1)
+            .map(|c| c.reply())
+        else {
+            continue;
+        };
+        if let Some(pid) = prop.value32().and_then(|mut v| v.next()) {
+            if owning_group(pid, &[group]).is_some() {
+                out.push(win);
+            }
+        }
+    }
+    out
+}
+
 /// SIGSTOP every just-hidden process group that is NOT audibly playing (see header:
 /// background music is a feature; a silent hidden renderer is a space heater). Windows
 /// that resisted unmap keep their group running — a still-visible window must not freeze.
@@ -154,7 +270,11 @@ fn freeze_silent_groups(visible: &[(Window, u32)], failed: &[Window]) {
     let audible = audible_groups(&candidates);
     let mut stopped = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED");
     for g in candidates {
-        if audible.contains(&g) || stopped.contains(&g) {
+        if audible.contains(&g) {
+            tracing::info!("switcher: hidden group {g} is playing audio — left running");
+            continue;
+        }
+        if stopped.contains(&g) {
             continue;
         }
         let ok = std::process::Command::new("kill")
@@ -208,9 +328,12 @@ fn audible_groups(candidates: &[u32]) -> Vec<u32> {
         else {
             continue;
         };
-        let g = pgid_of(pid);
-        if candidates.contains(&g) && !audible.contains(&g) {
-            audible.push(g);
+        // Match the stream's process to a launched group via ancestry (Electron audio is a
+        // setsid'd child — an exact pgid check froze Feishin mid-song, the 2026-07-09 bug).
+        if let Some(g) = owning_group(pid, candidates) {
+            if !audible.contains(&g) {
+                audible.push(g);
+            }
         }
     }
     audible

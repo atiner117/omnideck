@@ -21,9 +21,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let press_ms = match action.as_str() {
         "guide-short" => 120,
         "guide-hold" => arg_ms.unwrap_or(1000),
+        "press-south" => 120, // A button: deck "open card" / activate
         "stick-up" | "stick-down" => arg_ms.unwrap_or(300),
         _ => {
-            eprintln!("usage: virtual-pad guide-short | guide-hold [ms] | stick-up [ms] | stick-down [ms]");
+            eprintln!("usage: virtual-pad guide-short | guide-hold [ms] | press-south | stick-up [ms] | stick-down [ms]");
             std::process::exit(2);
         }
     };
@@ -71,11 +72,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("virtual-pad: ABS_Y recentered");
     } else {
         let key = evdev::EventType::KEY;
-        dev.emit(&[InputEvent::new(key, Key::BTN_MODE.code(), 1)])?;
-        eprintln!("virtual-pad: BTN_MODE down ({press_ms} ms)");
+        // guide-*  → BTN_MODE (Guide); press-south → BTN_SOUTH (A).
+        let btn = if action == "press-south" { Key::BTN_SOUTH } else { Key::BTN_MODE };
+        dev.emit(&[InputEvent::new(key, btn.code(), 1)])?;
+        eprintln!("virtual-pad: {btn:?} down ({press_ms} ms)");
         std::thread::sleep(Duration::from_millis(press_ms));
-        dev.emit(&[InputEvent::new(key, Key::BTN_MODE.code(), 0)])?;
-        eprintln!("virtual-pad: BTN_MODE up");
+        dev.emit(&[InputEvent::new(key, btn.code(), 0)])?;
+        eprintln!("virtual-pad: {btn:?} up");
     }
 
     // Keep the device alive long enough for the reader to drain the release event.

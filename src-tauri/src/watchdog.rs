@@ -6,16 +6,34 @@
 use std::sync::Mutex;
 use tauri::Emitter;
 
-/// Process-group ids of ALL still-running launched apps (each launch is its own group
-/// leader via process_group(0)). The switcher matches session windows to these groups to
-/// know which windows belong to launched apps (vs OmniDeck itself or gamescope's own),
-/// and `return_home` signals every one of them (see its semantics note). Inside gamescope
-/// a launched window stacks on top of us with no other way back; Steam games use a
-/// separate path (gamescope refocuses us when the game exits).
-static LIVE_GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// A still-running launched app: its process-group leader pid (each launch is its own group
+/// leader via process_group(0)) plus the label/id the deck switcher shows on its card.
+#[derive(Clone, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct LiveApp {
+    pub group: u32,
+    pub name: String,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub id: Option<String>,
+}
 
-/// Snapshot of the launched-app process groups that are still alive.
+/// ALL still-running launched apps. The switcher matches session windows to these groups
+/// (via the pids) to know which windows belong to launched apps (vs OmniDeck itself or
+/// gamescope's own), the deck switcher lists them as cards, and `return_home` signals every
+/// one. Inside gamescope a launched window stacks on top of us with no other way back;
+/// Steam games use a separate path (gamescope refocuses us when the game exits).
+static LIVE_GROUPS: Mutex<Vec<LiveApp>> = Mutex::new(Vec::new());
+
+/// Process-group ids of the launched apps still alive (switcher window-ownership matching).
 pub fn live_groups() -> Vec<u32> {
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS")
+        .iter()
+        .map(|a| a.group)
+        .collect()
+}
+
+/// Full snapshot of the live launched apps (the deck switcher's cards).
+pub fn live_apps() -> Vec<LiveApp> {
     crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").clone()
 }
 
@@ -31,28 +49,39 @@ pub fn return_home() -> bool {
     let groups = live_groups();
     let mut any = false;
     for pid in groups {
-        // Signal the whole process GROUP (negative pid). Browsers (Brave/Chromium) fork a
-        // persistent main process, so SIGTERM to the single spawned pid can leave a window
-        // behind; the child is spawned as its own group leader (process_group(0) in launch),
-        // so -pid reaches every forked helper. Fall back to the bare pid if that misses.
-        // CONT first: a group the switcher paused on hide (SIGSTOP) can't act on TERM
-        // until it's continued — without this, close on a hidden app looks ignored.
-        let grp = format!("-{pid}");
-        let _ = std::process::Command::new("kill").args(["-CONT", &grp]).status();
-        let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
-        let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
-        any |= grp_ok || pid_ok;
+        any |= signal_group(pid);
     }
     // Only report success if a signal actually reached something — otherwise the caller would
     // emit "app-closed" / swallow the Guide press while the window is still on screen.
     any
 }
 
+/// Close a single launched app group (the deck switcher's per-card close). Same CONT-then-
+/// TERM discipline as return_home; the child's watch_child thread reaps + emits app-exited.
+pub fn close_group(group: u32) -> bool {
+    signal_group(group)
+}
+
+/// SIGTERM a whole process group (CONT first so a switcher-frozen group can act on it).
+/// Browsers fork a persistent main process, so signalling the GROUP (-pid) reaches every
+/// helper; fall back to the bare pid.
+fn signal_group(pid: u32) -> bool {
+    let grp = format!("-{pid}");
+    let _ = std::process::Command::new("kill").args(["-CONT", &grp]).status();
+    let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
+    let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
+    grp_ok || pid_ok
+}
+
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
 /// (Lets the UI show a "now playing" state and know when focus returns.)
 pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: String, id: Option<String>) {
     let pid = child.id();
-    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").push(pid);
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").push(LiveApp {
+        group: pid,
+        name: name.clone(),
+        id: id.clone(),
+    });
     // The frontend correlates Now Playing entries by this launch id (the tile id), falling back
     // to the name for any legacy caller, so two same-named launchables don't clobber on exit.
     let exit_key = id.unwrap_or_else(|| name.clone());
@@ -60,7 +89,7 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
     std::thread::spawn(move || {
         let _ = child.wait();
         // Clear only if a newer launch hasn't already replaced us as the current app.
-        crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|&g| g != pid);
+        crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|a| a.group != pid);
         let _ = app.emit("app-exited", exit_key);
     });
 }

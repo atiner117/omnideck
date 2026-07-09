@@ -7,11 +7,12 @@
 //
 //   dpad / left stick   → arrow-key pulses with console-style repeat (TV-UI navigation;
 //                          Jellyfin-web, YouTube TV, etc. are fully arrow-driven)
-//   A (South)           → Enter        (held = real key hold)
+//   right stick         → mouse pointer (squared response curve) — the primary way to
+//                          navigate arbitrary web UIs, the PlayStation-browser answer
+//   A (South)           → left click   (select where the pointer is — the main action)
 //   B (East)            → Escape       (back in every TV-style web UI)
-//   X (West)            → Space        (play/pause in players)
-//   right stick         → mouse pointer (squared response curve), for UIs without
-//                          arrow navigation — the PlayStation-browser answer
+//   X (West)            → Enter        (activate the focused element in keyboard/spatial UIs)
+//   Y (North)           → Space        (play/pause in players)
 //   R2 / L2             → left / right mouse button (R2 held = press-and-hold / drag)
 //   L1 / R1             → scroll wheel up / down (with repeat)
 //
@@ -226,9 +227,14 @@ impl NavPad {
                     Button::DPadDown => self.set_dir(DOWN, false, down),
                     Button::DPadLeft => self.set_dir(LEFT, false, down),
                     Button::DPadRight => self.set_dir(RIGHT, false, down),
-                    Button::South => if down { self.key_down(Key::KEY_ENTER) } else { self.key_up(Key::KEY_ENTER) },
+                    // A/South = the primary "select": a LEFT CLICK where the pointer is —
+                    // the user navigates with the right-stick pointer and expects cross/A to
+                    // click (couch test 2026-07-09). Enter (for keyboard/spatial-nav apps like
+                    // Jellyfin-web) is on X/West so the two never double-fire on toggles.
+                    Button::South => if down { self.key_down(Key::BTN_LEFT) } else { self.key_up(Key::BTN_LEFT) },
                     Button::East => if down { self.key_down(Key::KEY_ESC) } else { self.key_up(Key::KEY_ESC) },
-                    Button::West => if down { self.key_down(Key::KEY_SPACE) } else { self.key_up(Key::KEY_SPACE) },
+                    Button::West => if down { self.key_down(Key::KEY_ENTER) } else { self.key_up(Key::KEY_ENTER) },
+                    Button::North => if down { self.key_down(Key::KEY_SPACE) } else { self.key_up(Key::KEY_SPACE) },
                     Button::RightTrigger2 => if down { self.key_down(Key::BTN_LEFT) } else { self.key_up(Key::BTN_LEFT) },
                     Button::LeftTrigger2 => if down { self.key_down(Key::BTN_RIGHT) } else { self.key_up(Key::BTN_RIGHT) },
                     Button::RightTrigger => {

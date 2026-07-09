@@ -10,8 +10,8 @@
 #   2. kbd-hide    Ctrl+Alt+Home hides a launched app  (X grab → switcher unmap)
 #   3. kbd-show    Ctrl+Alt+Home again brings it back  (remap)
 #   4. kbd-close   Ctrl+Alt+End closes it              (watchdog pgid kill)
-#   5. pad-hide    Guide short-press hides it          (uinput virtual pad → gilrs)
-#   6. pad-show    Guide short-press again shows it
+#   5. pad-deck    Guide short-press opens the deck (hides the app)  (uinput pad → gilrs)
+#   6. pad-pick    A on the focused card brings the app back
 #   7. pad-close   Guide hold closes it AT the 800 ms threshold, while still held
 #   8. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
 #
@@ -141,10 +141,14 @@ toggle_expect() {
 echo "── keyboard chords ──"
 KEY="xdotool key --clearmodifiers"
 if stub_launch; then
-  toggle_expect "$KEY ctrl+alt+Home" hidden && ok "kbd-hide: Ctrl+Alt+Home hid the app" || bad "kbd-hide: app still visible"
-  toggle_expect "$KEY ctrl+alt+Home" shown  && ok "kbd-show: Ctrl+Alt+Home brought it back" || bad "kbd-show: app did not remap"
+  # Ctrl+Alt+Home opens the deck switcher (a global X grab, so it's reliable here); the deck
+  # hides every app so its overlay shows. Card SELECTION via a plain key (Enter) needs the
+  # webview to hold X focus after the hide, which nested-gamescope XTEST can't guarantee — the
+  # gamepad path (pad-pick below, evdev-direct) covers selection end to end. So the keyboard
+  # section verifies open + Ctrl+Alt+End close, both grab-based and focus-independent.
+  toggle_expect "$KEY ctrl+alt+Home" hidden && ok "kbd-deck: Ctrl+Alt+Home opened the deck (app hidden)" || bad "kbd-deck: app still visible"
   $KEY ctrl+alt+End
-  if wait_for 8 "! stub_alive"; then ok "kbd-close: Ctrl+Alt+End closed the app"; else bad "kbd-close: process still running"; stub_kill; fi
+  if wait_for 8 "! stub_alive"; then ok "kbd-close: Ctrl+Alt+End closed the app (from the deck)"; else bad "kbd-close: process still running"; stub_kill; fi
 else
   bad "kbd: stub app never appeared (test hook / launch path broken?)"
 fi
@@ -154,8 +158,10 @@ echo "── gamepad Guide (virtual pad) ──"
 if [ -w /dev/uinput ]; then
   PAD="$PAD_BIN"
   if stub_launch; then
-    toggle_expect "$PAD guide-short" hidden && ok "pad-hide: Guide short-press hid the app" || bad "pad-hide: app still visible"
-    toggle_expect "$PAD guide-short" shown  && ok "pad-show: Guide short-press brought it back" || bad "pad-show: app did not remap"
+    # Guide tap opens the deck switcher (hides apps for the overlay); A/South on the focused
+    # card brings that app back — this exercises deck_open (hide_all) + deck_show end to end.
+    toggle_expect "$PAD guide-short" hidden && ok "pad-deck: Guide tap opened the deck (app hidden)" || bad "pad-deck: app still visible"
+    toggle_expect "$PAD press-south" shown  && ok "pad-pick: A on the card re-showed the app" || bad "pad-pick: app did not remap"
     # Hold long (3 s): the close must fire AT the 800 ms threshold — i.e. while the button
     # is still down — so the stub dies while the injector process is still holding.
     eval "$PAD guide-hold 3000" & PAD_PID=$!
