@@ -14,8 +14,9 @@ use std::sync::OnceLock;
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Canonicalized directories art may legitimately come from: Steam's librarycache (local capsule/
-/// hero art) and our own SteamGridDB art cache. Computed once. Favicons + the custom background
-/// image stay on `data:` for now, so the icon cache is intentionally NOT a root yet.
+/// hero art), our own SteamGridDB art cache, the media poster cache, and the downscaled-wallpaper
+/// cache (background.rs). Computed once. Favicons still stay on `data:`, so the icon cache is
+/// intentionally NOT a root yet.
 fn roots() -> &'static Vec<PathBuf> {
     static ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
     ROOTS.get_or_init(|| {
@@ -34,6 +35,14 @@ fn roots() -> &'static Vec<PathBuf> {
         if let Some(media) = crate::media_server::poster_cache_dir() {
             let _ = std::fs::create_dir_all(&media);
             if let Ok(p) = media.canonicalize() {
+                v.push(p);
+            }
+        }
+        // Downscaled custom wallpapers (bg_image → background::prepared): served over
+        // `omnideck://` like the other art, so its cache dir must be an allowlisted root too.
+        if let Some(bg) = crate::background::cache_dir() {
+            let _ = std::fs::create_dir_all(&bg);
+            if let Ok(p) = bg.canonicalize() {
                 v.push(p);
             }
         }

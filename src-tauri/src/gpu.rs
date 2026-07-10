@@ -45,11 +45,15 @@ pub fn ensure_gpu_env() {
         // renders correctly: if the screen is fine, you get the smooth path; if it's blank,
         // unset it. (Left opt-in until a given driver is confirmed good on this hardware.)
         let force_dmabuf = std::env::var_os("OMNIDECK_WEBKIT_DMABUF").is_some();
-        if (in_gamescope || session == "x11") && !force_dmabuf {
-            // X11/gamescope: the dmabuf renderer paints blank on NVIDIA — disable it.
-            cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        } else if force_dmabuf {
-            tracing::info!("gpu: OMNIDECK_WEBKIT_DMABUF set — leaving the dmabuf renderer ON (fast path experiment)");
+        if in_gamescope || session == "x11" {
+            // X11/gamescope: the dmabuf renderer paints blank on NVIDIA — disable it. The escape
+            // hatch only skips THIS disable (the fast-path experiment); it must not leak into the
+            // Wayland/unknown arms below, which set a different, still-required workaround.
+            if force_dmabuf {
+                tracing::info!("gpu: OMNIDECK_WEBKIT_DMABUF set — leaving the dmabuf renderer ON (fast path experiment)");
+            } else {
+                cmd.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            }
         } else if session == "wayland" {
             // Wayland: WebKitGTK won't start on NVIDIA without this (explicit-sync crash); keeps
             // the hardware-accelerated fast path, unlike disabling dmabuf.
