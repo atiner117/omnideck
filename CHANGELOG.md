@@ -7,6 +7,16 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **Playback controls are per-dimension toggles** (`omnideck-toggles.lua`, shipped in the
+  generated profile set): one key per dimension instead of a preset profile per
+  combination — F4 cycles interpolation (off/smooth/ultra), F5 upscaling quality, F6
+  tone smoothing (deband), F3 denoise (composes with interpolation), F2 stretch-to-fill,
+  F1 reset, F9 status; every toggle answers on the OSD. The combo-profiles
+  (`interpolate-basic-stretched` et al) are gone — four dimensions would have needed 24
+  of them. Also fixes the **ultra seek-desync** (couch find: skipping around while
+  optical-flow interpolation is active desynced audio *without* the A-V counter
+  noticing): the script drops and re-applies the filter around every seek, verified over
+  IPC (ultra stays 82.54 fps across seeks).
 - **Deck switcher — iOS-style app cards** (`switcher.rs`/`watchdog.rs` + `+page.svelte`):
   a Guide tap (or Ctrl+Alt+Home) now opens a row of cards, one per running app — pick one
   to bring it forward, **Select** (or the card's ✕) to close it, **B/Guide** to dismiss.

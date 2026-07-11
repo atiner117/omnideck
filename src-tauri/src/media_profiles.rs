@@ -102,14 +102,20 @@ pub fn vapoursynth_available() -> bool {
 const TEMPLATES: &[(&str, &str)] = &[
     ("mpv.conf", include_str!("../profiles/mpv.conf")),
     ("input.conf", include_str!("../profiles/input.conf")),
+    ("omnideck-toggles.lua", include_str!("../profiles/omnideck-toggles.lua")),
     ("interpolate-basic.vpy", include_str!("../profiles/interpolate-basic.vpy")),
     ("interpolate-ultra.vpy", include_str!("../profiles/interpolate-ultra.vpy")),
     ("denoise.vpy", include_str!("../profiles/denoise.vpy")),
 ];
 
-/// Files starting with this line belong to OmniDeck and are rewritten freely; a file
-/// whose header was removed is user-owned and never touched again.
+/// Files starting with this marker belong to OmniDeck and are rewritten freely; a file
+/// whose header was removed is user-owned and never touched again. Lua uses `--` comments,
+/// so the marker is accepted behind either comment leader.
 const GENERATED_HEADER: &str = "# omnideck-generated";
+
+fn is_generated(content: &str) -> bool {
+    content.starts_with(GENERATED_HEADER) || content.starts_with("-- # omnideck-generated")
+}
 
 fn render(template: &str, dir: &Path, tier: &Tier) -> String {
     // The .vpy scripts can't be handed the panel rate at runtime: mpv's vapoursynth
@@ -153,7 +159,7 @@ pub fn ensure_profiles(tier: &Tier) -> Option<PathBuf> {
         let path = dir.join(name);
         let content = render(template, &dir, tier);
         match std::fs::read_to_string(&path) {
-            Ok(cur) if !cur.starts_with(GENERATED_HEADER) => {
+            Ok(cur) if !is_generated(&cur) => {
                 tracing::debug!("mpv-profiles: {name} is user-owned (header removed), keeping it");
                 continue;
             }
@@ -234,7 +240,7 @@ mod tests {
         let tier = tier_165();
         for (name, template) in TEMPLATES {
             let out = render(template, dir, &tier);
-            assert!(out.starts_with(GENERATED_HEADER), "{name}: generated header missing");
+            assert!(is_generated(&out), "{name}: generated header missing");
             assert!(!out.contains("{{"), "{name}: unrendered placeholder");
             assert!(out.contains("2560x1440 @ 165.0 Hz"), "{name}: tier info missing");
             // Nothing host-personal may leak from the template source.
@@ -242,7 +248,16 @@ mod tests {
         }
         let conf = render(TEMPLATES[0].1, dir, &tier);
         assert!(conf.contains("input-conf=/cfg/omnideck/mpv-profiles/input.conf"));
-        assert!(conf.contains("vf=vapoursynth:/cfg/omnideck/mpv-profiles/interpolate-basic.vpy"));
+        // The toggle script owns the filter dimensions (no preset combo-profiles anymore);
+        // it must be loaded by the conf and know where the .vpy files live.
+        assert!(conf.contains("scripts-append=/cfg/omnideck/mpv-profiles/omnideck-toggles.lua"));
+        let lua = render(
+            TEMPLATES.iter().find(|(n, _)| *n == "omnideck-toggles.lua").unwrap().1,
+            dir,
+            &tier,
+        );
+        assert!(lua.contains("VPY = \"/cfg/omnideck/mpv-profiles\""), "lua: vpy dir not baked");
+        assert!(lua.contains("interpolate-ultra.vpy"), "lua: ultra path missing");
         // The session rate is baked into the interpolation scripts (mpv does not forward
         // --display-fps-override into VapourSynth) — and 0.0 when there is no session.
         for vpy in ["interpolate-basic.vpy", "interpolate-ultra.vpy"] {

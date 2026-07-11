@@ -56,12 +56,16 @@ profiles when the hardware can handle it.
   for direct-play automatically: GPU upscaling + HDR tone mapping + debanding
   (`profile=high-quality`, `vo=gpu-next`), plus motion interpolation targeting **your
   panel's real refresh rate** (read from the session's display, e.g. 165 Hz — not a
-  hardcoded 60). During playback: `F1` passthrough · `F3` denoise · `F4` smooth
-  (full display rate) · `F6` ultra (optical flow; deliberately targets display/2 above
-  100 Hz and stays inside a per-CPU pixel-rate budget — full-rate optical flow starves
-  even fast CPUs over a long movie and desyncs audio, and a 4K source can max a modest
-  CPU even at 60 Hz, so ultra declines those rather than drift; `F4` still takes them to
-  the full display rate). Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
+  hardcoded 60). During playback the controls are independent **toggles**, one key per
+  dimension (they compose — no preset combo-profiles): `F4` interpolation
+  off → smooth (full display rate) → ultra (optical flow; deliberately display/2 above
+  100 Hz + a per-CPU pixel-rate budget — full-rate optical flow starves even fast CPUs
+  and desyncs, and a 4K source can max a modest CPU even at 60 Hz, so ultra declines
+  those rather than drift) · `F5` upscaling high/regular/off · `F6` tone smoothing
+  (deband, the 8→10-bit gradient reconstruction) · `F3` denoise · `F2` stretch-to-fill ·
+  `F1` reset · `F9` status. Seeking while interpolating **self-heals** (the filter is
+  rebuilt after every seek — no more audio drift after skipping around on ultra).
+  Opt out with `[media_server] auto_profiles = false`, or set `mpv_args` to use
   your own set; `omnideck mpvprofiles` renders + reports what was detected, and deleting
   the `# omnideck-generated` header line in any rendered file makes it yours to edit. For
   daily use *outside* the session (e.g. casting via jellyfin-mpv-shim, where the panel rate
