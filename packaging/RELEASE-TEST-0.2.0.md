@@ -55,14 +55,17 @@ custom set back afterwards if you prefer it. If `pgrep` shows `--hwdec=auto-safe
 - [ ] In-session playback: `pgrep -af mpv` shows `--display-fps-override=165…` and
       `--include=…/omnideck/mpv-profiles/mpv.conf`; the rendered `mpv.conf` header
       says `display 2560x1440 @ 165.0 Hz`
-- [ ] **F4** (basic interpolation) → mpv stats (`i`, page 1) show the filter output
-      near the panel rate (~165 fps, NOT 60 — the display-detection fix)
-- [ ] **F6** (ultra) → output ~82.5 fps on a 1080p source; watch 15+ min: **audio stays
-      in sync** (the desync fix — ultra caps at display/2 above 100 Hz AND a per-CPU
-      pixel-rate budget; on a **4K source** it deliberately passes through at native rate
-      — use F4 for smooth 4K). If on LDAC headphones and it drifts: pause/unpause
-      resyncs = Bluetooth, not us
-- [ ] **F1** → back to passthrough; compare feel
+- [ ] **F4 once** (smooth) → mpv stats (`i`, page 1) show the filter output near the
+      panel rate (~165 fps, NOT 60 — the display-detection fix)
+- [ ] **F4 again** (ultra) → output ~82.5 fps on a 1080p source; watch 15+ min: **audio
+      stays in sync** (ultra caps at display/2 above 100 Hz AND a per-CPU pixel-rate
+      budget; on a **4K source** it deliberately passes through at native rate — smooth
+      still takes those to the full rate). If on LDAC headphones and it drifts:
+      pause/unpause resyncs = Bluetooth, not us
+- [ ] **Skip around while on ultra** → audio stays in sync (the seek self-heal; used to
+      drift silently)
+- [ ] **F2** stretch fills the screen and back; **F9** shows the toggle status line
+- [ ] **F1** → everything off; compare feel
 - [ ] `./packaging/test-profiles.sh` → all `OK` (headless rate check of every filter)
 
 ### 6c. Controller in launched apps + hidden-app freeze (new)
