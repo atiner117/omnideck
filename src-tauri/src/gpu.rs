@@ -33,7 +33,7 @@ pub fn ensure_gpu_env() {
     if crate::session::in_session() {
         cmd.env("GDK_BACKEND", "x11");
     }
-    if crate::capability::probe().nvidia_present {
+    if crate::capability::probe_cached().nvidia_present {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
         let in_gamescope = crate::session::in_session()
             || std::env::var_os("STEAM_GAMESCOPE").is_some();

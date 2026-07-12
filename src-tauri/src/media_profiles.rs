@@ -43,7 +43,7 @@ pub fn probe_tier(
     display_fps_override: f64,
     audio_samplerate: u32,
 ) -> Tier {
-    let cap = crate::capability::probe();
+    let cap = crate::capability::probe_cached();
     let gpu = cap
         .gpus
         .first()

@@ -18,6 +18,7 @@
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Serialize, Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -134,6 +135,14 @@ pub fn probe() -> Capability {
         cage,
         diagnostics,
     }
+}
+
+/// Cached probe. Hardware doesn't change during a session, but `probe()` does real
+/// `read_dir` over /dev/dri + /sys, a PCI-class scan, and ICD enumeration — and it runs on
+/// every `media_play` via `probe_tier`. Scan once, then hand out clones of the result.
+pub fn probe_cached() -> Capability {
+    static CACHE: OnceLock<Capability> = OnceLock::new();
+    CACHE.get_or_init(probe).clone()
 }
 
 fn scan_dri() -> (Vec<String>, Vec<String>, Vec<String>) {
