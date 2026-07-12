@@ -15,6 +15,7 @@
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
   import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
+  import { splitArgv } from "$lib/argv";
   import type { Tile } from "$lib/tiles";
 
   const CATEGORIES = [
@@ -776,8 +777,14 @@
     let id = base; for (let n = 2; apps.some((a) => a.id === id); n++) id = `${base}-${n}`;
     // A bare URL (e.g. a SearXNG instance) is launched as a browser app so it opens in the
     // browser AND gets its site favicon; anything else is run as a normal argv command.
+    // The split is quote-aware (review #6) so paths with spaces work: "/My Games/app" --flag.
     const isUrl = /^https?:\/\//i.test(cmd);
-    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : cmd.split(/\s+/);
+    const argv = isUrl ? null : splitArgv(cmd);
+    if (!isUrl && (!argv || argv.length === 0)) {
+      reportError(argv ? "Command is empty" : "Unbalanced quote in command", null);
+      return; // keep the form open so the user can fix it
+    }
+    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : argv!;
     const app = { id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat };
     const next = [...apps, app];
     cfg = { ...cfg, apps: next };
@@ -1417,7 +1424,7 @@
         <button class="cbtn" onclick={() => (formOpen = false)}>Cancel</button>
         <button class="cbtn danger" onclick={addCustom}>Add</button>
       </div>
-      <p class="phint">Command is split on spaces. Use the full path if it isn't on PATH. Esc to close.</p>
+      <p class="phint">Split on spaces; quote paths that contain them: "/My Games/app" --flag. Use the full path if it isn't on PATH. Esc to close.</p>
     </Modal>
   {/if}
 
