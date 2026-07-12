@@ -74,6 +74,41 @@ impl Default for Settings {
     }
 }
 
+/// `[screensaver]` — OLED burn-in protection (roadmap Appendix C #1). The gamepad thread
+/// (gamepad.rs) emits a single `idle` event after `idle_dim_secs` without pad input and
+/// `active` on the next input; the frontend owns the staged presentation (dim at
+/// `idle_dim_secs`, Ken-Burns pan at `ken_burns_secs`, true black at `blank_secs`) and
+/// honors `enabled` — the backend always emits the transitions.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct ScreensaverConfig {
+    pub enabled: bool,       // default true (frontend overlay gate)
+    pub idle_dim_secs: u64,  // stage a: dim the whole UI
+    pub ken_burns_secs: u64, // stage b: slow pan/zoom on cover art, hide the rails/clock
+    pub blank_secs: u64,     // stage c: true black + small moving clock
+}
+
+/// Manual impl (not derived): `enabled` must default ON — the derive would pick `false`,
+/// silently disabling burn-in protection for every config that doesn't mention it.
+impl Default for ScreensaverConfig {
+    fn default() -> Self {
+        Self { enabled: true, idle_dim_secs: 60, ken_burns_secs: 180, blank_secs: 600 }
+    }
+}
+
+impl ScreensaverConfig {
+    /// Same posture as Settings::normalize — clamp hand-edited numerics into sane ranges
+    /// and keep the stages monotonic (dim <= ken-burns <= blank) so the frontend never
+    /// sees a later stage scheduled before an earlier one.
+    pub fn normalize(&mut self) {
+        const MAX_SECS: u64 = 86_400; // a day — effectively "never" without overflow risk
+        self.idle_dim_secs = self.idle_dim_secs.clamp(5, MAX_SECS);
+        self.ken_burns_secs = self.ken_burns_secs.clamp(self.idle_dim_secs, MAX_SECS);
+        self.blank_secs = self.blank_secs.clamp(self.ken_burns_secs, MAX_SECS);
+    }
+}
+
 /// True for a `#rrggbb` hex color — the only form the UI emits and CSS needs.
 fn is_hex6(s: &str) -> bool {
     let b = s.as_bytes();
@@ -138,6 +173,10 @@ pub struct Config {
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
     #[serde(default)]
     pub media_server: crate::media_server::MediaServerConfig,
+    /// `[screensaver]` — OLED burn-in protection timings (gamepad.rs idle events +
+    /// frontend overlay).
+    #[serde(default)]
+    pub screensaver: ScreensaverConfig,
     pub apps: Vec<apps::App>,
     /// Favorited tile ids (shown on the Home category).
     pub favorites: Vec<String>,
@@ -175,6 +214,7 @@ fn defaults() -> Config {
             ..Default::default()
         },
         media_server: Default::default(),
+        screensaver: Default::default(),
         apps: apps::list(),
         favorites: Vec::new(),
         recent_apps: Vec::new(),
@@ -219,6 +259,7 @@ pub fn load_or_create() -> Config {
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
         cfg.media_server.normalize();
+        cfg.screensaver.normalize();
         cfg.config_path = path_str;
         return cfg;
     }
@@ -341,7 +382,7 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{write_atomic, Settings};
+    use super::{write_atomic, ScreensaverConfig, Settings};
 
     #[test]
     fn write_atomic_creates_overwrites_and_leaves_no_temp() {
@@ -424,5 +465,42 @@ mod tests {
         assert_eq!(s.search_provider, "https://searx.example/search?q=");
         assert_eq!(s.sort, "recent");
         assert_eq!(s.search_mode, "searxng");
+    }
+
+    #[test]
+    fn screensaver_defaults_enabled_with_staged_timings() {
+        let ss = ScreensaverConfig::default();
+        assert!(ss.enabled);
+        assert_eq!(ss.idle_dim_secs, 60);
+        assert_eq!(ss.ken_burns_secs, 180);
+        assert_eq!(ss.blank_secs, 600);
+        // An empty `[screensaver]` table (or a missing one) must land on the same defaults —
+        // in particular `enabled` must be true, not the bool-derive false.
+        let ss: ScreensaverConfig = toml::from_str("").unwrap();
+        assert!(ss.enabled);
+        assert_eq!(ss.blank_secs, 600);
+    }
+
+    #[test]
+    fn screensaver_normalize_clamps_and_orders_stages() {
+        // Too-small / overflowing values clamp into range.
+        let mut ss = ScreensaverConfig { idle_dim_secs: 0, ken_burns_secs: 0, blank_secs: u64::MAX, ..Default::default() };
+        ss.normalize();
+        assert_eq!(ss.idle_dim_secs, 5);
+        assert_eq!(ss.ken_burns_secs, 5); // floored to idle_dim
+        assert_eq!(ss.blank_secs, 86_400);
+
+        // Stages hand-edited out of order are re-floored to stay monotonic.
+        let mut ss = ScreensaverConfig { idle_dim_secs: 300, ken_burns_secs: 30, blank_secs: 60, ..Default::default() };
+        ss.normalize();
+        assert_eq!(ss.idle_dim_secs, 300);
+        assert_eq!(ss.ken_burns_secs, 300);
+        assert_eq!(ss.blank_secs, 300);
+
+        // In-range, ordered values pass through untouched.
+        let mut ss = ScreensaverConfig { idle_dim_secs: 30, ken_burns_secs: 120, blank_secs: 300, enabled: false };
+        ss.normalize();
+        assert_eq!((ss.idle_dim_secs, ss.ken_burns_secs, ss.blank_secs), (30, 120, 300));
+        assert!(!ss.enabled); // normalize never touches the toggle
     }
 }
