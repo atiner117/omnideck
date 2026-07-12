@@ -11,11 +11,13 @@
 //      user already paired the shim, OmniDeck adopts the same server + token, zero setup.
 //
 // Secrets: the token lives in config.toml (same plaintext, single-user posture as
-// steamgriddb_key), is sent as an `X-Emby-Token` header (not in URLs) for API calls, and is
-// NEVER logged or echoed to the webview (get_config blanks it; posters go through the
-// rooted omnideck:// protocol so the frontend never sees an authenticated URL). The one
-// exception is the mpv stream URL (api_key query param) — visible in the local process
-// list, accepted for v1 like the rest of the single-user threat model.
+// steamgriddb_key), is sent as an `X-Emby-Token` header (not in URLs) for API calls — the
+// mpv stream included, via `--http-header-fields` — and is NEVER logged or echoed to the
+// webview (get_config blanks it; posters go through the rooted omnideck:// protocol so the
+// frontend never sees an authenticated URL). Keeping the token out of the URL keeps it out
+// of URL-shaped surfaces (mpv's log/OSD/IPC, watch-later state, HTTP access logs); the mpv
+// argv itself is still visible in the local process list, accepted for v1 like the rest of
+// the single-user threat model.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -311,9 +313,18 @@ impl JellyfinServer {
     }
 
     /// Direct-play URL for mpv. `static=true` asks the server for the untranscoded file —
-    /// the whole point: mpv + hwdec does the 4K work, not a server transcode.
+    /// the whole point: mpv + hwdec does the 4K work, not a server transcode. Carries NO
+    /// credential: callers must authenticate with the `X-Emby-Token` header (see `token()`),
+    /// which keeps the token out of URL-shaped surfaces (module comment).
     pub fn stream_url(&self, id: &str) -> String {
-        format!("{}/Videos/{id}/stream?static=true&api_key={}", self.base, self.token)
+        format!("{}/Videos/{id}/stream?static=true", self.base)
+    }
+
+    /// The raw token, for callers that hand `stream_url()` to an external player and must
+    /// pass the `X-Emby-Token` auth alongside it (mpv `--http-header-fields`, the CLI's
+    /// debug probe). Don't log it, don't put it in a URL.
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     /// Fetch + disk-cache the primary poster; returns the cached path for omnideck://.
