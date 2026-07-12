@@ -204,6 +204,10 @@ pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(),
         }
         exec.push("--force-window=immediate".into());
         exec.push(format!("--force-media-title={name}"));
+        // Auth rides in a header, not the URL: stream_url() carries no api_key, so the
+        // token stays out of mpv's log/OSD/IPC/watch-later and server access logs. (mpv
+        // splits --http-header-fields on commas; Jellyfin tokens are hex, so no escaping.)
+        exec.push(format!("--http-header-fields=X-Emby-Token: {}", srv.token()));
         exec.push(srv.stream_url(&id));
         exec
     } else if has_client {
