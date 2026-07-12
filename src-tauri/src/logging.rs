@@ -6,16 +6,22 @@
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+/// The log directory: $XDG_STATE_HOME/omnideck, default ~/.local/state/omnideck.
+/// Shared with the `omnideck logs` CLI so "where do the logs live" has one answer.
+pub fn state_dir() -> Option<std::path::PathBuf> {
+    // XDG spec: empty counts as unset.
+    std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
+        .map(|p| p.join("omnideck"))
+}
+
 pub fn init() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    // XDG spec: empty counts as unset.
-    let state_dir = std::env::var_os("XDG_STATE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
-        .map(|p| p.join("omnideck"));
+    let state_dir = state_dir();
 
     // Best-effort: no writable state dir (weird sandbox, $HOME-less service) just means no
     // file log — never a reason to refuse to start.
