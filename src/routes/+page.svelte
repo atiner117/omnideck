@@ -154,6 +154,45 @@
     toastErrTimer = setTimeout(() => (toastErr = ""), 5000);
   }
 
+  // Fatal boot failures get a persistent banner with Retry/Reload — not a 5s toast. On a
+  // TV there are no devtools, so the failure has to carry its own recovery affordance.
+  let bootErr = $state(""); // get_config rejected: cfg stays null, settings degrade to defaults
+  let libErr = $state(""); // get_library rejected: distinct from a genuinely empty library
+  let bannerDismissed = $state(false);
+  const bootBanner = $derived(
+    bannerDismissed ? "" : bootErr || (libErr ? `Couldn't load the game library: ${libErr}` : ""),
+  );
+  function retryBoot() {
+    bannerDismissed = false;
+    if (bootErr || !cfg) loadBoot();
+    else loadLibrary();
+  }
+  function loadLibrary() {
+    libErr = "";
+    api.getLibrary()
+      .then((lib) => { allGames = lib.games ?? []; })
+      .catch((e) => { libErr = String(e); console.warn("[omnideck] get_library failed:", e); })
+      .finally(() => { status = ""; }); // banner / games empty-state carry any failure from here
+  }
+  function loadBoot() {
+    bootErr = "";
+    status = "Loading…";
+    api.getConfig()
+      .then((c) => {
+        cfg = c;
+        accent = c.settings?.accent ?? "#b14cff";
+        favorites = c.favorites ?? [];
+        recentApps = c.recent_apps ?? [];
+        if (c.config_error) reportError(c.config_error, null); // config.toml didn't parse — warn, don't silently revert
+        if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
+      })
+      .catch((e) => { bootErr = `Couldn't load settings: ${e}`; console.warn("[omnideck] get_config failed:", e); })
+      .finally(() => {
+        // art loads lazily per windowed row (see the winItems $effect), not per game here
+        loadLibrary();
+      });
+  }
+
   let art = $state<Record<string, string>>({});
   let logos = $state<Record<string, string>>({});
   let gridBox = $state<Record<string, boolean>>({});
@@ -953,7 +992,8 @@
     if (e.key === "h" || e.key === "H") { goHome(); return; }
     if (e.key === "f" || e.key === "F") { favCurrent(); return; }
     if (e.key === "i" || e.key === "I") { showInfo(); return; }
-    if (e.key === "Escape") { settingsEditing = false; return; }
+    if ((e.key === "r" || e.key === "R") && (bootErr || libErr)) { retryBoot(); return; }
+    if (e.key === "Escape") { if (bootBanner) { bannerDismissed = true; return; } settingsEditing = false; return; }
     if (e.key === "ArrowLeft" && navGate()) horiz(-1);
     else if (e.key === "ArrowRight" && navGate()) horiz(1);
     else if (e.key === "ArrowUp" && navGate()) moveItem(-1);
@@ -964,23 +1004,12 @@
   onMount(() => {
     window.addEventListener("keydown", onKey);
     api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
-    api.mediaAvailable().then((v) => (mediaAvail = v)).catch(() => {}); // adds the Media Library tile
+    // adds the Media Library tile; a rejection here means the IPC itself failed (the command
+    // is infallible), so surface it instead of silently never showing the tile
+    api.mediaAvailable().then((v) => (mediaAvail = v)).catch((e) => reportError("Media server check failed", e));
     api.inGamescopeSession().then((v) => (inSession = v)).catch((e) => console.debug("[omnideck] inGamescopeSession probe failed", e));
     api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
-    api.getConfig()
-      .then((c) => {
-        cfg = c;
-        accent = c.settings?.accent ?? "#b14cff";
-        favorites = c.favorites ?? [];
-        recentApps = c.recent_apps ?? [];
-        if (c.config_error) reportError(c.config_error, null); // config.toml didn't parse — warn, don't silently revert
-        if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
-      })
-      .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
-      .finally(() => {
-        // art loads lazily per windowed row (see the winItems $effect), not per game here
-        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; }).catch((e) => (status = `library error: ${e}`));
-      });
+    loadBoot();
 
     // Per-frame sampling catches brief dips a 500ms average smooths away; we only commit the
     // numbers to reactive state once per 500ms window so the tracker adds no per-frame cost.
@@ -1092,7 +1121,8 @@
         if (p.code === "Start") { goHome(); return; }
         if (p.code === "West") { favCurrent(); return; }
         if (p.code === "RightTrigger") { showInfo(); return; }
-        if (p.code === "East") { settingsEditing = false; return; }
+        if (p.code === "LeftTrigger" && (bootErr || libErr)) { retryBoot(); return; } // banner retry (LT is unused at base)
+        if (p.code === "East") { if (bootBanner) { bannerDismissed = true; return; } settingsEditing = false; return; }
         if (p.code === "DPadLeft") holdStart(p.code, () => horiz(-1));
         else if (p.code === "DPadRight") holdStart(p.code, () => horiz(1));
         else if (p.code === "DPadUp") holdStart(p.code, () => moveItem(-1));
@@ -1239,6 +1269,7 @@
       {:else if !items.length}
         <div class="xempty">
           {#if catId === "dashboard"}Nothing pinned — press <b>□ / F</b> on a tile to add it here.
+          {:else if catId === "games" && libErr}Couldn't load the game library — press <b>R / LT</b> to retry.
           {:else if catId === "games"}No games found.
           {:else}Empty — press <b>△ / A</b> to add apps & media.{/if}
         </div>
@@ -1432,6 +1463,19 @@
   {#if status}<div class="toast">{status}</div>{/if}
   {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
+  {#if bootBanner}
+    <!-- persistent (not auto-hiding) banner for fatal boot failures — the UI is running on
+         defaults / an empty library and the user needs an on-screen way to recover -->
+    <div class="ebanner" role="alert" aria-live="assertive">
+      <span class="ebmsg" title={bootBanner}>⚠ {bootBanner}</span>
+      <span class="ebactions">
+        <button class="ebtn" onclick={retryBoot}>Retry <kbd>R / LT</kbd></button>
+        <button class="ebtn" onclick={() => location.reload()}>Reload</button>
+        <button class="ebtn dim" onclick={() => (bannerDismissed = true)}>Dismiss <kbd>Esc / ◯</kbd></button>
+      </span>
+    </div>
+  {/if}
+
   <footer>
     <span class="fdiag"><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"}</span>
     <span class="fhints"><b>Enter/✕</b> select · <b>Esc/◯</b> back · <button class="fhelp" onclick={() => { holdStop(); helpOpen = true; }}><b>?</b> help</button></span>
@@ -1521,6 +1565,19 @@
 
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
   .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
+  .ebanner {
+    position: fixed; top: 2vh; left: 50%; transform: translateX(-50%); z-index: 40;
+    display: flex; gap: 16px; align-items: center; max-width: 80vw;
+    background: #2a1216f2; border: 1px solid #ff5c6c66; color: #ffd7db;
+    padding: 10px 18px; border-radius: 14px; box-shadow: 0 12px 40px #000a;
+    font-size: clamp(13px, 1.4vw, 17px);
+  }
+  .ebmsg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ebactions { display: flex; gap: 8px; flex-shrink: 0; }
+  .ebtn { background: #ffffff14; border: 1px solid #ffffff2e; color: #fff; border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  .ebtn:hover { background: #ffffff24; }
+  .ebtn.dim { opacity: 0.7; }
+  .ebtn kbd { font: inherit; font-size: 0.8em; opacity: 0.75; margin-left: 4px; }
 
   /* Now Playing card styles live in $lib/NowPlaying.svelte */
   /* Modal shell (.prefs*, backdrop, close) AND the shared modal-content vocabulary
