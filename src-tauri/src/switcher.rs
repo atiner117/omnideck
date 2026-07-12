@@ -21,9 +21,40 @@
 use std::sync::Mutex;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState, Window};
+use x11rb::rust_connection::RustConnection;
 
 /// Windows we unmapped on the last "hide" — remapped on the next toggle.
 static HIDDEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Shared X11 connection for the polled entry points. The navpad's activation gate calls
+/// `any_app_visible` ~3×/s from the gamepad thread; opening a fresh connection per check
+/// (socket + auth + setup exchange, a new FD each time) was pure churn. Cached here and
+/// reused by every switcher entry point; a cheap liveness round-trip on reuse reconnects
+/// transparently when the server went away (session teardown, desktop test restarts).
+/// The hotkey thread deliberately keeps its OWN connection — it parks in `wait_for_event`,
+/// which would wedge anything sharing it.
+static X11: Mutex<Option<(RustConnection, usize)>> = Mutex::new(None);
+
+/// Run `f` against the shared connection's root window, (re)connecting as needed.
+/// Returns None only when X is unreachable.
+fn with_x11<T>(f: impl FnOnce(&RustConnection, Window) -> T) -> Option<T> {
+    let mut guard = crate::sync::lock_or_recover(&X11, "switcher.X11");
+    if let Some((conn, _)) = guard.as_ref() {
+        // One round-trip to prove the cached connection is still live — still far cheaper
+        // than a full reconnect, and it turns a dead cache into a reconnect instead of
+        // every request inside `f` silently failing forever.
+        if !conn.get_input_focus().is_ok_and(|c| c.reply().is_ok()) {
+            tracing::info!("switcher: shared X11 connection lost — reconnecting");
+            *guard = None;
+        }
+    }
+    if guard.is_none() {
+        *guard = x11rb::connect(None).ok();
+    }
+    let (conn, screen_num) = guard.as_ref()?;
+    let root = conn.setup().roots[*screen_num].root;
+    Some(f(conn, root))
+}
 
 /// Process groups we froze (SIGSTOP) when their windows were hidden. Disjoint from any
 /// group that was audibly playing at hide time. Drained + SIGCONTed on the next re-show.
@@ -103,9 +134,8 @@ fn visible_owned(
 /// this as its activation gate: gamescope focuses whatever is mapped on top, so "an owned
 /// window is viewable" is exactly "the controller's input should go to the app".
 pub fn any_app_visible() -> bool {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
-    let root = conn.setup().roots[screen_num].root;
-    !visible_owned(&conn, root, &crate::watchdog::live_groups()).is_empty()
+    with_x11(|conn, root| !visible_owned(conn, root, &crate::watchdog::live_groups()).is_empty())
+        .unwrap_or(false)
 }
 
 /// Toggle the launched app(s): if any owned window is visible, hide them all (focus falls
@@ -115,21 +145,20 @@ pub fn toggle() -> Option<&'static str> {
     // Session-only, enforced at the chokepoint for every caller (UI command, Guide press,
     // hotkey): on a desktop, unmapping would hide the app's window from the real WM, which
     // has its own idea of window management. (OMNIDECK_FORCE_HOTKEY tests on desktop X11.)
-    if !crate::session::in_session()
-        && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none()
-    {
+    if !session_ok() {
         return None;
     }
-    let (conn, screen_num) = x11rb::connect(None).ok()?;
-    let root = conn.setup().roots[screen_num].root;
+    with_x11(toggle_inner).flatten()
+}
 
+fn toggle_inner(conn: &RustConnection, root: Window) -> Option<&'static str> {
     let groups = crate::watchdog::live_groups();
-    let visible = visible_owned(&conn, root, &groups);
+    let visible = visible_owned(conn, root, &groups);
 
     if !visible.is_empty() {
         // Hide: unmap every owned visible toplevel; gamescope refocuses OmniDeck.
         let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
-        let failed = set_mapped(&conn, &wins, false);
+        let failed = set_mapped(conn, &wins, false);
         if !failed.is_empty() {
             tracing::warn!("switcher: {} window(s) resisted unmap", failed.len());
         }
@@ -157,7 +186,7 @@ pub fn toggle() -> Option<&'static str> {
     if hidden.is_empty() {
         return None;
     }
-    let failed = set_mapped(&conn, &hidden, true);
+    let failed = set_mapped(conn, &hidden, true);
     if !failed.is_empty() {
         // Put the strays back so the next toggle retries instead of stranding the app
         // invisible with an empty HIDDEN list (Guide would then do nothing forever).
@@ -179,24 +208,25 @@ pub fn hide_all() -> bool {
     if !session_ok() {
         return false;
     }
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
-    let root = conn.setup().roots[screen_num].root;
-    let visible = visible_owned(&conn, root, &crate::watchdog::live_groups());
-    if visible.is_empty() {
-        return false;
-    }
-    let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
-    let failed = set_mapped(&conn, &wins, false);
-    {
-        let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
-        for &(win, _) in &visible {
-            if !hidden.contains(&win) && !failed.contains(&win) {
-                hidden.push(win);
+    with_x11(|conn, root| {
+        let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
+        if visible.is_empty() {
+            return false;
+        }
+        let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
+        let failed = set_mapped(conn, &wins, false);
+        {
+            let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+            for &(win, _) in &visible {
+                if !hidden.contains(&win) && !failed.contains(&win) {
+                    hidden.push(win);
+                }
             }
         }
-    }
-    freeze_silent_groups(&visible, &failed);
-    true
+        freeze_silent_groups(&visible, &failed);
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Bring ONE launched app group to the front (the deck-switcher's "open this card"): resume
@@ -205,22 +235,22 @@ pub fn show_group(group: u32) -> bool {
     if !session_ok() {
         return false;
     }
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
-    let root = conn.setup().roots[screen_num].root;
+    with_x11(|conn, root| {
+        // Resume this group first so its windows can repaint/focus when mapped.
+        let _ = std::process::Command::new("kill").args(["-CONT", &format!("-{group}")]).status();
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|&g| g != group);
 
-    // Resume this group first so its windows can repaint/focus when mapped.
-    let _ = std::process::Command::new("kill").args(["-CONT", &format!("-{group}")]).status();
-    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|&g| g != group);
-
-    let wins = windows_of_group(&conn, root, group);
-    if wins.is_empty() {
-        return false;
-    }
-    let failed = set_mapped(&conn, &wins, true);
-    // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
-    crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
-        .retain(|w| !wins.contains(w) || failed.contains(w));
-    failed.len() < wins.len()
+        let wins = windows_of_group(conn, root, group);
+        if wins.is_empty() {
+            return false;
+        }
+        let failed = set_mapped(conn, &wins, true);
+        // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
+        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
+            .retain(|w| !wins.contains(w) || failed.contains(w));
+        failed.len() < wins.len()
+    })
+    .unwrap_or(false)
 }
 
 /// All toplevels (any map state) whose _NET_WM_PID belongs to `group` — used to re-map a
