@@ -137,7 +137,7 @@
   let favorites = $state<string[]>([]);
   let recentApps = $state<string[]>([]); // app ids, most-recent-first
   let catSel = $state(1);
-  let focus = $state(0);
+  let focusRaw = $state(0); // raw cursor — read via the clamped `focus` $derived below
   let status = $state("Loading…");
   let fps = $state(0); // current (500ms window) frame rate
   let fpsAvg = $state(0); // smoothed average
@@ -317,6 +317,10 @@
     }),
   );
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
+  // The cursor clamps to the live list length as a $derived (not a write-back $effect): when
+  // the list shrinks under it (uninstall, filter change) every read sees the clamped index in
+  // the same render pass — no second render, no effect re-entry risk. Writers set focusRaw.
+  let focus = $derived(itemCount ? Math.min(focusRaw, itemCount - 1) : 0);
   // ---- windowed (virtualized) item rail ----
   // The rail translates so the focused row sits at the top of the clipped wrap, meaning only
   // ~[focus, focus + viewport-rows] can ever be on screen. Render just that slice — a small
@@ -431,7 +435,7 @@
 
   // ---- navigation (XMB: left/right = category, up/down = item) ----
   // Entry focus for the current category: settings starts past its leading section header.
-  function resetFocus() { focus = catId === "settings" && visibleSettings[0]?.type === "header" ? 1 : 0; }
+  function resetFocus() { focusRaw = catId === "settings" && visibleSettings[0]?.type === "header" ? 1 : 0; }
   function moveCat(d: number) { const n = CATEGORIES.length; catSel = (catSel + d + n) % n; resetFocus(); sfxMove(); }
   function moveItem(d: number) {
     settingsEditing = false;
@@ -442,7 +446,7 @@
       let guard = 0;
       while (visibleSettings[f]?.type === "header" && guard++ < itemCount) f = (f + d + itemCount) % itemCount;
     }
-    focus = f;
+    focusRaw = f;
     sfxMove();
   }
   function onWheel(e: WheelEvent) { e.preventDefault(); if (navGate()) moveItem(e.deltaY > 0 ? 1 : -1); }
@@ -787,7 +791,7 @@
   }
 
   let catalogOpen = $state(false);
-  let catFocus = $state(0);
+  let catFocusRaw = $state(0); // raw cursor — read via the clamped `catFocus` $derived below
   let catQuery = $state("");
   let catSort = $state<"group" | "alpha">("group");
   let displayedCatalog = $derived.by(() => {
@@ -795,6 +799,8 @@
     const q = catQuery.trim().toLowerCase();
     return q ? base.filter((c) => c.name.toLowerCase().includes(q)) : base;
   });
+  // clamped like `focus` above: typing in the filter shrinks displayedCatalog under the cursor
+  let catFocus = $derived(Math.min(catFocusRaw, Math.max(0, displayedCatalog.length - 1)));
 
   // ---- global search (games + apps, with a web-search fallback) ----
   let searchOpen = $state(false);
@@ -842,8 +848,8 @@
     else if (k === "⏎") searchActivate();
     else searchQuery += k;
   }
-  function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocus = 0; }
-  function catMove(d: number) { catFocus = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
+  function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocusRaw = 0; }
+  function catMove(d: number) { catFocusRaw = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
   function isAdded(id: string) { return apps.some((a) => a.id === id); }
   async function catToggle(i: number) {
     const e = displayedCatalog[i]; if (!e || !cfg) return;
@@ -1143,8 +1149,6 @@
     };
   });
 
-  $effect(() => { if (focus >= itemCount && itemCount) focus = itemCount - 1; });
-  $effect(() => { if (catFocus >= displayedCatalog.length) catFocus = Math.max(0, displayedCatalog.length - 1); });
   // fetch site icons for web/app tiles — windowed like game art, so a rail keypress costs
   // O(window) and a large library doesn't fan out icon IPC for every off-screen tile
   $effect(() => { for (const t of winItems) if (t.kind === "app") loadAppIcon(t.app); });
@@ -1217,7 +1221,7 @@
               <div class="xitem xshead" aria-hidden="true"><span class="xthumb settings hollow"></span><span class="xsheadlbl">{s.label}</span></div>
             {:else}
             <button class="xitem" class:focused={i === focus} class:editing={settingsEditing && i === focus && (s.type === "num" || s.type === "text")}
-              onclick={() => { focus = i; if (s.type === "num" || s.type === "text") settingsEditing = !settingsEditing; else if (s.type === "action") doAction(s.key); else cycleSetting(s.key); }}>
+              onclick={() => { focusRaw = i; if (s.type === "num" || s.type === "text") settingsEditing = !settingsEditing; else if (s.type === "action") doAction(s.key); else cycleSetting(s.key); }}>
               <span class="xthumb settings"><span class="xemoji">{s.type === "action" ? "+" : "›"}</span></span>
               <span class="xname">{s.label}
                 {#if s.type === "num" && settingsEditing && i === focus}
@@ -1250,7 +1254,7 @@
           {#each winItems as t, wi (t.id)}
             {@const i = wi + winLo}
             <button class="xitem" class:focused={i === focus} class:near={Math.abs(i - focus) <= 4}
-              onclick={() => { focus = i; launchTile(t); }}>
+              onclick={() => { focusRaw = i; launchTile(t); }}>
               <span class="xthumb" style={t.kind === "app" ? `background:${appIcons[t.app.id] ? (iconBg[t.app.id] ?? "#f4f5f8") : t.app.accent}` : ""}>
                 {#if t.kind === "game" && art[t.game.appid]}
                   <img src={art[t.game.appid]} alt="" decoding="async" onerror={() => artError(t.game.appid)} />
@@ -1296,7 +1300,7 @@
       {appIcons}
       {iconBg}
       {isAdded}
-      onfocus={(i) => (catFocus = i)}
+      onfocus={(i) => (catFocusRaw = i)}
       ontoggle={catToggle}
       onsortswap={() => (catSort = catSort === "group" ? "alpha" : "group")}
       onclose={() => (catalogOpen = false)}
