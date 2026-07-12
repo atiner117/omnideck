@@ -249,7 +249,12 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
         let _ = fs::create_dir_all(parent);
     }
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    fs::write(&path, text).map_err(|e| e.to_string())?;
+    // The media-server resolution caches the config it saw; drop it so a `[media_server]`
+    // edited into config.toml (or a future in-app editor) takes effect on the next probe
+    // instead of requiring a restart. Cheap: re-resolution is lazy, on the next server() call.
+    crate::media_server::invalidate();
+    Ok(())
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
