@@ -126,10 +126,20 @@ impl Settings {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+/// Current config.toml schema version. Bump when a field is removed/renamed/reshaped (added
+/// fields don't need it — `#[serde(default)]` migrates those), and branch on the file's
+/// `config_version` in `load_or_create` to migrate old shapes. No migrations exist yet;
+/// this field is the hook so version-1 files are identifiable when the first one lands.
+pub const CONFIG_VERSION: u32 = 1;
+
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
 pub struct Config {
+    /// Schema version of this file (see `CONFIG_VERSION`). First field: TOML needs plain
+    /// values emitted before tables. Absent in pre-versioning files — those deserialize to
+    /// the current version, correct while every shape change so far has been additive.
+    pub config_version: u32,
     pub settings: Settings,
     /// `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
@@ -152,6 +162,23 @@ pub struct Config {
     pub config_error: Option<String>,
 }
 
+/// Manual impl (not derived): the container-level `#[serde(default)]` fills missing fields
+/// from this, and `config_version` must default to the CURRENT version, not the derive's 0.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            config_version: CONFIG_VERSION,
+            settings: Settings::default(),
+            media_server: Default::default(),
+            apps: Vec::new(),
+            favorites: Vec::new(),
+            recent_apps: Vec::new(),
+            config_path: String::new(),
+            config_error: None,
+        }
+    }
+}
+
 /// The XDG config base: $XDG_CONFIG_HOME (when absolute), else ~/.config. Shared with
 /// callers that peek at OTHER apps' config (e.g. jellyfin-mpv-shim's server address).
 pub fn config_base() -> Option<PathBuf> {
@@ -167,6 +194,7 @@ fn config_path() -> Option<PathBuf> {
 
 fn defaults() -> Config {
     Config {
+        config_version: CONFIG_VERSION,
         settings: Settings {
             onboarded: false, // a fresh install runs the onboarding wizard
             ..Default::default()
@@ -292,7 +320,18 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Config, Settings, CONFIG_VERSION};
+
+    #[test]
+    fn config_version_defaults_to_current_and_serializes_first() {
+        // Pre-versioning files (no config_version key) read as the current version.
+        let c: Config = toml::from_str("").unwrap();
+        assert_eq!(c.config_version, CONFIG_VERSION);
+        assert_eq!(Config::default().config_version, CONFIG_VERSION);
+        // And it must serialize as a plain value BEFORE any [table] — toml errors otherwise.
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(text.starts_with(&format!("config_version = {CONFIG_VERSION}")), "{text}");
+    }
 
     #[test]
     fn normalize_clamps_out_of_range() {

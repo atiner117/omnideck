@@ -3,7 +3,13 @@ import type { App } from "./App";
 import type { MediaServerConfig } from "./MediaServerConfig";
 import type { Settings } from "./Settings";
 
-export type Config = { settings: Settings, 
+export type Config = { 
+/**
+ * Schema version of this file (see `CONFIG_VERSION`). First field: TOML needs plain
+ * values emitted before tables. Absent in pre-versioning files — those deserialize to
+ * the current version, correct while every shape change so far has been additive.
+ */
+config_version: number, settings: Settings, 
 /**
  * `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
  * unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
