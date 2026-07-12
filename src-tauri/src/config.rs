@@ -6,7 +6,8 @@
 use crate::apps;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -226,10 +227,26 @@ pub fn load_or_create() -> Config {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(text) = toml::to_string_pretty(&cfg) {
-        let _ = fs::write(&path, text);
+        let _ = write_atomic(&path, text.as_bytes());
     }
     cfg.config_path = path_str;
     cfg
+}
+
+/// Write `bytes` to `path` atomically: write a temp sibling, flush it to disk, then
+/// `rename` over the target. On Linux `rename(2)` across the same filesystem is atomic,
+/// so a crash / power-loss / disk-full mid-write can never leave a truncated
+/// `config.toml` — the failure that otherwise trips the parse-error guard and refuses
+/// all future saves until the file is hand-edited. Mirrors the temp+rename pattern in
+/// `background.rs`.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("toml.tmp");
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?; // durable before the rename, so the rename can't expose empty content
+    }
+    fs::rename(&tmp, path)
 }
 
 /// Shared save path: reload the on-disk config, apply `mutate`, write it back. Refuses to
@@ -249,7 +266,7 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
         let _ = fs::create_dir_all(parent);
     }
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
