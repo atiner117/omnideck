@@ -164,6 +164,13 @@ fn shim_pairing() -> Option<JellyfinServer> {
     })
 }
 
+/// Jellyfin item ids are GUID-shaped (hex + dashes). Reject anything else before it
+/// reaches a URL path — a `parent`/`id` carrying `../`, `?`, `#`, or percent-encoding
+/// could otherwise re-path the authenticated request server-side (parameter injection).
+pub(crate) fn valid_id(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
 impl JellyfinServer {
     async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}{path}", self.base);
@@ -243,6 +250,9 @@ impl JellyfinServer {
 
     /// Children of a library or series/season — one call covers every drill-down level.
     pub async fn browse(&self, parent: &str) -> Result<Vec<MediaItem>, String> {
+        if !valid_id(parent) {
+            return Err("media: invalid parent id".into());
+        }
         let user = self.user().await?;
         // Non-recursive keeps the natural hierarchy (Series → Seasons → Episodes) and
         // matches how Jellyfin's own clients browse.
@@ -264,6 +274,9 @@ impl JellyfinServer {
     /// Extension comes from sniffing the bytes — the asset protocol serves by extension,
     /// so the cache file must carry a real one.
     pub async fn poster(&self, id: &str) -> Option<PathBuf> {
+        if !valid_id(id) {
+            return None;
+        }
         let dir = poster_cache_dir()?;
         let _ = std::fs::create_dir_all(&dir);
         let safe = id.replace(['/', '.'], "_");

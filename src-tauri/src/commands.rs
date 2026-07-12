@@ -154,10 +154,13 @@ pub async fn media_poster(id: String) -> Option<String> {
 }
 
 /// Play a media item: mpv direct-stream by default (real 4K hwdec), the Jellyfin desktop
-/// client when installed and preferred. The stream URL is built server-side from the item
-/// id — the frontend never supplies a URL, so there's nothing to validate away.
+/// client when installed and preferred. The stream URL is built server-side, but the item
+/// id is frontend-supplied and interpolated into the URL path, so validate it first.
 #[tauri::command]
 pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+    if !crate::media_server::valid_id(&id) {
+        return Err("media: invalid item id".into());
+    }
     let srv = crate::media_server::server().ok_or("no media server configured")?;
     let ms = config::load_or_create().media_server;
     let prefer_mpv = ms.kind.is_empty() || ms.prefer_mpv; // adopted-pairing default: mpv
