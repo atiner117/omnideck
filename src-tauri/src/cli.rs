@@ -39,6 +39,16 @@ enum CliCommand {
     /// One-shot support bundle: version, session, GPU/capability, config health,
     /// library/playback/controller status — paste this into a bug report
     Doctor,
+    /// Show the rotating log files and tail the newest one (session crashes land here —
+    /// stderr is buried in the display manager's log)
+    Logs {
+        /// How many lines from the end of the newest log to print
+        #[arg(short = 'n', long, default_value_t = 50)]
+        lines: usize,
+        /// Print only the newest log file's path (for `tail -f $(omnideck logs --path)`)
+        #[arg(long)]
+        path: bool,
+    },
 }
 
 /// The `doctor` support bundle. Offline on purpose (no update check, no media-server
@@ -129,6 +139,55 @@ fn doctor() {
     println!("(network probes are separate on purpose: `omnideck mediasrv` tests the media server)");
 }
 
+/// The `omnideck.<date>.log` files in the state dir, oldest → newest. The date-stamped
+/// names sort chronologically, so a plain name sort is a time sort.
+fn log_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut logs: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("omnideck.") && n.ends_with(".log"))
+        })
+        .collect();
+    logs.sort();
+    logs
+}
+
+fn logs(lines: usize, path_only: bool) {
+    let Some(dir) = crate::logging::state_dir() else {
+        println!("logs: no state dir ($XDG_STATE_HOME and $HOME both unset)");
+        return;
+    };
+    let files = log_files(&dir);
+    let Some(newest) = files.last() else {
+        println!("logs: no log files in {} (has OmniDeck run on this account?)", dir.display());
+        return;
+    };
+    if path_only {
+        println!("{}", newest.display());
+        return;
+    }
+    println!("log dir: {}", dir.display());
+    for f in &files {
+        let size = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+        println!("  {:>7} KiB  {}", size / 1024, f.display());
+    }
+    match std::fs::read_to_string(newest) {
+        Ok(text) => {
+            let all: Vec<&str> = text.lines().collect();
+            let start = all.len().saturating_sub(lines);
+            println!("\n--- last {} of {} line(s): {} ---", all.len() - start, all.len(), newest.display());
+            for l in &all[start..] {
+                println!("{l}");
+            }
+        }
+        Err(e) => println!("logs: couldn't read {}: {e}", newest.display()),
+    }
+}
+
 /// Parse argv and run a headless subcommand if one was given. Returns true when a subcommand
 /// ran (the caller should exit instead of launching the GUI).
 pub fn handle() -> bool {
@@ -188,6 +247,7 @@ pub fn handle() -> bool {
             }
         }
         CliCommand::Doctor => doctor(),
+        CliCommand::Logs { lines, path } => logs(lines, path),
         CliCommand::Mediasrv => {
             let Some(srv) = crate::media_server::server() else {
                 println!("no media server configured (config [media_server] or shim pairing)");
