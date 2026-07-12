@@ -11,6 +11,7 @@
   import MediaModal, { type MediaRow } from "$lib/MediaModal.svelte";
   import type { MediaItem } from "$lib/backend";
   import SearchModal from "$lib/SearchModal.svelte";
+  import DeckSwitcher from "$lib/DeckSwitcher.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
   import { ambientApply, ambientStop } from "$lib/ambient";
@@ -564,13 +565,6 @@
   }
   function closeDeck() { deckOpen = false; }
   function deckMove(d: number) { if (deckApps.length) deckFocus = clamp(deckFocus + d, 0, deckApps.length - 1); }
-  // Focus the selected card so a real-session keyboard reaches the deck (and for a11y) and it
-  // scrolls into view. The gamepad path doesn't need this (events arrive via gilrs regardless).
-  $effect(() => {
-    if (!deckOpen) return;
-    const i = deckFocus;
-    queueMicrotask(() => (document.querySelector(`[data-deck="${i}"]`) as HTMLElement | null)?.focus());
-  });
   async function deckSelect() {
     const a = deckApps[deckFocus];
     deckOpen = false;
@@ -1320,26 +1314,8 @@
   {/if}
 
   {#if deckOpen}
-    <!-- Deck switcher: iOS-style row of running-app cards. Guide/B dismisses, A opens the
-         focused card, Select closes it. Pointer/click works too (mouse or navpad pointer). -->
-    <div class="deck-scrim" role="button" tabindex="-1" aria-label="Close app switcher"
-         onclick={closeDeck} onkeydown={(e) => { if (e.key === "Escape") closeDeck(); }}></div>
-    <section class="deck" aria-label="App switcher">
-      <div class="deck-row">
-        {#each deckApps as a, i (a.group)}
-          <div class="deck-card" class:sel={i === deckFocus}>
-            <button class="deck-open" title="Open {a.name}" data-deck={i}
-              onclick={() => { deckFocus = i; deckSelect(); }} onmouseenter={() => (deckFocus = i)}>
-              <span class="deck-icon">{deckIcon(a)}</span>
-              <span class="deck-name">{a.name}</span>
-            </button>
-            <button class="deck-x" title="Close {a.name}" aria-label="Close {a.name}"
-              onclick={(e) => { e.stopPropagation(); deckFocus = i; deckKill(); }}>✕</button>
-          </div>
-        {/each}
-      </div>
-      <p class="deck-hint">A open · Select ✕ close · B back</p>
-    </section>
+    <DeckSwitcher apps={deckApps} focus={deckFocus} iconFor={deckIcon}
+      onfocus={(i) => (deckFocus = i)} onselect={deckSelect} onkill={deckKill} onclose={closeDeck} />
   {/if}
 
   {#if infoOpen && infoTile}
@@ -1556,34 +1532,10 @@
   .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
   .fpsbtn:hover { color: var(--accent); }
 
-  /* --- Deck switcher (iOS-style app cards) --- */
-  .deck-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(3,5,11,0.72); border: 0; }
-  .deck { position: fixed; inset: 0; z-index: 41; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 24px; pointer-events: none; }
-  .deck-row { display: flex; gap: 22px; padding: 0 6vw; max-width: 100vw; overflow-x: auto;
-    align-items: center; pointer-events: auto; scrollbar-width: none; }
-  .deck-row::-webkit-scrollbar { display: none; }
-  .deck-card { position: relative; flex: 0 0 auto; }
-  .deck-open { display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; width: calc(240px * var(--scale)); height: calc(150px * var(--scale));
-    border-radius: 18px; border: 2px solid rgba(255,255,255,0.08);
-    background: linear-gradient(160deg, #141a26, #0c1119); color: #e7ecf6; cursor: pointer;
-    transition: transform .16s cubic-bezier(.2,.7,.2,1), border-color .16s, box-shadow .16s; }
-  .deck-card.sel .deck-open { transform: translateY(-14px) scale(1.06); border-color: var(--accent);
-    box-shadow: 0 18px 50px color-mix(in srgb, var(--accent) 45%, transparent); }
-  .deck-icon { font-size: calc(46px * var(--scale)); line-height: 1; }
-  .deck-name { font-size: calc(17px * var(--scale)); font-weight: 600; max-width: 90%;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .deck-x { position: absolute; top: -12px; right: -12px; width: 34px; height: 34px; border-radius: 50%;
-    border: 2px solid rgba(255,255,255,0.14); background: #05070b; color: #c2cbdb; cursor: pointer;
-    font-size: 15px; opacity: 0; transition: opacity .16s; }
-  .deck-card.sel .deck-x { opacity: 1; }
-  .deck-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale));
-    letter-spacing: .02em; }
-
   /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
-     transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
+     transitions for vestibular-sensitive users (the UI stays fully functional, just static).
+     (The deck switcher's own reduced-motion rule lives in DeckSwitcher.svelte.) */
   @media (prefers-reduced-motion: reduce) {
-    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon, .deck-open { transition: none !important; }
+    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon { transition: none !important; }
   }
 </style>
