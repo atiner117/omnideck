@@ -39,6 +39,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 clap = { version = "4", features = ["derive"] }
 # event-driven MPRIS Now Playing (replaces the 4 s `playerctl` fork+exec poll)
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+# mpris.rs reconnect loop: bounded-backoff sleep between session-bus reconnects. Already in
+# the dependency tree transitively (tauri, zbus); declared to make the `time` feature explicit.
+tokio = { version = "1", features = ["time"] }
 futures-util = { version = "0.3", default-features = false }
 # global Ctrl+Alt+Home grab inside the gamescope session (keyboard path back to OmniDeck
 # while a launched app holds focus — the keyboard twin of the gamepad Guide button)

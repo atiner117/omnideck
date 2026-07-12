@@ -16,11 +16,16 @@
 // Shared state maps well-known name -> PlayerState; "the" player is the most recently active
 // Playing one, else the most recently active. `media_now_playing` reads the same state (no
 // I/O), covering the frontend's initial fetch before its event listener attaches.
+//
+// Lifecycle: `watch()` never exits. If the session bus dies (dbus restart, logout while the
+// launcher stays alive) the streams end; the watcher clears the shared state (card clears),
+// unpublishes the connection, and reconnects with bounded backoff (1 s → 5 s → 15 s).
+use futures_util::future::{self, Either};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use zbus::zvariant::OwnedValue;
 
@@ -43,10 +48,22 @@ struct PlayerState {
 }
 
 static STATE: OnceLock<Mutex<HashMap<String, PlayerState>>> = OnceLock::new();
-static CONN: OnceLock<zbus::Connection> = OnceLock::new();
+// Re-settable (not OnceLock): after a session-bus restart the watcher publishes the *new*
+// connection here, so `control()` acts on a live bus instead of failing on a dead one forever.
+// None = no usable bus right now. Guard is never held across an .await — clone the Connection
+// out (zbus Connections are cheap Arc-style handles) and drop the lock first.
+static CONN: Mutex<Option<zbus::Connection>> = Mutex::new(None);
 
 fn state() -> &'static Mutex<HashMap<String, PlayerState>> {
     STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn current_conn() -> Option<zbus::Connection> {
+    crate::sync::lock_or_recover(&CONN, "mpris.conn").clone()
+}
+
+fn set_conn(conn: Option<zbus::Connection>) {
+    *crate::sync::lock_or_recover(&CONN, "mpris.conn") = conn;
 }
 
 const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
@@ -121,13 +138,13 @@ fn emit_current(app: &tauri::AppHandle) {
 
 /// Control the tracked player. Errs when no session bus / no player — the UI toasts it.
 pub async fn control(action: &str) -> Result<(), String> {
-    let conn = CONN.get().ok_or("no D-Bus session bus (MPRIS unavailable)")?;
+    let conn = current_conn().ok_or("no D-Bus session bus (MPRIS unavailable)")?;
     let name = crate::sync::lock_or_recover(state(), "mpris.players")
         .iter()
         .max_by_key(|(_, p)| (p.status == "Playing", p.last_change))
         .map(|(name, _)| name.clone())
         .ok_or("no media player is running")?;
-    let player = PlayerProxy::builder(conn)
+    let player = PlayerProxy::builder(&conn)
         .destination(name)
         .map_err(|e| e.to_string())?
         .build()
@@ -200,50 +217,75 @@ pub async fn report() -> String {
     s
 }
 
-/// Long-running watcher; spawned once at app setup. Exits (with a log line) only if the
-/// session bus is unreachable — in that environment `playerctl` wouldn't have worked either.
+/// Reconnect backoff between watch cycles: 1 s → 5 s → 15 s, capped. Always sleeps at least
+/// the first step so a persistently-broken bus can never turn the watcher into a hot loop.
+const RECONNECT_BACKOFF_SECS: [u64; 3] = [1, 5, 15];
+
+/// A cycle that survives this long before its streams end counts as "was actually working",
+/// so the next reconnect starts the backoff ladder over instead of escalating.
+const BACKOFF_RESET_AFTER: Duration = Duration::from_secs(60);
+
+/// Long-running watcher; spawned once at app setup and never exits. Each cycle connects to
+/// the session bus, subscribes, and pumps signals until the streams end (dbus restart,
+/// session-bus crash, logout while the launcher stays alive). It then clears the shared
+/// state — so the Now Playing card clears instead of showing the last song forever — drops
+/// the published connection, and reconnects with bounded backoff.
 pub async fn watch(app: tauri::AppHandle) {
-    let conn = match zbus::Connection::session().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("mpris: no session bus ({e}) — Now Playing disabled");
-            return;
+    let mut failures: usize = 0;
+    loop {
+        let started = Instant::now();
+        match watch_cycle(&app).await {
+            // Streams ended after a working subscription — the bus went away under us.
+            Ok(()) => tracing::warn!("mpris: session bus connection lost — reconnecting"),
+            // Couldn't even get subscribed (no bus yet / bus still restarting). Warn once,
+            // then demote to debug so a genuinely bus-less environment doesn't spam the log.
+            Err(e) if failures == 0 => tracing::warn!("mpris: {e} — will retry"),
+            Err(e) => tracing::debug!("mpris: {e} — will retry"),
         }
-    };
-    let _ = CONN.set(conn.clone());
-    let dbus = match zbus::fdo::DBusProxy::new(&conn).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("mpris: DBus proxy failed ({e}) — Now Playing disabled");
-            return;
+        // Tear down: a dead bus means dead state. Clear the players (emits `media-changed:
+        // None`, clearing the card) and unpublish the connection so `control()` reports
+        // "unavailable" instead of erroring against a stale bus.
+        set_conn(None);
+        crate::sync::lock_or_recover(state(), "mpris.players").clear();
+        emit_current(&app);
+
+        if started.elapsed() >= BACKOFF_RESET_AFTER {
+            failures = 0;
         }
-    };
+        let delay = RECONNECT_BACKOFF_SECS[failures.min(RECONNECT_BACKOFF_SECS.len() - 1)];
+        failures = failures.saturating_add(1);
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+    }
+}
+
+/// One connect→subscribe→pump cycle. `Err` = setup failed before subscribing; `Ok(())` = the
+/// subscription worked and ran until a signal stream ended (bus gone → caller reconnects).
+async fn watch_cycle(app: &tauri::AppHandle) -> Result<(), String> {
+    let conn = zbus::Connection::session()
+        .await
+        .map_err(|e| format!("no session bus ({e})"))?;
+    let dbus = zbus::fdo::DBusProxy::new(&conn)
+        .await
+        .map_err(|e| format!("DBus proxy failed ({e})"))?;
 
     // Signal streams FIRST, snapshot second, so a player appearing in between isn't missed.
-    let mut owner_changes = match dbus.receive_name_owner_changed().await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("mpris: NameOwnerChanged subscribe failed ({e})");
-            return;
-        }
-    };
+    let mut owner_changes = dbus
+        .receive_name_owner_changed()
+        .await
+        .map_err(|e| format!("NameOwnerChanged subscribe failed ({e})"))?;
     let props_rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface("org.freedesktop.DBus.Properties")
         .and_then(|b| b.member("PropertiesChanged"))
         .and_then(|b| b.path(MPRIS_PATH))
-        .map(|b| b.build());
-    let props_stream = match props_rule {
-        Ok(rule) => zbus::MessageStream::for_match_rule(rule, &conn, None).await,
-        Err(e) => Err(e),
-    };
-    let mut props_stream = match props_stream {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("mpris: PropertiesChanged subscribe failed ({e})");
-            return;
-        }
-    };
+        .map(|b| b.build())
+        .map_err(|e| format!("PropertiesChanged match rule failed ({e})"))?;
+    let mut props_stream = zbus::MessageStream::for_match_rule(props_rule, &conn, None)
+        .await
+        .map_err(|e| format!("PropertiesChanged subscribe failed ({e})"))?;
+
+    // Publish only once subscribed, so `control()` never sees a half-set-up connection.
+    set_conn(Some(conn.clone()));
 
     // Initial snapshot of already-running players.
     if let Ok(names) = dbus.list_names().await {
@@ -262,76 +304,90 @@ pub async fn watch(app: tauri::AppHandle) {
             }
         }
     }
-    emit_current(&app);
+    emit_current(app);
 
-    // Player appear/disappear.
-    let conn_a = conn.clone();
-    let app_a = app.clone();
-    tauri::async_runtime::spawn(async move {
-        while let Some(sig) = owner_changes.next().await {
-            let Ok(args) = sig.args() else { continue };
-            let name = args.name().to_string();
-            if !name.starts_with(MPRIS_PREFIX) {
-                continue;
-            }
-            match args.new_owner().as_ref() {
-                Some(owner) => {
-                    // appeared (or changed owner): fetch initial state
-                    let owner = owner.to_string();
-                    if let Some(p) = fetch_player(&conn_a, &name, owner).await {
-                        crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
-                    }
-                }
-                None => {
-                    // player closed (possibly mid-song): drop it so the card clears
-                    crate::sync::lock_or_recover(state(), "mpris.players").remove(&name);
-                }
-            }
-            emit_current(&app_a);
+    // Pump both signal streams from this one task. (This used to be a detached spawn for
+    // owner_changes + an inline loop for props; folded together so nothing is orphaned when
+    // a cycle ends and the caller reconnects.) Either stream ending means the bus is gone.
+    loop {
+        match future::select(owner_changes.next(), props_stream.next()).await {
+            Either::Left((Some(sig), _)) => on_owner_changed(&conn, app, sig).await,
+            Either::Right((Some(msg), _)) => on_properties_changed(&conn, app, msg).await,
+            Either::Left((None, _)) | Either::Right((None, _)) => return Ok(()),
         }
-    });
+    }
+}
 
-    // Property changes from any player, matched back via the sender's unique name.
-    while let Some(msg) = props_stream.next().await {
-        let Ok(msg) = msg else { continue };
-        let Some(sender) = msg.header().sender().map(|s| s.to_string()) else { continue };
-        let body = msg.body();
-        let Ok((iface, changed, invalidated)) =
-            body.deserialize::<(String, HashMap<String, OwnedValue>, Vec<String>)>()
-        else {
-            continue;
-        };
-        if iface != "org.mpris.MediaPlayer2.Player" {
-            continue;
-        }
-        // Apply the delta under the lock; remember whether a re-fetch is needed.
-        let mut refetch: Option<String> = None; // well-known name
-        {
-            let mut players = crate::sync::lock_or_recover(state(), "mpris.players");
-            if let Some((name, p)) = players.iter_mut().find(|(_, p)| p.owner == sender) {
-                if let Some(s) = changed.get("PlaybackStatus").and_then(|v| <&str>::try_from(v).ok()) {
-                    p.status = s.to_string();
-                }
-                if let Some(v) = changed.get("Metadata") {
-                    if let Ok(md) = HashMap::<String, OwnedValue>::try_from(v.clone()) {
-                        (p.title, p.artist) = title_artist(&md);
-                    }
-                }
-                p.last_change = Instant::now();
-                if invalidated.iter().any(|i| i == "Metadata" || i == "PlaybackStatus") {
-                    refetch = Some(name.clone());
-                }
-            }
-        }
-        if let Some(name) = refetch {
-            let owner = sender.clone();
-            if let Some(p) = fetch_player(&conn, &name, owner).await {
+/// Player appear/disappear (`NameOwnerChanged` for an `org.mpris.MediaPlayer2.*` name).
+async fn on_owner_changed(
+    conn: &zbus::Connection,
+    app: &tauri::AppHandle,
+    sig: zbus::fdo::NameOwnerChanged,
+) {
+    let Ok(args) = sig.args() else { return };
+    let name = args.name().to_string();
+    if !name.starts_with(MPRIS_PREFIX) {
+        return;
+    }
+    match args.new_owner().as_ref() {
+        Some(owner) => {
+            // appeared (or changed owner): fetch initial state
+            let owner = owner.to_string();
+            if let Some(p) = fetch_player(conn, &name, owner).await {
                 crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
             }
         }
-        emit_current(&app);
+        None => {
+            // player closed (possibly mid-song): drop it so the card clears
+            crate::sync::lock_or_recover(state(), "mpris.players").remove(&name);
+        }
     }
-    tracing::warn!("mpris: PropertiesChanged stream ended — Now Playing updates stopped");
+    emit_current(app);
+}
+
+/// Property change from any player, matched back via the sender's unique name.
+async fn on_properties_changed(
+    conn: &zbus::Connection,
+    app: &tauri::AppHandle,
+    msg: zbus::Result<zbus::Message>,
+) {
+    let Ok(msg) = msg else { return };
+    let Some(sender) = msg.header().sender().map(|s| s.to_string()) else { return };
+    let body = msg.body();
+    let Ok((iface, changed, invalidated)) =
+        body.deserialize::<(String, HashMap<String, OwnedValue>, Vec<String>)>()
+    else {
+        return;
+    };
+    if iface != "org.mpris.MediaPlayer2.Player" {
+        return;
+    }
+    // Apply the delta under the lock; remember whether a re-fetch is needed.
+    let mut refetch: Option<String> = None; // well-known name
+    {
+        let mut players = crate::sync::lock_or_recover(state(), "mpris.players");
+        if let Some((name, p)) = players.iter_mut().find(|(_, p)| p.owner == sender) {
+            if let Some(s) = changed.get("PlaybackStatus").and_then(|v| <&str>::try_from(v).ok()) {
+                p.status = s.to_string();
+            }
+            if let Some(v) = changed.get("Metadata") {
+                if let Ok(md) = HashMap::<String, OwnedValue>::try_from(v.clone()) {
+                    (p.title, p.artist) = title_artist(&md);
+                }
+            }
+            p.last_change = Instant::now();
+            if invalidated.iter().any(|i| i == "Metadata" || i == "PlaybackStatus") {
+                refetch = Some(name.clone());
+            }
+        }
+    }
+    if let Some(name) = refetch {
+        let owner = sender.clone();
+        if let Some(p) = fetch_player(conn, &name, owner).await {
+            crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
+        }
+    }
+    emit_current(app);
 }
 
 #[cfg(test)]
