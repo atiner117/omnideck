@@ -16,6 +16,7 @@ mod capability;
 mod cli;
 mod commands;
 mod config;
+mod fsutil;
 mod gamepad;
 mod gpu;
 mod hotkey;

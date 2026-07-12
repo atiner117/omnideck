@@ -174,7 +174,10 @@ pub fn ensure_profiles(tier: &Tier) -> Option<PathBuf> {
                 continue;
             }
         }
-        if let Err(e) = std::fs::write(&path, &content) {
+        // Atomic (temp-sibling + rename, fsutil.rs): mpv `--include`s these at playback
+        // start; a SIGTERM/power-cut mid-regenerate must never leave a half-written
+        // profile that then breaks every launch until the user deletes it.
+        if let Err(e) = crate::fsutil::write_atomic(&path, content.as_bytes()) {
             tracing::warn!("mpv-profiles: writing {name} failed: {e}");
             return None;
         }
