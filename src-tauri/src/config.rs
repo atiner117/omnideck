@@ -441,7 +441,12 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
     cfg.config_path = String::new(); // never written to disk
     cfg.has_pin = None; // IPC-only, never written to disk
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())
+    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())?;
+    // The media-server resolution caches the config it saw; drop it so a `[media_server]`
+    // edited into config.toml (or a future in-app editor) takes effect on the next probe
+    // instead of requiring a restart. Cheap: re-resolution is lazy, on the next server() call.
+    crate::media_server::invalidate();
+    Ok(())
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
@@ -582,6 +587,9 @@ pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
     // Atomic replace: a crash mid-restore must not leave a truncated config.toml that the
     // load path then refuses to overwrite (the exact clobber-protection deadlock).
     write_atomic(&path, out.as_bytes()).map_err(|e| e.to_string())?;
+    // A restored backup can change [media_server] — drop the cached resolution like
+    // mutate_and_save does, so the new pairing takes effect without a restart.
+    crate::media_server::invalidate();
     Ok(load_or_create())
 }
 
