@@ -322,8 +322,8 @@
   // ~[focus, focus + viewport-rows] can ever be on screen. Render just that slice — a small
   // margin above (upward-slide transition + the `near` fade) and a generous one below (covers a
   // 4K panel at the smallest UI scale, ~32 visible rows) — and preserve absolute row offsets
-  // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
-  // same window: a 1,000-game library no longer fires a fetch per game at mount.
+  // with a spacer, so each keypress costs O(window), not O(library). Art AND app-icon loading
+  // key off the same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
   let winLo = $derived(Math.max(0, focus - WIN_ABOVE));
   let winItems = $derived(items.slice(winLo, focus + WIN_BELOW));
@@ -1145,9 +1145,11 @@
 
   $effect(() => { if (focus >= itemCount && itemCount) focus = itemCount - 1; });
   $effect(() => { if (catFocus >= displayedCatalog.length) catFocus = Math.max(0, displayedCatalog.length - 1); });
-  // fetch site icons for visible web/app tiles + the add-apps catalog (cached on disk)
-  $effect(() => { for (const t of items) if (t.kind === "app") loadAppIcon(t.app); });
-  $effect(() => { for (const c of displayedCatalog) loadAppIcon(c); });
+  // fetch site icons for web/app tiles — windowed like game art, so a rail keypress costs
+  // O(window) and a large library doesn't fan out icon IPC for every off-screen tile
+  $effect(() => { for (const t of winItems) if (t.kind === "app") loadAppIcon(t.app); });
+  // the add-apps catalog is the one full-list pass (it's small + scrollable) — only while open
+  $effect(() => { if (!catalogOpen) return; for (const c of displayedCatalog) loadAppIcon(c); });
   // game art only for windowed rows — scrolling pulls art in just ahead of visibility
   $effect(() => { for (const t of winItems) if (t.kind === "game") loadArt(t.game); });
   // load the custom background image (data URL) when that mode is selected
