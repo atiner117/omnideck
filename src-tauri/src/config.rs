@@ -126,11 +126,50 @@ impl Settings {
     }
 }
 
+/// `[launch_overrides.<tile-id>]` — per-tile launch tuning (roadmap parking-lot item:
+/// "per-game launch options"), hand-editable ("config is king"):
+///
+/// ```toml
+/// [launch_overrides."app:retroarch"]
+/// env = { MANGOHUD = "1" }
+/// args = ["--verbose"]
+/// ```
+///
+/// `env` is applied to the spawned process, `args` are appended to the tile's argv —
+/// custom launchers and catalog apps only (launch_command). Steam titles don't go through
+/// our spawn (`steam://rungameid` hands off to the running client), so per-game overrides
+/// for them belong in Steam's own Launch Options. Threat model: a hand-edited config can
+/// already put arbitrary argv in a custom launcher's `exec`, so env/args add no capability
+/// it didn't have; browser (BROWSER-token) tiles still pass the same URL-only argv guard,
+/// override args included.
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct LaunchOverride {
+    /// Extra environment for the spawned process (e.g. MANGOHUD=1, WINEESYNC=1).
+    pub env: std::collections::BTreeMap<String, String>,
+    /// Extra argv appended after the tile's own exec args.
+    pub args: Vec<String>,
+}
+
+impl LaunchOverride {
+    /// Drop entries `Command::env` can't represent (empty key, '=' or NUL in the key,
+    /// NUL in the value) instead of failing the whole launch at spawn time.
+    fn normalize(&mut self) {
+        self.env.retain(|k, v| !k.is_empty() && !k.contains(['=', '\0']) && !v.contains('\0'));
+        self.args.retain(|a| !a.contains('\0'));
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
 pub struct Config {
     pub settings: Settings,
+    /// `[launch_overrides]` — per-tile env/args tuning, keyed by tile id. Absent from the
+    /// generated default config (empty map serializes to nothing) — purely opt-in.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub launch_overrides: std::collections::BTreeMap<String, LaunchOverride>,
     /// `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
     #[serde(default)]
@@ -172,6 +211,7 @@ fn defaults() -> Config {
             ..Default::default()
         },
         media_server: Default::default(),
+        launch_overrides: Default::default(),
         apps: apps::list(),
         favorites: Vec::new(),
         recent_apps: Vec::new(),
@@ -216,6 +256,9 @@ pub fn load_or_create() -> Config {
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
         cfg.media_server.normalize();
+        for ov in cfg.launch_overrides.values_mut() {
+            ov.normalize();
+        }
         cfg.config_path = path_str;
         return cfg;
     }
@@ -287,7 +330,38 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{LaunchOverride, Settings};
+
+    #[test]
+    fn launch_override_normalize_drops_unspawnable_entries() {
+        let mut ov = LaunchOverride::default();
+        ov.env.insert("MANGOHUD".into(), "1".into());
+        ov.env.insert("".into(), "x".into()); // empty key
+        ov.env.insert("A=B".into(), "x".into()); // '=' in key
+        ov.env.insert("NULKEY\0".into(), "x".into()); // NUL in key
+        ov.env.insert("NULVAL".into(), "x\0y".into()); // NUL in value
+        ov.args = vec!["--verbose".into(), "bad\0arg".into()];
+        ov.normalize();
+        assert_eq!(ov.env.len(), 1);
+        assert_eq!(ov.env.get("MANGOHUD").map(String::as_str), Some("1"));
+        assert_eq!(ov.args, vec!["--verbose".to_string()]);
+    }
+
+    #[test]
+    fn launch_overrides_parse_from_toml() {
+        let text = r#"
+[launch_overrides."app:retroarch"]
+env = { MANGOHUD = "1" }
+args = ["--verbose"]
+"#;
+        let cfg: super::Config = toml::from_str(text).unwrap();
+        let ov = cfg.launch_overrides.get("app:retroarch").expect("override parsed");
+        assert_eq!(ov.env.get("MANGOHUD").map(String::as_str), Some("1"));
+        assert_eq!(ov.args, vec!["--verbose".to_string()]);
+        // Empty map stays out of the serialized default config (opt-in table).
+        let out = toml::to_string_pretty(&super::Config::default()).unwrap();
+        assert!(!out.contains("launch_overrides"), "{out}");
+    }
 
     #[test]
     fn normalize_clamps_out_of_range() {
