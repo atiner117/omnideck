@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -255,6 +256,12 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// defaults, exactly the clobber the load path promises not to do. Internal IPC-only fields
 /// (`config_path`, `config_error`) are stripped before serializing.
 fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
+    // Serialize the whole read-modify-write. save_recent_apps() auto-fires on every launch
+    // and can overlap save_settings(); without this guard the two do last-writer-wins on the
+    // entire file and silently lose each other's changes.
+    static SAVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard =
+        crate::sync::lock_or_recover(SAVE_LOCK.get_or_init(|| Mutex::new(())), "config.save");
     let path = config_path().ok_or("no config path")?;
     let mut cfg = load_or_create();
     if let Some(err) = cfg.config_error.take() {
