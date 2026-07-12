@@ -39,6 +39,10 @@ const RELEASE: f32 = 0.35;
 const PTR_DEADZONE: f32 = 0.15;
 const PTR_MAX_PER_TICK: f32 = 13.0;
 
+/// Disarm the uinput bridge after this many *consecutive* emit failures, logging once,
+/// instead of warning on every failed tick (~125 Hz spam if the device is revoked mid-session).
+const EMIT_ERROR_LIMIT: u32 = 10;
+
 const UP: usize = 0;
 const DOWN: usize = 1;
 const LEFT: usize = 2;
@@ -66,6 +70,8 @@ pub struct NavPad {
     last_check: Instant,
     logged_active: bool, // last active-state we logged, so transitions log once each
     emitted_since_active: bool, // did we deliver anything this activation? (diagnostic)
+    emit_errors: u32,           // consecutive emit() failures; resets on any success
+    emit_disarmed: bool,        // stop emitting after EMIT_ERROR_LIMIT consecutive failures
     // Navigation state.
     dirs: [Dir; 4],
     ptr_x: f32,
@@ -106,6 +112,8 @@ impl NavPad {
                     last_check: Instant::now() - ACTIVE_CACHE,
                     logged_active: false,
                     emitted_since_active: false,
+                    emit_errors: 0,
+                    emit_disarmed: false,
                     dirs: Default::default(),
                     ptr_x: 0.0,
                     ptr_y: 0.0,
@@ -153,12 +161,27 @@ impl NavPad {
     }
 
     fn emit(&mut self, events: &[InputEvent]) {
+        if self.emit_disarmed {
+            return;
+        }
         if let Err(e) = self.dev.emit(events) {
-            tracing::warn!("navpad: emit failed: {e}");
-        } else if !self.emitted_since_active {
-            // First delivery of an activation — proves the uinput device is being read.
-            tracing::info!("navpad: delivered first input to the focused app");
-            self.emitted_since_active = true;
+            self.emit_errors += 1;
+            if self.emit_errors >= EMIT_ERROR_LIMIT {
+                self.emit_disarmed = true;
+                tracing::warn!(
+                    "navpad: emit failed {} times in a row ({e}) — disarming input bridge",
+                    self.emit_errors
+                );
+            }
+            // Individual failures are swallowed on purpose: a revoked uinput device fails
+            // ~125x/s and would flood the rotating log. The disarm line is the one signal.
+        } else {
+            self.emit_errors = 0;
+            if !self.emitted_since_active {
+                // First delivery of an activation — proves the uinput device is being read.
+                tracing::info!("navpad: delivered first input to the focused app");
+                self.emitted_since_active = true;
+            }
         }
     }
 
