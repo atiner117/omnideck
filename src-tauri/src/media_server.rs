@@ -174,12 +174,26 @@ pub(crate) fn valid_id(s: &str) -> bool {
 impl JellyfinServer {
     async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}{path}", self.base);
-        let resp = crate::http::client()
-            .get(&url)
-            .header("X-Emby-Token", &self.token)
-            .send()
-            .await
-            .map_err(|e| format!("media server unreachable: {e}"))?;
+        let mut attempt = 0u8;
+        let resp = loop {
+            match crate::http::client()
+                .get(&url)
+                .header("X-Emby-Token", &self.token)
+                .send()
+                .await
+            {
+                Ok(r) => break r,
+                // One bounded retry on a transient connect/timeout blip — a single dropped
+                // packet shouldn't blank a media row. Real HTTP responses (4xx/5xx) fall
+                // through to the status check below and are never retried.
+                Err(e) if attempt == 0 && (e.is_connect() || e.is_timeout()) => {
+                    attempt += 1;
+                    tracing::warn!("media: transient error on {path} ({e}), retrying once");
+                    continue;
+                }
+                Err(e) => return Err(format!("media server unreachable: {e}")),
+            }
+        };
         if !resp.status().is_success() {
             return Err(format!("media server: HTTP {} on {path}", resp.status()));
         }
@@ -233,12 +247,18 @@ impl JellyfinServer {
             .get(&format!("/Users/{user}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview"))
             .await
             .map(|v| items_of(&v["Items"]))
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::warn!("media: resume row failed ({e})");
+                Vec::new()
+            });
         let latest = self
             .get(&format!("/Users/{user}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series"))
             .await
             .map(|v| items_of(&v)) // /Latest returns a bare array
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::warn!("media: latest row failed ({e})");
+                Vec::new()
+            });
         let name = self
             .get("/System/Info/Public")
             .await
