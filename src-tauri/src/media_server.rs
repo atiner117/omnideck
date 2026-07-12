@@ -188,8 +188,16 @@ impl JellyfinServer {
         }
         let me = self.get("/Users/Me").await?;
         let id = me.get("Id").and_then(|v| v.as_str()).map(str::to_string);
-        let _ = self.user_id.set(id.clone());
-        id.ok_or_else(|| "media server: couldn't resolve user".into())
+        // Only cache a *successful* resolve. Caching a None here (transient 5xx, server
+        // still booting, auth glitch) would poison the OnceLock and make every later
+        // sections()/browse() return "no user" until app restart, even after recovery.
+        match id {
+            Some(u) => {
+                let _ = self.user_id.set(Some(u.clone()));
+                Ok(u)
+            }
+            None => Err("media server: couldn't resolve user".into()),
+        }
     }
 
     pub async fn sections(&self) -> Result<MediaSections, String> {
