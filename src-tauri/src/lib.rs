@@ -28,6 +28,7 @@ mod media_profiles;
 mod media_server;
 mod mpris;
 mod navpad;
+mod pin;
 mod proc;
 mod session;
 mod steamgriddb;
@@ -95,7 +96,9 @@ pub fn run() {
             commands::deck_cancel,
             audio::audio_outputs,
             audio::audio_set_output,
-            gamepad::notify_activity
+            gamepad::notify_activity,
+            pin::set_pin,
+            pin::verify_pin
         ])
         .setup(|app| {
             let handle = app.handle().clone();

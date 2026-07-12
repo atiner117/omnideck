@@ -52,6 +52,9 @@ x11rb = { version = "0.13", features = ["randr"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# pin.rs: parental-controls PIN — only an argon2id PHC hash is ever stored in config.toml,
+# NEVER the plaintext PIN (deterrence, not access control; see pin.rs header)
+argon2 = { version = "0.5", features = ["std"] } # std → rand_core/getrandom for OsRng salts
 # navpad.rs: virtual keyboard/mouse over /dev/uinput so the controller can navigate
 # launched PWAs/browsers console-style; also examples/virtual-pad.rs (uinput gamepad
 # injector for the nested-session harness — gilrs sees it as a real evdev pad)
