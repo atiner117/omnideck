@@ -7,7 +7,13 @@ import type { RemoteConfig } from "./RemoteConfig";
 import type { ScreensaverConfig } from "./ScreensaverConfig";
 import type { Settings } from "./Settings";
 
-export type Config = { settings: Settings, 
+export type Config = { 
+/**
+ * Schema version of this file (see `CONFIG_VERSION`). First field: TOML needs plain
+ * values emitted before tables. Absent in pre-versioning files — those deserialize to
+ * the current version, correct while every shape change so far has been additive.
+ */
+config_version: number, settings: Settings, 
 /**
  * `[launch_overrides]` — per-tile env/args tuning, keyed by tile id. Absent from the
  * generated default config (empty map serializes to nothing) — purely opt-in.
