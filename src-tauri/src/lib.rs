@@ -71,6 +71,8 @@ pub fn run() {
             commands::save_apps,
             commands::save_favorites,
             commands::save_recent_apps,
+            commands::backup_config,
+            commands::restore_config,
             commands::game_properties,
             commands::media_now_playing,
             commands::media_control,
