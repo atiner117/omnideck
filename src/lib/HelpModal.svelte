@@ -17,6 +17,13 @@
     ["Settings", "P", "—"],
     ["Help", "? / F1", "—"],
   ];
+  // Active while the Now Playing card is on screen (media playing / app tracked).
+  const mediaRows: Array<[string, string, string]> = [
+    ["Play / pause", "M / ⏯", "L1"],
+    ["Previous track", ", / ⏮", "L2"],
+    ["Next track", ". / ⏭", "R2"],
+    ["Dismiss card", "Delete", "R3"],
+  ];
   const sessionRows: Array<[string, string, string]> = [
     ["Switch app ⇄ OmniDeck", "Ctrl+Alt+Home", "Guide press"],
     ["Close the running app", "Ctrl+Alt+End", "Guide hold"],
@@ -28,6 +35,10 @@
   <div class="helpgrid">
     <span class="hhead"></span><span class="hhead">Keyboard</span><span class="hhead">Controller</span>
     {#each rows as [action, kbd, pad] (action)}
+      <span class="haction">{action}</span><span class="hkey">{kbd}</span><span class="hkey">{pad}</span>
+    {/each}
+    <span class="hsect">Now Playing card</span>
+    {#each mediaRows as [action, kbd, pad] (action)}
       <span class="haction">{action}</span><span class="hkey">{kbd}</span><span class="hkey">{pad}</span>
     {/each}
     {#if inSession}

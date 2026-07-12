@@ -132,6 +132,19 @@
     if (media && media.status === "Playing" && !mediaShown) out.push({ id: "media", kind: "media", name: media.player || "Media", category: "music", media });
     return out.slice(0, 3);
   });
+  // Now Playing transport, couch path (review #13): the card's pointer buttons call
+  // api.mediaControl directly; these give the keyboard/controller the SAME media_control
+  // IPC so the transport is reachable without a mouse. Active only while a card with live
+  // MPRIS metadata is visible (npMediaCard), so the buttons stay free otherwise.
+  const npMediaCard = $derived(nowCards.find((c) => c.media) ?? null);
+  function npControl(action: string) {
+    api.mediaControl(action).catch((e) => reportError("Media control failed", e));
+  }
+  function npDismiss() {
+    // same as the card's ✕: drop the top dismissible card (the standalone "media" card has no ✕)
+    const c = nowCards.find((x) => x.kind !== "media");
+    if (c) nowList = nowList.filter((x) => x.id !== c.id);
+  }
 
   let allGames = $state<Game[]>([]);
   let favorites = $state<string[]>([]);
@@ -877,6 +890,13 @@
       }
       return;
     }
+    // Hardware media keys → Now Playing transport (same media_control IPC as the card's
+    // buttons). No overlay binds these keys, so handling them first shadows nothing.
+    if (npMediaCard) {
+      if (e.key === "MediaPlayPause") { e.preventDefault(); npControl("play-pause"); return; }
+      if (e.key === "MediaTrackNext") { e.preventDefault(); npControl("next"); return; }
+      if (e.key === "MediaTrackPrevious") { e.preventDefault(); npControl("previous"); return; }
+    }
     const arrow = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key);
     if (arrow || e.key === "Enter" || e.key === "Escape") e.preventDefault();
     // Allow hold-to-repeat for arrows (throttled by navGate); ignore auto-repeat for
@@ -953,6 +973,13 @@
     if (e.key === "h" || e.key === "H") { goHome(); return; }
     if (e.key === "f" || e.key === "F") { favCurrent(); return; }
     if (e.key === "i" || e.key === "I") { showInfo(); return; }
+    // Now Playing transport for media-keyless keyboards. Base level only — every modal
+    // branch above already returned, so these can't shadow overlay bindings (search and
+    // catalog consume typed characters before reaching here).
+    if (npMediaCard && (e.key === "m" || e.key === "M")) { npControl("play-pause"); return; }
+    if (npMediaCard && e.key === ",") { npControl("previous"); return; }
+    if (npMediaCard && e.key === ".") { npControl("next"); return; }
+    if (e.key === "Delete" && nowCards.some((c) => c.kind !== "media")) { npDismiss(); return; }
     if (e.key === "Escape") { settingsEditing = false; return; }
     if (e.key === "ArrowLeft" && navGate()) horiz(-1);
     else if (e.key === "ArrowRight" && navGate()) horiz(1);
@@ -1087,6 +1114,15 @@
           else if (p.code === "East") catalogOpen = false;
           return;
         }
+        // Now Playing transport (review #13): base level only — every overlay branch above
+        // already returned, so these can't shadow modal bindings (search's LeftTrigger =
+        // result selection stays intact). Same media_control IPC as the card's buttons.
+        if (npMediaCard) {
+          if (p.code === "LeftTrigger") { npControl("play-pause"); return; } // L1
+          if (p.code === "LeftTrigger2") { npControl("previous"); return; } // L2
+          if (p.code === "RightTrigger2") { npControl("next"); return; } // R2
+        }
+        if (p.code === "RightThumb" && nowCards.some((c) => c.kind !== "media")) { npDismiss(); return; } // R3 = card ✕
         if (p.code === "North") { toggleCatalog(); return; }
         if (p.code === "Select") { openSearch(); return; }
         if (p.code === "Start") { goHome(); return; }
