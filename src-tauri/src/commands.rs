@@ -137,6 +137,15 @@ pub fn restore_config(src: String) -> Result<config::Config, String> {
     Ok(cfg)
 }
 
+/// Check GitHub for a newer release (roadmap #4, check-only — acting on it is per-distro
+/// follow-up). Result is cached for the process lifetime (unauthed GitHub API = 60 req/hr);
+/// `force` bypasses the cache for a manual "Check now". The frontend gates the automatic
+/// boot-time call on `settings.check_updates`; a manual check always works.
+#[tauri::command]
+pub async fn check_update(force: bool) -> Result<crate::update::UpdateInfo, String> {
+    crate::update::check(force).await
+}
+
 /// Prepare the custom wallpaper: a display-sized, cached copy served over `omnideck://`
 /// (the frontend wraps the returned path in its `artUrl`). Returns None when the source is
 /// unreadable/undecodable — the frontend then falls back to the full-image `get_art` path,
