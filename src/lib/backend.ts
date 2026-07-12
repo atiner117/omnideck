@@ -47,6 +47,13 @@ export const saveApps = (apps: App[]) => invoke<void>("save_apps", { apps });
 export const saveFavorites = (favorites: string[]) => invoke<void>("save_favorites", { favorites });
 export const saveRecentApps = (recentApps: string[]) => invoke<void>("save_recent_apps", { recentApps });
 export const gameProperties = (appid: string) => invoke<void>("game_properties", { appid });
+/** Write a sanitized TOML backup of config.toml to `dest`; resolves to the path written.
+ *  Credentials (media-server token, SteamGridDB key) are excluded unless opted in. */
+export const backupConfig = (dest: string, includeCredentials = false) =>
+  invoke<string>("backup_config", { dest, includeCredentials });
+/** Restore config.toml from a backup file (normalized like a hand-edit); resolves to the
+ *  freshly loaded config so the caller can re-render without a restart. */
+export const restoreConfig = (src: string) => invoke<Config>("restore_config", { src });
 export const powerAction = (action: string) => invoke<void>("power_action", { action });
 export const closeCurrentApp = () => invoke<boolean>("close_current_app");
 /** Bring a launched app forward without closing it. With a launch id, shows THAT app's
