@@ -860,11 +860,174 @@
   function wizardPrev() { if (wizardStep > 0) wizardStep--; }
   function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; patchSettings({ accent: a }); accent = a; }
 
+  // ---- Unified input router (review #10) ----------------------------------------------------
+  // One ordered roster of overlay controllers. The router walks the list and the FIRST open
+  // overlay consumes the event — keyboard, gamepad buttons, and stick axes all share this single
+  // ordering (previously three hand-maintained ladders that each hardcoded the list). Adding an
+  // overlay = one entry here. Order is stacking order: info/help render on top of the menus they
+  // can be opened over, so they come first; deck/wizard preempt everything.
+  type Overlay = {
+    open: () => boolean;
+    key: (e: KeyboardEvent) => void; // keyboard, when this overlay is topmost
+    pad: (code: string) => void; // gamepad button_pressed, when this overlay is topmost
+    stickY?: (d: number) => void; // vertical-stick row move; omitted = overlay swallows the axis
+    stickX?: (d: number) => void; // horizontal stick; omitted = swallowed (only the deck uses it)
+    allowHelp?: boolean; // "?" / F1 still opens Help on top of this overlay
+  };
+  const OVERLAYS: Overlay[] = [
+    {
+      // Deck switcher: arrows/L-R pick a card, Enter/A/X opens, Del/Select closes it,
+      // Esc/B/Guide dismisses.
+      open: () => deckOpen,
+      key: (e) => {
+        if (e.key === "ArrowLeft" && navGate()) deckMove(-1);
+        else if (e.key === "ArrowRight" && navGate()) deckMove(1);
+        else if (e.key === "Enter") deckSelect();
+        else if (e.key === "Delete" || e.key === "Backspace") deckKill();
+        else if (e.key === "Escape") closeDeck();
+      },
+      pad: (c) => {
+        if (c === "DPadLeft") holdStart(c, () => deckMove(-1));
+        else if (c === "DPadRight") holdStart(c, () => deckMove(1));
+        else if (c === "South" || c === "West") deckSelect();
+        else if (c === "Select") deckKill();
+        else if (c === "East" || c === "Start") closeDeck();
+      },
+      stickX: (d) => deckMove(d), // horizontal card row — vertical stick is meaningless here
+    },
+    {
+      // First-run wizard
+      open: () => wizardActive,
+      key: (e) => {
+        if (e.key === "Enter") wizardNext();
+        else if (e.key === "Escape") wizardPrev();
+        else if (e.key === "ArrowLeft" && wizardStep === 1 && navGate()) wizardAccent(-1);
+        else if (e.key === "ArrowRight" && wizardStep === 1 && navGate()) wizardAccent(1);
+      },
+      pad: (c) => {
+        if (c === "South") wizardNext();
+        else if (c === "East") wizardPrev();
+        else if (c === "DPadLeft" && wizardStep === 1) wizardAccent(-1);
+        else if (c === "DPadRight" && wizardStep === 1) wizardAccent(1);
+      },
+    },
+    {
+      // Tile info sheet — any accept/back input closes it
+      open: () => infoOpen,
+      key: (e) => { if (e.key === "Escape" || e.key === "Enter" || e.key === "i" || e.key === "I") infoOpen = false; },
+      pad: (c) => { if (c === "East" || c === "South") infoOpen = false; },
+    },
+    {
+      // Help sheet
+      open: () => helpOpen,
+      key: (e) => { if (e.key === "Escape" || e.key === "Enter" || e.key === "?" || e.key === "F1") helpOpen = false; },
+      pad: (c) => { if (c === "East" || c === "South") helpOpen = false; },
+    },
+    {
+      // Custom-launcher form: native inputs handle typing; only back-out is routed
+      open: () => formOpen,
+      key: (e) => { if (e.key === "Escape") formOpen = false; },
+      pad: (c) => { if (c === "East") formOpen = false; },
+      allowHelp: true,
+    },
+    {
+      // Power confirm dialog
+      open: () => !!confirmAct,
+      key: (e) => { if (e.key === "Enter") doConfirm(); else if (e.key === "Escape") confirmAct = null; },
+      pad: (c) => { if (c === "South") doConfirm(); else if (c === "East") confirmAct = null; },
+      allowHelp: true,
+    },
+    {
+      // Power menu
+      open: () => powerOpen,
+      key: (e) => {
+        if (e.key === "ArrowUp" && navGate()) powerMove(-1);
+        else if (e.key === "ArrowDown" && navGate()) powerMove(1);
+        else if (e.key === "Enter") powerActivate();
+        else if (e.key === "Escape") powerOpen = false;
+      },
+      pad: (c) => {
+        if (c === "DPadUp") holdStart(c, () => powerMove(-1));
+        else if (c === "DPadDown") holdStart(c, () => powerMove(1));
+        else if (c === "South") powerActivate();
+        else if (c === "East") powerOpen = false;
+      },
+      stickY: powerMove,
+      allowHelp: true,
+    },
+    {
+      // Media library
+      open: () => mediaOpen,
+      key: (e) => {
+        if (e.key === "ArrowUp" && navGate()) mediaMove(-1);
+        else if (e.key === "ArrowDown" && navGate()) mediaMove(1);
+        else if (e.key === "Enter") mediaActivate();
+        else if (e.key === "Escape" || e.key === "Backspace") mediaBack();
+      },
+      pad: (c) => {
+        if (c === "DPadUp") holdStart(c, () => mediaMove(-1));
+        else if (c === "DPadDown") holdStart(c, () => mediaMove(1));
+        else if (c === "South") mediaActivate();
+        else if (c === "East") mediaBack();
+      },
+      stickY: mediaMove,
+      allowHelp: true,
+    },
+    {
+      // Search: D-pad drives the on-screen keyboard; bumpers move the result selection.
+      open: () => searchOpen,
+      key: (e) => {
+        if (e.key === "ArrowUp") searchMove(-1);
+        else if (e.key === "ArrowDown") searchMove(1);
+        else if (e.key === "Enter") searchActivate();
+        else if (e.key === "Escape") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
+        else if (e.key === "Backspace") { searchQuery = searchQuery.slice(0, -1); oskDim = true; }
+        // preventDefault so Space can't ALSO natively re-activate a mouse-focused result row
+        else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) { e.preventDefault(); searchQuery += e.key; oskDim = true; }
+      },
+      pad: (c) => {
+        if (["DPadUp", "DPadDown", "DPadLeft", "DPadRight", "South"].includes(c)) oskDim = false;
+        if (c === "DPadUp") holdStart(c, () => oskMove(0, -1));
+        else if (c === "DPadDown") holdStart(c, () => oskMove(0, 1));
+        else if (c === "DPadLeft") holdStart(c, () => oskMove(-1, 0));
+        else if (c === "DPadRight") holdStart(c, () => oskMove(1, 0));
+        else if (c === "South") oskPress(OSK_FLAT[oskFocus]);
+        else if (c === "LeftTrigger") searchMove(-1);
+        else if (c === "RightTrigger") searchMove(1);
+        else if (c === "West") searchQuery = searchQuery.slice(0, -1);
+        else if (c === "East") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
+      },
+      stickY: searchMove, // stick moves the result row; the OSK stays D-pad-only
+      allowHelp: true,
+    },
+    {
+      // App catalog
+      open: () => catalogOpen,
+      key: (e) => {
+        if (e.key === "ArrowUp" && navGate()) catMove(-1);
+        else if (e.key === "ArrowDown" && navGate()) catMove(1);
+        else if (e.key === "Enter") catToggle(catFocus);
+        else if (e.key === "Tab") { e.preventDefault(); catSort = catSort === "group" ? "alpha" : "group"; }
+        else if (e.key === "Escape") { if (catQuery) catQuery = ""; else catalogOpen = false; }
+        else if (e.key === "Backspace") catQuery = catQuery.slice(0, -1);
+        // preventDefault so Space can't ALSO natively re-toggle a mouse-focused catalog row
+        else if (e.key.length === 1 && /^[a-z0-9 ]$/i.test(e.key)) { e.preventDefault(); catQuery += e.key; }
+      },
+      pad: (c) => {
+        if (c === "DPadUp") holdStart(c, () => catMove(-1));
+        else if (c === "DPadDown") holdStart(c, () => catMove(1));
+        else if (c === "South") catToggle(catFocus);
+        else if (c === "North") catSort = catSort === "group" ? "alpha" : "group"; // toggle sort
+        else if (c === "East") { if (catQuery) catQuery = ""; else catalogOpen = false; }
+      },
+      stickY: catMove,
+      allowHelp: true,
+    },
+  ];
+  const topOverlay = () => OVERLAYS.find((o) => o.open());
   // Single source of truth: is any modal/overlay open? Gates base navigation and stops
-  // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
-  const anyModal = $derived(
-    deckOpen || wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
-  );
+  // hold-repeat the instant a modal opens (derives straight from the roster).
+  const anyModal = $derived(OVERLAYS.some((o) => o.open()));
 
   function onKey(e: KeyboardEvent) {
     // A real <input>/<select> is focused (settings number field, custom-launcher form):
@@ -882,73 +1045,13 @@
     // Allow hold-to-repeat for arrows (throttled by navGate); ignore auto-repeat for
     // action keys so holding Enter can't launch a dozen times.
     if (e.repeat && !arrow) return;
-    if (deckOpen) {
-      // Deck switcher, keyboard twin of the gamepad gate: arrows pick, Enter opens,
-      // Delete/Backspace closes the card, Escape dismisses.
-      if (e.key === "ArrowLeft" && navGate()) deckMove(-1);
-      else if (e.key === "ArrowRight" && navGate()) deckMove(1);
-      else if (e.key === "Enter") deckSelect();
-      else if (e.key === "Delete" || e.key === "Backspace") deckKill();
-      else if (e.key === "Escape") closeDeck();
-      return;
-    }
-    if (wizardActive) {
-      if (e.key === "Enter") wizardNext();
-      else if (e.key === "Escape") wizardPrev();
-      else if (e.key === "ArrowLeft" && wizardStep === 1 && navGate()) wizardAccent(-1);
-      else if (e.key === "ArrowRight" && wizardStep === 1 && navGate()) wizardAccent(1);
-      return;
-    }
-    if (infoOpen) { if (e.key === "Escape" || e.key === "Enter" || e.key === "i" || e.key === "I") infoOpen = false; return; }
-    if (helpOpen) { if (e.key === "Escape" || e.key === "Enter" || e.key === "?" || e.key === "F1") helpOpen = false; return; }
-    if (e.key === "?" || e.key === "F1") { e.preventDefault(); holdStop(); helpOpen = true; return; }
-    if (formOpen) {
-      // native inputs handle typing; only intercept Escape to close
-      if (e.key === "Escape") { e.preventDefault(); formOpen = false; }
-      return;
-    }
-    if (confirmAct) {
-      if (e.key === "Enter") doConfirm();
-      else if (e.key === "Escape") confirmAct = null;
-      return;
-    }
-    if (powerOpen) {
-      if (e.key === "ArrowUp" && navGate()) powerMove(-1);
-      else if (e.key === "ArrowDown" && navGate()) powerMove(1);
-      else if (e.key === "Enter") powerActivate();
-      else if (e.key === "Escape") powerOpen = false;
-      return;
-    }
-    if (mediaOpen) {
-      if (e.key === "ArrowUp" && navGate()) mediaMove(-1);
-      else if (e.key === "ArrowDown" && navGate()) mediaMove(1);
-      else if (e.key === "Enter") mediaActivate();
-      else if (e.key === "Escape" || e.key === "Backspace") mediaBack();
-      return;
-    }
-    if (e.key === "/" && !searchOpen && !catalogOpen) { e.preventDefault(); openSearch(); return; }
-    if (searchOpen) {
-      if (e.key === "ArrowUp") searchMove(-1);
-      else if (e.key === "ArrowDown") searchMove(1);
-      else if (e.key === "Enter") searchActivate();
-      else if (e.key === "Escape") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
-      else if (e.key === "Backspace") { searchQuery = searchQuery.slice(0, -1); oskDim = true; }
-      // preventDefault so Space can't ALSO natively re-activate a mouse-focused result row
-      else if (e.key.length === 1 && /^[\w .\-]$/.test(e.key)) { e.preventDefault(); searchQuery += e.key; oskDim = true; }
-      return;
-    }
-    if ((e.key === "a" || e.key === "A") && !catalogOpen) { toggleCatalog(); return; }
-    if (catalogOpen) {
-      if (e.key === "ArrowUp" && navGate()) catMove(-1);
-      else if (e.key === "ArrowDown" && navGate()) catMove(1);
-      else if (e.key === "Enter") catToggle(catFocus);
-      else if (e.key === "Tab") { e.preventDefault(); catSort = catSort === "group" ? "alpha" : "group"; }
-      else if (e.key === "Escape") { if (catQuery) catQuery = ""; else catalogOpen = false; }
-      else if (e.key === "Backspace") catQuery = catQuery.slice(0, -1);
-      // preventDefault so Space can't ALSO natively re-toggle a mouse-focused catalog row
-      else if (e.key.length === 1 && /^[a-z0-9 ]$/i.test(e.key)) { e.preventDefault(); catQuery += e.key; }
-      return;
-    }
+    const ov = topOverlay();
+    // "?" opens Help even on top of the list modals (which type their own charsets and never
+    // consume it) — but not over the deck/wizard/info/help, which own all their input.
+    if ((e.key === "?" || e.key === "F1") && (!ov || ov.allowHelp)) { e.preventDefault(); holdStop(); helpOpen = true; return; }
+    if (ov) { ov.key(e); return; }
+    if (e.key === "/") { e.preventDefault(); openSearch(); return; }
+    if (e.key === "a" || e.key === "A") { toggleCatalog(); return; }
     if (e.key === "p" || e.key === "P") { gotoSettings(); return; }
     if (e.key === "h" || e.key === "H") { goHome(); return; }
     if (e.key === "f" || e.key === "F") { favCurrent(); return; }
@@ -1028,65 +1131,8 @@
     api.onGamepad((e) => {
       const p = e.payload;
       if (p.kind === "button_pressed") {
-        if (deckOpen) {
-          // Card deck: L/R picks a card, A/X opens it, Select closes it, B/Guide dismisses.
-          if (p.code === "DPadLeft") holdStart(p.code, () => deckMove(-1));
-          else if (p.code === "DPadRight") holdStart(p.code, () => deckMove(1));
-          else if (p.code === "South" || p.code === "West") deckSelect();
-          else if (p.code === "Select") deckKill();
-          else if (p.code === "East" || p.code === "Start") closeDeck();
-          return;
-        }
-        if (wizardActive) {
-          if (p.code === "South") wizardNext(); else if (p.code === "East") wizardPrev();
-          else if (p.code === "DPadLeft" && wizardStep === 1) wizardAccent(-1);
-          else if (p.code === "DPadRight" && wizardStep === 1) wizardAccent(1);
-          return;
-        }
-        if (formOpen) { if (p.code === "East") formOpen = false; return; }
-        if (confirmAct) {
-          if (p.code === "South") doConfirm();
-          else if (p.code === "East") confirmAct = null;
-          return;
-        }
-        if (infoOpen) { if (p.code === "East" || p.code === "South") infoOpen = false; return; }
-        if (helpOpen) { if (p.code === "East" || p.code === "South") helpOpen = false; return; }
-        if (powerOpen) {
-          if (p.code === "DPadUp") holdStart(p.code, () => powerMove(-1));
-          else if (p.code === "DPadDown") holdStart(p.code, () => powerMove(1));
-          else if (p.code === "South") powerActivate();
-          else if (p.code === "East") powerOpen = false;
-          return;
-        }
-        if (mediaOpen) {
-          if (p.code === "DPadUp") holdStart(p.code, () => mediaMove(-1));
-          else if (p.code === "DPadDown") holdStart(p.code, () => mediaMove(1));
-          else if (p.code === "South") mediaActivate();
-          else if (p.code === "East") mediaBack();
-          return;
-        }
-        if (searchOpen) {
-          // D-pad drives the on-screen keyboard; bumpers move the result selection.
-          if (["DPadUp", "DPadDown", "DPadLeft", "DPadRight", "South"].includes(p.code)) oskDim = false;
-          if (p.code === "DPadUp") holdStart(p.code, () => oskMove(0, -1));
-          else if (p.code === "DPadDown") holdStart(p.code, () => oskMove(0, 1));
-          else if (p.code === "DPadLeft") holdStart(p.code, () => oskMove(-1, 0));
-          else if (p.code === "DPadRight") holdStart(p.code, () => oskMove(1, 0));
-          else if (p.code === "South") oskPress(OSK_FLAT[oskFocus]);
-          else if (p.code === "LeftTrigger") searchMove(-1);
-          else if (p.code === "RightTrigger") searchMove(1);
-          else if (p.code === "West") searchQuery = searchQuery.slice(0, -1);
-          else if (p.code === "East") { if (searchQuery) searchQuery = ""; else searchOpen = false; }
-          return;
-        }
-        if (catalogOpen) {
-          if (p.code === "DPadUp") holdStart(p.code, () => catMove(-1));
-          else if (p.code === "DPadDown") holdStart(p.code, () => catMove(1));
-          else if (p.code === "South") catToggle(catFocus);
-          else if (p.code === "North") catSort = catSort === "group" ? "alpha" : "group"; // toggle sort
-          else if (p.code === "East") catalogOpen = false;
-          return;
-        }
+        const ov = topOverlay();
+        if (ov) { ov.pad(p.code); return; }
         if (p.code === "North") { toggleCatalog(); return; }
         if (p.code === "Select") { openSearch(); return; }
         if (p.code === "Start") { goHome(); return; }
@@ -1111,23 +1157,13 @@
         const dir = p.code === "LeftStickY" ? -raw : raw;
         const code = `${p.code}:${dir}`;
         if (dir === 0) { if (heldCode.startsWith(p.code)) holdStop(); return; }
-        if (deckOpen) {
-          // Deck: horizontal stick moves the card selection; vertical does nothing.
-          if (p.code === "LeftStickX" && heldCode !== code) holdStart(code, () => deckMove(dir));
-          else if (p.code === "LeftStickY") holdStop();
-          return;
-        }
-        if (p.code === "LeftStickY") {
-          // In the list modals the stick drives the row selection (the D-pad keeps its
-          // modal-specific job, e.g. the OSK in search). Other overlays swallow the stick.
-          const rowMove = powerOpen ? powerMove : searchOpen ? searchMove : catalogOpen ? catMove : mediaOpen ? mediaMove : null;
-          if (anyModal && !rowMove) { holdStop(); return; }
-          const fn = rowMove ?? moveItem;
-          if (heldCode !== code) holdStart(code, () => fn(dir));
-        } else {
-          if (anyModal) { holdStop(); return; } // stick X has no modal meaning (OSK is D-pad)
-          if (heldCode !== code) holdStart(code, () => horiz(dir));
-        }
+        // The stick drives whatever the topmost overlay declares for that axis (stickY = row
+        // selection, stickX = deck cards; the D-pad keeps its modal-specific job, e.g. the OSK
+        // in search). An open overlay with no declared handler swallows the axis.
+        const ov = topOverlay();
+        const fn = ov ? (p.code === "LeftStickY" ? ov.stickY : ov.stickX) : p.code === "LeftStickY" ? moveItem : horiz;
+        if (!fn) { holdStop(); return; }
+        if (heldCode !== code) holdStart(code, () => fn(dir));
       }
     }).then((u) => off.push(u));
 
