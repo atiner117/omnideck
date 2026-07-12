@@ -57,13 +57,16 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
     const AXIS_EPS: f32 = 0.05;
 
     // Guide/Home button, console-style: SHORT press switches between OmniDeck and the
-    // launched app (it keeps running — music keeps playing); LONG hold (>= 800 ms) closes
-    // it. The close fires the moment the hold crosses the threshold — while the button is
-    // still down, like a console power chord — not at release (M2 feedback: release-time
-    // close feels laggy and unconfirmed). The short-press switch still decides at release
-    // (that's the only way to know it STAYED short). gilrs reads evdev directly, so all of
-    // this works even while the launched app holds window focus.
-    const GUIDE_HOLD_CLOSE: std::time::Duration = std::time::Duration::from_millis(800);
+    // launched app (it keeps running — music keeps playing); LONG hold (default 800 ms,
+    // config `[input] guide_hold_ms`) closes it. The close fires the moment the hold
+    // crosses the threshold — while the button is still down, like a console power chord —
+    // not at release (M2 feedback: release-time close feels laggy and unconfirmed). The
+    // short-press switch still decides at release (that's the only way to know it STAYED
+    // short). gilrs reads evdev directly, so all of this works even while the launched app
+    // holds window focus. The threshold is read ONCE at thread start (normalize() clamped
+    // it 200–5000 ms) — a boot-time knob isn't worth config I/O on a 125 Hz loop.
+    let guide_hold_close =
+        std::time::Duration::from_millis(crate::config::load_or_create().input.guide_hold_ms);
     let mut guide_down: Option<std::time::Instant> = None; // Some = held, hold not yet fired
 
     // Virtual keyboard/mouse bridge: while a launched app is in front, the pad drives IT
@@ -188,7 +191,7 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         // already sitting in the queue must win — otherwise a ~790 ms press whose release
         // we haven't read yet would misfire as a hold. Fire the close mid-hold and consume
         // the press so the eventual release is a no-op.
-        if guide_down.is_some_and(|t| t.elapsed() >= GUIDE_HOLD_CLOSE) {
+        if guide_down.is_some_and(|t| t.elapsed() >= guide_hold_close) {
             guide_down = None;
             if crate::watchdog::return_home() {
                 tracing::info!("guide (hold): closed the current app");
