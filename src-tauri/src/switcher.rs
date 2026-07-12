@@ -21,9 +21,40 @@
 use std::sync::Mutex;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState, Window};
+use x11rb::rust_connection::RustConnection;
 
 /// Windows we unmapped on the last "hide" — remapped on the next toggle.
 static HIDDEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Shared X11 connection for the polled entry points. The navpad's activation gate calls
+/// `any_app_visible` ~3×/s from the gamepad thread; opening a fresh connection per check
+/// (socket + auth + setup exchange, a new FD each time) was pure churn. Cached here and
+/// reused by every switcher entry point; a cheap liveness round-trip on reuse reconnects
+/// transparently when the server went away (session teardown, desktop test restarts).
+/// The hotkey thread deliberately keeps its OWN connection — it parks in `wait_for_event`,
+/// which would wedge anything sharing it.
+static X11: Mutex<Option<(RustConnection, usize)>> = Mutex::new(None);
+
+/// Run `f` against the shared connection's root window, (re)connecting as needed.
+/// Returns None only when X is unreachable.
+fn with_x11<T>(f: impl FnOnce(&RustConnection, Window) -> T) -> Option<T> {
+    let mut guard = crate::sync::lock_or_recover(&X11, "switcher.X11");
+    if let Some((conn, _)) = guard.as_ref() {
+        // One round-trip to prove the cached connection is still live — still far cheaper
+        // than a full reconnect, and it turns a dead cache into a reconnect instead of
+        // every request inside `f` silently failing forever.
+        if !conn.get_input_focus().is_ok_and(|c| c.reply().is_ok()) {
+            tracing::info!("switcher: shared X11 connection lost — reconnecting");
+            *guard = None;
+        }
+    }
+    if guard.is_none() {
+        *guard = x11rb::connect(None).ok();
+    }
+    let (conn, screen_num) = guard.as_ref()?;
+    let root = conn.setup().roots[*screen_num].root;
+    Some(f(conn, root))
+}
 
 /// Process groups we froze (SIGSTOP) when their windows were hidden. Disjoint from any
 /// group that was audibly playing at hide time. Drained + SIGCONTed on the next re-show.
@@ -130,14 +161,12 @@ fn visible_owned(
 /// window is viewable" is exactly "the controller's input should go to the app".
 pub fn any_app_visible() -> bool {
     // The navpad polls this ~3x/s for the whole session; with nothing launched the answer
-    // is trivially false — don't open an X connection and walk the window tree to say so.
+    // is trivially false — don't touch X at all to say so (the pooled connection stays idle).
     let groups = crate::watchdog::live_groups();
     if groups.is_empty() {
         return false;
     }
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
-    let root = conn.setup().roots[screen_num].root;
-    !visible_owned(&conn, root, &groups).is_empty()
+    with_x11(|conn, root| !visible_owned(conn, root, &groups).is_empty()).unwrap_or(false)
 }
 
 /// Toggle the launched app(s): if any owned window is visible, hide them all (focus falls
@@ -150,16 +179,17 @@ pub fn toggle() -> Option<&'static str> {
     if !session_ok() {
         return None;
     }
-    let (conn, screen_num) = x11rb::connect(None).ok()?;
-    let root = conn.setup().roots[screen_num].root;
+    with_x11(toggle_inner).flatten()
+}
 
+fn toggle_inner(conn: &RustConnection, root: Window) -> Option<&'static str> {
     let groups = crate::watchdog::live_groups();
-    let visible = visible_owned(&conn, root, &groups);
+    let visible = visible_owned(conn, root, &groups);
 
     if !visible.is_empty() {
         // Hide: unmap every owned visible toplevel; gamescope refocuses OmniDeck.
         let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
-        let failed = set_mapped(&conn, &wins, false);
+        let failed = set_mapped(conn, &wins, false);
         if !failed.is_empty() {
             tracing::warn!("switcher: {} window(s) resisted unmap", failed.len());
         }
@@ -187,7 +217,7 @@ pub fn toggle() -> Option<&'static str> {
     if hidden.is_empty() {
         return None;
     }
-    let failed = set_mapped(&conn, &hidden, true);
+    let failed = set_mapped(conn, &hidden, true);
     if !failed.is_empty() {
         // Put the strays back so the next toggle retries instead of stranding the app
         // invisible with an empty HIDDEN list (Guide would then do nothing forever).
@@ -215,30 +245,31 @@ pub fn hide_all() -> bool {
     if !session_ok() {
         return false;
     }
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
-    let root = conn.setup().roots[screen_num].root;
-    let visible = visible_owned(&conn, root, &crate::watchdog::live_groups());
-    if visible.is_empty() {
-        return false;
-    }
-    let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
-    let failed = set_mapped(&conn, &wins, false);
-    {
-        let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
-        for &(win, _) in &visible {
-            if !hidden.contains(&win) && !failed.contains(&win) {
-                hidden.push(win);
+    with_x11(|conn, root| {
+        let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
+        if visible.is_empty() {
+            return false;
+        }
+        let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
+        let failed = set_mapped(conn, &wins, false);
+        {
+            let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+            for &(win, _) in &visible {
+                if !hidden.contains(&win) && !failed.contains(&win) {
+                    hidden.push(win);
+                }
             }
         }
-    }
-    let frozen_now = freeze_silent_groups(&visible, &failed);
-    // Snapshot THIS hide's effect (not the whole HIDDEN/STOPPED backlog): a deck dismissed
-    // without picking a card restores exactly what opening it took away — apps hidden on an
-    // earlier deck round stay hidden.
-    let hidden_now: Vec<Window> =
-        visible.iter().map(|&(w, _)| w).filter(|w| !failed.contains(w)).collect();
-    *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (hidden_now, frozen_now);
-    true
+        let frozen_now = freeze_silent_groups(&visible, &failed);
+        // Snapshot THIS hide's effect (not the whole HIDDEN/STOPPED backlog): a deck dismissed
+        // without picking a card restores exactly what opening it took away — apps hidden on an
+        // earlier deck round stay hidden.
+        let hidden_now: Vec<Window> =
+            visible.iter().map(|&(w, _)| w).filter(|w| !failed.contains(w)).collect();
+        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (hidden_now, frozen_now);
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Undo the last `hide_all()` (deck dismissed without picking a card): SIGCONT the groups
@@ -276,35 +307,35 @@ pub fn show_group(group: u32) -> bool {
     if !session_ok() {
         return false;
     }
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return false };
-    let root = conn.setup().roots[screen_num].root;
+    with_x11(|conn, root| {
+        // Find the windows FIRST: if the app has none left (died while frozen, transient X
+        // failure), leave its STOPPED entry alone — thawing before this check left the group
+        // running invisibly with no record to ever re-freeze it.
+        let wins = windows_of_group(conn, root, group);
+        if wins.is_empty() {
+            return false;
+        }
 
-    // Find the windows FIRST: if the app has none left (died while frozen, transient X
-    // failure), leave its STOPPED entry alone — thawing before this check left the group
-    // running invisibly with no record to ever re-freeze it.
-    let wins = windows_of_group(&conn, root, group);
-    if wins.is_empty() {
-        return false;
-    }
+        // Map BEFORE thawing. The map requests come from OUR connection (steamcompmgr does the
+        // actual mapping), so a SIGSTOPped client doesn't block them — and if every map fails
+        // (wedged compositor), the group must stay frozen with its STOPPED entry and the deck's
+        // dismiss snapshot intact, not thawed-and-invisible with no record to re-freeze it.
+        let failed = set_mapped(conn, &wins, true);
+        if failed.len() == wins.len() {
+            return false;
+        }
 
-    // Map BEFORE thawing. The map requests come from OUR connection (steamcompmgr does the
-    // actual mapping), so a SIGSTOPped client doesn't block them — and if every map fails
-    // (wedged compositor), the group must stay frozen with its STOPPED entry and the deck's
-    // dismiss snapshot intact, not thawed-and-invisible with no record to re-freeze it.
-    let failed = set_mapped(&conn, &wins, true);
-    if failed.len() == wins.len() {
-        return false;
-    }
-
-    // At least one window is up — resume the group so it can repaint and take focus.
-    cont_group(group);
-    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|&g| g != group);
-    // A card was chosen — the deck's dismiss snapshot no longer applies.
-    *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new());
-    // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
-    crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
-        .retain(|w| !wins.contains(w) || failed.contains(w));
-    true
+        // At least one window is up — resume the group so it can repaint and take focus.
+        cont_group(group);
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|&g| g != group);
+        // A card was chosen — the deck's dismiss snapshot no longer applies.
+        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new());
+        // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
+        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
+            .retain(|w| !wins.contains(w) || failed.contains(w));
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// All toplevels (any map state) whose _NET_WM_PID belongs to `group` — used to re-map a
