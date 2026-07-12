@@ -56,15 +56,30 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
     // isn't writable; everything else works without it.
     let mut navpad = crate::navpad::NavPad::new();
 
+    // Screensaver idle detection ([screensaver] in config.rs, roadmap Appendix C #1): a
+    // single "idle" event after `idle_dim_secs` without pad input past the AXIS_EPS filter,
+    // "active" on the next input. The frontend owns the staged dim → Ken-Burns → blank
+    // presentation (and the `enabled` gate) — the backend only reports the transition.
+    // The threshold is read once at thread start (this thread outlives config edits; a
+    // changed idle_dim_secs applies on restart, same as other backend-side config).
+    let idle_after =
+        std::time::Duration::from_secs(crate::config::load_or_create().screensaver.idle_dim_secs);
+    let mut last_input = std::time::Instant::now();
+    let mut idle = false;
+
     loop {
+        // Any button/axis event this tick (post-epsilon) counts as screensaver activity.
+        let mut saw_input = false;
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
             match &event {
                 gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) => {
                     guide_down = Some(std::time::Instant::now());
+                    saw_input = true; // swallowed below, but it's still user activity
                     continue; // swallow; acted on at threshold (close) or release (switch)
                 }
                 gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
+                    saw_input = true;
                     // None here means the hold already fired (or a stray release) — ignore.
                     if guide_down.take().is_some() {
                         // Short press opens/closes the deck switcher (iOS-style app cards);
@@ -90,6 +105,17 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     continue;
                 }
                 last_axis.insert(key, *v);
+            }
+            // Real user input (buttons, above-epsilon axis motion) resets the idle clock;
+            // Connected/Disconnected/other are not someone touching the pad.
+            if matches!(
+                &event,
+                gilrs::EventType::ButtonPressed(..)
+                    | gilrs::EventType::ButtonReleased(..)
+                    | gilrs::EventType::ButtonChanged(..)
+                    | gilrs::EventType::AxisChanged(..)
+            ) {
+                saw_input = true;
             }
             let (kind, code, value) = match event {
                 gilrs::EventType::ButtonPressed(b, _) => {
@@ -139,6 +165,28 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         // and releasing anything held if the app vanished mid-press.
         if let Some(np) = navpad.as_mut() {
             np.tick();
+        }
+        // Screensaver transitions, checked after the drain so a wake-up press already in
+        // the queue wins over an idle expiry in the same tick.
+        if saw_input {
+            last_input = std::time::Instant::now();
+            if idle {
+                idle = false;
+                tracing::info!("screensaver: input — active");
+                let _ = handle.emit("active", ());
+            }
+        } else if !idle && last_input.elapsed() >= idle_after {
+            if crate::mpris::any_playing() {
+                // Playback counts as activity (the dim/blank must never trigger mid-movie):
+                // restart the countdown so "idle" fires idle_after AFTER playback stops.
+                // (MPRIS only — a launched game without a media player is not covered here;
+                // the frontend can additionally suppress while an app session is in front.)
+                last_input = std::time::Instant::now();
+            } else {
+                idle = true;
+                tracing::info!("screensaver: no pad input for {idle_after:?} — idle");
+                let _ = handle.emit("idle", ());
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
     }
