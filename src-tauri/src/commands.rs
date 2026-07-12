@@ -315,6 +315,23 @@ fn is_safe_browser_arg(arg: &str) -> bool {
 #[tauri::command]
 pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
     let mut exec = exec;
+    // Per-tile `[launch_overrides]` (config.rs): extra argv is appended BEFORE the BROWSER
+    // token is processed, so override args on a browser tile go through the same URL-only
+    // guard as everything else; env is applied at spawn below.
+    let overrides = id
+        .as_deref()
+        .and_then(|i| config::load_or_create().launch_overrides.get(i).cloned());
+    if let Some(ov) = &overrides {
+        exec.extend(ov.args.iter().cloned());
+        if !ov.args.is_empty() || !ov.env.is_empty() {
+            tracing::info!(
+                "launch_overrides[{}]: +{} arg(s), {} env var(s)",
+                id.as_deref().unwrap_or(""),
+                ov.args.len(),
+                ov.env.len()
+            );
+        }
+    }
     if exec.first().map(|s| s == "BROWSER").unwrap_or(false) {
         // Only URLs may follow the BROWSER token (flag-injection guard — see is_safe_browser_arg).
         for a in &exec[1..] {
@@ -370,6 +387,13 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
         }
         if std::env::var_os("QT_QPA_PLATFORMTHEME").is_none() {
             command.env("QT_QPA_PLATFORMTHEME", "kde");
+        }
+    }
+    // Per-tile env AFTER the session defaults above, so an override can also retarget
+    // XDG_CURRENT_DESKTOP/QT_QPA_PLATFORMTHEME for a stubborn app.
+    if let Some(ov) = &overrides {
+        for (k, v) in &ov.env {
+            command.env(k, v);
         }
     }
     let child = command.spawn().map_err(|e| spawn_error(cmd, &e))?;
