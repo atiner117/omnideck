@@ -326,6 +326,32 @@ pub async fn deck_close(group: u32) -> Result<(), String> {
     if ok { Ok(()) } else { Err("could not close that app".into()) }
 }
 
+/// Resolve `cmd` the way `Command::new` will: a name containing `/` is taken as a path,
+/// anything else is searched in `$PATH`. Returns the resolved path if it names an existing
+/// executable file. This is defense/UX only (a clear "not found" error instead of a raw
+/// spawn failure) — the spawn below still goes through `Command::new` with NO shell.
+fn resolve_argv0(cmd: &str) -> Option<std::path::PathBuf> {
+    resolve_argv0_in(cmd, std::env::var_os("PATH").as_deref())
+}
+
+/// Inner, PATH-injectable form of [`resolve_argv0`] so tests don't mutate process env.
+fn resolve_argv0_in(cmd: &str, path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+    fn is_executable(p: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        // metadata() follows symlinks, matching what exec() will do.
+        p.metadata()
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    if cmd.contains('/') {
+        let p = std::path::PathBuf::from(cmd);
+        return is_executable(&p).then_some(p);
+    }
+    std::env::split_paths(path?)
+        .map(|dir| dir.join(cmd))
+        .find(|candidate| is_executable(candidate))
+}
+
 /// True if `arg` is safe to pass to a browser after the BROWSER token: an http(s) URL, or
 /// our `--app=<http(s) URL>` PWA form. Rejects flags so a crafted `search_provider` or a
 /// hand-edited config can't inject e.g. Chromium's `--renderer-cmd-prefix` (arbitrary exec).
@@ -394,6 +420,13 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
         }
     }
     let (cmd, args) = exec.split_first().ok_or("empty command")?;
+    // Pre-flight argv[0]: custom-launcher input arrives as a raw argv vector, so a typo'd
+    // binary otherwise dies in spawn() with an opaque "No such file or directory". Resolve
+    // against PATH here and return a clear Err the UI can toast. Check only — the spawn
+    // still uses the original `cmd` (no shell, no rewriting).
+    if resolve_argv0(cmd).is_none() {
+        return Err(format!("command not found: {cmd} (not an executable on PATH)"));
+    }
     use std::os::unix::process::CommandExt;
     let mut command = std::process::Command::new(cmd);
     command
@@ -522,7 +555,49 @@ pub async fn app_icon(url: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_browser_arg;
+    use super::{is_safe_browser_arg, resolve_argv0_in};
+    use std::ffi::OsString;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Unique scratch dir per test (no tempfile dep in this crate).
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("omnideck-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolves_argv0_on_path_and_rejects_missing() {
+        let dir = scratch("resolve");
+        // An executable file...
+        let exe = dir.join("fakelauncher");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // ...and a non-executable one in the same dir.
+        let plain = dir.join("notexec");
+        std::fs::write(&plain, "data").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let path = OsString::from(dir.as_os_str());
+        // Bare name resolves through the supplied PATH.
+        assert_eq!(resolve_argv0_in("fakelauncher", Some(&path)), Some(exe.clone()));
+        // Typo'd / absent binary -> None (launch_command turns this into a clear Err).
+        assert_eq!(resolve_argv0_in("fakelaunchr", Some(&path)), None);
+        // Present but not executable -> None.
+        assert_eq!(resolve_argv0_in("notexec", Some(&path)), None);
+        // No PATH at all -> None for bare names.
+        assert_eq!(resolve_argv0_in("fakelauncher", None), None);
+
+        // Names with '/' bypass PATH: taken as a path, checked directly.
+        let abs = exe.to_string_lossy().into_owned();
+        assert_eq!(resolve_argv0_in(&abs, None), Some(exe));
+        assert_eq!(resolve_argv0_in("/definitely/not/a/real/binary", Some(&path)), None);
+        // A directory is not an executable file.
+        assert_eq!(resolve_argv0_in(&dir.to_string_lossy(), None), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn rejects_unsafe_browser_args() {
