@@ -1,0 +1,21 @@
+/*
+ * Design tokens (NOTES-REVIEW-DEEP-2026-07-11 #16).
+ * Surface/text scale derived from the previously hardcoded palette.
+ * Runtime-configurable props (--accent, --scale, --bg-blur, --bg-bright)
+ * are intentionally NOT defined here — they are set inline on <main>.
+ */
+:root {
+  /* Surfaces (darkest → lightest) */
+  --bg: #05070b; /* page background */
+  --surface: #0d1117; /* base panels */
+  --surface-2: #121826; /* modal / dialog panels */
+  --surface-3: #1b2540; /* raised controls, focused rows, buttons */
+
+  /* Lines */
+  --border: #2c3a5c;
+
+  /* Text (dimmest → brightest) */
+  --text-muted: #9fb0c8;
+  --text: #cdd7e6;
+  --text-bright: #eef2f8;
+}
