@@ -84,19 +84,30 @@ fn tier_info(t: &Tier) -> String {
     format!("generated for: display {disp} | cpu threads {} | gpu {}{audio}", t.cpu_threads, t.gpu)
 }
 
-/// mpv built with the VapourSynth filter? Cached for the process lifetime — this shells
-/// out to `mpv --no-config --vf=help` once.
+/// How long a NEGATIVE VapourSynth probe stays cached before we ask mpv again.
+const VS_RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// mpv built with the VapourSynth filter? Shells out to `mpv --no-config --vf=help`.
+/// `true` is cached for the process lifetime (a built-in filter doesn't vanish), but
+/// `false` is only cached for VS_RECHECK: OmniDeck is an always-on launcher, and a
+/// forever-negative cache meant installing a VapourSynth-enabled mpv mid-run left
+/// interpolation silently off until a restart — possibly days later. The re-probe is
+/// gated on the timestamp, so this still never forks mpv on every call.
 pub fn vapoursynth_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let out = std::process::Command::new("mpv")
-            .args(["--no-config", "--vf=help"])
-            .output();
-        match out {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).contains("vapoursynth"),
-            Err(_) => false,
+    static PROBE: std::sync::Mutex<Option<(bool, std::time::Instant)>> = std::sync::Mutex::new(None);
+    let mut cached = crate::sync::lock_or_recover(&PROBE, "media_profiles.PROBE");
+    if let Some((available, probed_at)) = *cached {
+        if available || probed_at.elapsed() < VS_RECHECK {
+            return available;
         }
-    })
+    }
+    let out = std::process::Command::new("mpv")
+        .args(["--no-config", "--vf=help"])
+        .output();
+    let available =
+        matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).contains("vapoursynth"));
+    *cached = Some((available, std::time::Instant::now()));
+    available
 }
 
 const TEMPLATES: &[(&str, &str)] = &[
