@@ -13,6 +13,7 @@
   import SearchModal from "$lib/SearchModal.svelte";
   import DeckSwitcher from "$lib/DeckSwitcher.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
+  import LauncherForm from "$lib/LauncherForm.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
   import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
@@ -510,7 +511,7 @@
   }
   function doAction(key: string) {
     holdStop(); // a held D-pad press that opens this modal must not keep auto-repeating behind it
-    if (key === "addcustom") { formOpen = true; fName = ""; fExec = ""; fIcon = "🚀"; fCat = "apps"; }
+    if (key === "addcustom") formOpen = true; // LauncherForm owns its drafts; mounting resets them
   }
   // --- numeric settings: also typeable via a real <input> while editing ---
   const NUM_META: Record<string, { get: () => number; lo: number; hi: number; step: number; int?: boolean }> = {
@@ -726,11 +727,7 @@
   let powerOpen = $state(false);
   let powerFocus = $state(0);
   let confirmAct = $state<{ key: string; label: string } | null>(null);
-  let formOpen = $state(false);
-  let fName = $state("");
-  let fExec = $state("");
-  let fIcon = $state("🚀");
-  let fCat = $state("apps");
+  let formOpen = $state(false); // custom-launcher form ($lib/LauncherForm.svelte owns the fields)
   function openPower() { holdStop(); powerOpen = true; powerFocus = 0; }
   function powerMove(d: number) { powerFocus = clamp(powerFocus + d, 0, POWER.length - 1); }
   function powerActivate() {
@@ -746,26 +743,13 @@
     api.powerAction(confirmAct.key).catch((e) => reportError("Power action failed", e));
     confirmAct = null;
   }
-  function addCustom() {
-    const name = fName.trim();
-    const cmd = fExec.trim();
-    if (!cfg || !name || !cmd) { formOpen = false; return; }
-    // Slugify, trimming leading/trailing dashes so "My App!" and "My App?" don't both collapse
-    // to "custom-my-app-"; reject a name with no usable characters.
-    const base = "custom-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-    if (base === "custom-") { reportError("Add a name with at least one letter or number", null); return; }
-    // De-dup with a numeric suffix instead of silently overwriting an existing same-slug launcher.
-    const collided = apps.some((a) => a.id === base);
-    let id = base; for (let n = 2; apps.some((a) => a.id === id); n++) id = `${base}-${n}`;
-    // A bare URL (e.g. a SearXNG instance) is launched as a browser app so it opens in the
-    // browser AND gets its site favicon; anything else is run as a normal argv command.
-    const isUrl = /^https?:\/\//i.test(cmd);
-    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : cmd.split(/\s+/);
-    const app = { id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat };
+  // LauncherForm hands back the built App; the page owns persistence and the collision toast.
+  function addLauncher(app: App, collided: boolean) {
+    if (!cfg) { formOpen = false; return; }
     const next = [...apps, app];
     cfg = { ...cfg, apps: next };
     api.saveApps(next).catch((e) => reportError("Couldn't save apps", e));
-    if (collided) { status = `Added "${name}" (a similar name already existed)`; later(() => (status = ""), 3000); }
+    if (collided) { status = `Added "${app.name}" (a similar name already existed)`; later(() => (status = ""), 3000); }
     formOpen = false;
   }
 
@@ -1357,25 +1341,7 @@
   {/if}
 
   {#if formOpen}
-    <Modal labelledby="dlg-form" backdropLabel="Close" onclose={() => (formOpen = false)}>
-      <h2 id="dlg-form">Add custom launcher</h2>
-      <div class="frow"><label for="f-name">Name</label><input id="f-name" bind:value={fName} placeholder="My App" /></div>
-      <div class="frow"><label for="f-exec">Command</label><input id="f-exec" bind:value={fExec} placeholder="/usr/bin/foo --flag" /></div>
-      <div class="frow"><label for="f-icon">Icon</label><input id="f-icon" bind:value={fIcon} placeholder="🚀" /></div>
-      <div class="frow"><label for="f-cat">Category</label>
-        <select id="f-cat" bind:value={fCat}>
-          <option value="games">Games</option>
-          <option value="video">Movies &amp; TV</option>
-          <option value="music">Music</option>
-          <option value="apps">Apps</option>
-        </select>
-      </div>
-      <div class="confirm-btns">
-        <button class="cbtn" onclick={() => (formOpen = false)}>Cancel</button>
-        <button class="cbtn danger" onclick={addCustom}>Add</button>
-      </div>
-      <p class="phint">Command is split on spaces. Use the full path if it isn't on PATH. Esc to close.</p>
-    </Modal>
+    <LauncherForm {apps} onadd={addLauncher} onerror={reportError} onclose={() => (formOpen = false)} />
   {/if}
 
   {#if wizardActive && cfg}
@@ -1478,12 +1444,12 @@
   .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
   /* Suppress the default focus ring on elements that already show focus another way (inputs'
      accent border, the in-app .focused highlight used by controller/mouse nav)... */
-  .numedit:focus, .textedit:focus, .cbtn:focus,
+  .numedit:focus, .textedit:focus,
   .badge:focus, .fpsbtn:focus,
   .xcat:focus, .xitem:focus { outline: none; }
   /* ...but show a clear accent ring for keyboard users (:focus-visible only).
-     (.crow/.oskkey/.sortbtn rules live with the modal vocabulary in Modal.svelte.) */
-  .numedit:focus-visible, .textedit:focus-visible, .cbtn:focus-visible,
+     (.crow/.oskkey/.sortbtn/.cbtn rules live with the modal vocabulary in Modal.svelte.) */
+  .numedit:focus-visible, .textedit:focus-visible,
   .badge:focus-visible, .fpsbtn:focus-visible,
   .xcat:focus-visible, .xitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
@@ -1516,14 +1482,9 @@
   .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
   .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
   .infogrid dd { margin: 0; color: #dde5f0; font-size: clamp(12px, 1.3vw, 15px); word-break: break-word; }
-  .confirm-btns { display: flex; gap: 12px; justify-content: flex-end; margin: 14px 0 4px; }
-  .cbtn { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
-  .cbtn:hover { border-color: var(--accent); }
-  .cbtn.danger { background: var(--accent); color: #04121f; border-color: transparent; }
-  .frow { display: flex; align-items: center; gap: 14px; margin: 8px 0; }
-  .frow label { width: 96px; flex: 0 0 auto; color: #9fb0c8; font-weight: 600; font-size: clamp(13px, 1.3vw, 15px); }
-  .frow input, .frow select { flex: 1; background: #0c1320; border: 1px solid #2c3a5c; color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
-  .frow input:focus, .frow select:focus { outline: none; border-color: var(--accent); }
+  /* .confirm-btns / .cbtn moved to the shared modal vocabulary in $lib/Modal.svelte
+     (the info + confirm dialogs here and LauncherForm all draw from it); .frow lives
+     in $lib/LauncherForm.svelte. */
 
   /* wizard styles live in $lib/Wizard.svelte; .wlead stays — the confirm modal uses it too */
   .wlead { margin: 0; color: #aab6c9; font-size: clamp(15px, 1.7vw, 21px); max-width: 34em; line-height: 1.5; }
