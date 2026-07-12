@@ -35,6 +35,7 @@ mod steamgriddb;
 mod switcher;
 mod sync;
 mod testhook;
+mod update;
 mod watchdog;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -101,7 +102,8 @@ pub fn run() {
             gamepad::notify_activity,
             pin::set_pin,
             pin::verify_pin,
-            pin::set_locked_categories
+            pin::set_locked_categories,
+            commands::check_update
         ])
         .setup(|app| {
             let handle = app.handle().clone();
