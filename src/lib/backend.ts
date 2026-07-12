@@ -36,7 +36,9 @@ export const gridArt = (appid: string) => invoke<string | null>("grid_art", { ap
 export const appIcon = (url: string) => invoke<string | null>("app_icon", { url });
 export const mediaNowPlaying = () => invoke<MediaInfo | null>("media_now_playing");
 export const mediaControl = (action: string) => invoke<void>("media_control", { action });
-// `id` correlates a Now Playing entry with its exit event (the frontend passes the tile id).
+// `id` correlates a Now Playing entry with its exit event. The frontend passes a per-launch
+// token (`tileId::N`, unique per launch) so a stale exit can't drop a quick relaunch's card;
+// the backend treats it as opaque (echoed in `app-exited` and on LiveApp.id).
 export const launchGame = (appid: string, name: string, id?: string) =>
   invoke<void>("launch_game", { appid, name, id });
 export const launchCommand = (exec: string[], name: string, id?: string) =>

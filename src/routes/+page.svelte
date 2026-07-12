@@ -555,9 +555,11 @@
   let deckOpen = $state(false);
   let deckApps = $state<LiveApp[]>([]);
   let deckFocus = $state(0);
-  // An app's launcher icon/emoji for its card, matched by launch id then name (games show 🎮).
+  // An app's launcher icon/emoji for its card, matched by launch token's tile id then name
+  // (games show 🎮). LiveApp.id carries the per-launch token (see launchToken below).
   function deckIcon(a: LiveApp): string {
-    const app = apps.find((x) => x.id === a.id) ?? apps.find((x) => x.name === a.name);
+    const id = a.id;
+    const app = (id ? apps.find((x) => x.id === tokenTileId(id)) : undefined) ?? apps.find((x) => x.name === a.name);
     return app?.icon ?? "🎮";
   }
   async function openDeck() {
@@ -662,15 +664,23 @@
     }
   });
 
+  // Monotonic launch token: the tile id alone races — launch, back out, relaunch quickly and
+  // the FIRST instance's app-exited (keyed by tile id) would drop the SECOND instance's card.
+  // Each launch gets a unique `tileId::N`; the backend echoes it back opaquely (app-exited
+  // payload, LiveApp.id), so an exit event only ever removes the exact instance it belongs to.
+  let launchSeq = 0;
+  const launchToken = (tileId: string) => `${tileId}::${++launchSeq}`;
+  const tokenTileId = (token: string) => token.split("::")[0]; // tile-id part (deck icon match, relaunch dedupe)
   async function launchTile(t: Tile) {
     if (t.kind === "app" && t.app.id === "media-library") { openMedia(); return; }
     const name = t.kind === "game" ? t.game.name : t.app.name;
-    const id = t.id; // tile id doubles as the launch / now-playing correlation key
+    const token = launchToken(t.id); // per-launch now-playing / exit correlation key
     try {
       const category = t.kind === "game" ? "games" : catOf(t.app);
-      if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, id); }
-      else { status = `▶ ${name}…`; await api.launchCommand(t.app.exec, name, id); recordRecentApp(t.app.id); }
-      nowList = [{ id, kind: t.kind, name, category }, ...nowList.filter((e) => e.id !== id)].slice(0, 3);
+      if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, token); }
+      else { status = `▶ ${name}…`; await api.launchCommand(t.app.exec, name, token); recordRecentApp(t.app.id); }
+      // a relaunch replaces the same tile's older card (match by tile id, key by the new token)
+      nowList = [{ id: token, kind: t.kind, name, category }, ...nowList.filter((e) => tokenTileId(e.id) !== t.id)].slice(0, 3);
     } catch (e) { status = `launch error: ${e}`; return; }
     later(() => (status = ""), 3500);
   }
@@ -1016,7 +1026,8 @@
 
     const off: Array<() => void> = [];
     // We add to nowList when we launch (we know game vs app there); the backend tells us when
-    // the process/game exits — correlate by the launch id (the tile id), not the display name.
+    // the process/game exits — correlate by the exact launch token (see launchToken), so a
+    // stale exit from a previous instance can't drop a quick relaunch's card.
     api.onAppExited((e) => {
       const id = String(e.payload ?? "");
       nowList = nowList.filter((x) => x.id !== id);
