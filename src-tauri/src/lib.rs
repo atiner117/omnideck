@@ -32,6 +32,7 @@ mod steamgriddb;
 mod switcher;
 mod sync;
 mod testhook;
+mod update;
 mod watchdog;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -89,7 +90,8 @@ pub fn run() {
             commands::deck_open,
             commands::deck_list,
             commands::deck_show,
-            commands::deck_close
+            commands::deck_close,
+            commands::check_update
         ])
         .setup(|app| {
             let handle = app.handle().clone();

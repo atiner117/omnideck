@@ -36,6 +36,7 @@ pub struct Settings {
     pub live_wallpaper: String, // animated background: "off" | "waves" (PSP-style ribbon)
     pub ambient: bool, // synthesized ambient background music (subtle, off by default)
     pub ambient_volume: f64, // ambient music volume multiplier (0.0–1.0)
+    pub check_updates: bool, // boot-time release check (update.rs); manual check always works
 }
 
 impl Default for Settings {
@@ -67,6 +68,7 @@ impl Default for Settings {
             live_wallpaper: "waves".into(),
             ambient: false,
             ambient_volume: 0.35,
+            check_updates: true,
         }
     }
 }
