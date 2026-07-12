@@ -14,10 +14,11 @@
   import DeckSwitcher from "$lib/DeckSwitcher.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
   import LauncherForm from "$lib/LauncherForm.svelte";
-  import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
+  import { initSfx, sfxMove, sfxEnter } from "$lib/sfx";
   import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
   import type { Tile } from "$lib/tiles";
+  import { SETTING_DEFS, ACCENTS, normalizeNum, type SettingDef, type CycleDef, type NumDef, type TextDef } from "$lib/settings-defs";
 
   const CATEGORIES = [
     { id: "dashboard", label: "Home", icon: "home" },
@@ -27,53 +28,7 @@
     { id: "apps", label: "Apps", icon: "apps" },
     { id: "settings", label: "Settings", icon: "settings" },
   ] as const;
-  const ACCENTS = ["#4cc2ff", "#b14cff", "#6ee7a8", "#ff8a3d", "#ff5d6c", "#ffd166"];
-  const SEARCH_MODES = [
-    { mode: "duckduckgo", label: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
-    { mode: "google", label: "Google", url: "https://www.google.com/search?q=" },
-    { mode: "brave", label: "Brave", url: "https://search.brave.com/search?q=" },
-    { mode: "bing", label: "Bing", url: "https://www.bing.com/search?q=" },
-    { mode: "searxng", label: "SearXNG", url: "" }, // self-hosted: user supplies the URL
-    { mode: "custom", label: "Custom", url: "" },
-  ];
   const PRESET: Record<string, number> = { small: 1.3, medium: 1.6, large: 1.9, huge: 2.3 };
-  const SIZE_MODES = ["small", "medium", "large", "huge", "custom"];
-  const BG_DEFAULTS = ["color", "image"];
-  const BG_COLORS = ["#05070b", "#0d1117", "#161b26", "#1a1a2e", "#000000", "#14110a"];
-  const RECENTS_MODES = ["both", "games", "apps"];
-  // Section headers are rows too (type "header"): the settings column positions rows by
-  // focus × --ih, so anything between rows must occupy exactly one row slot. Navigation
-  // skips them (moveItem) and entry lands past them (resetFocus).
-  const ALL_SETTINGS = [
-    { key: "hdr-look", label: "Appearance", type: "header" },
-    { key: "size", label: "Size", type: "cycle" },
-    { key: "custom", label: "Custom size", type: "num" },
-    { key: "accent", label: "Accent", type: "cycle" },
-    { key: "hdr-bg", label: "Background", type: "header" },
-    { key: "livewp", label: "Live wallpaper", type: "cycle" },
-    { key: "bgdefault", label: "Default background", type: "cycle" },
-    { key: "bgcolor", label: "Background color", type: "cycle" },
-    { key: "bgimage", label: "Background image", type: "text" },
-    { key: "gamebg", label: "Game backgrounds", type: "cycle" },
-    { key: "appbg", label: "App backgrounds", type: "cycle" },
-    { key: "blur", label: "Background blur", type: "num" },
-    { key: "bright", label: "Background brightness", type: "num" },
-    { key: "hdr-home", label: "Home & Library", type: "header" },
-    { key: "recents", label: "Home recents", type: "num" },
-    { key: "recents_show", label: "Recents show", type: "cycle" },
-    { key: "sort", label: "Sort", type: "cycle" },
-    { key: "runtimes", label: "Show runtimes", type: "cycle" },
-    { key: "hdr-sound", label: "Sound", type: "header" },
-    { key: "sound", label: "Navigation sounds", type: "cycle" },
-    { key: "soundvol", label: "Sound volume", type: "num" },
-    { key: "ambient", label: "Ambient music", type: "cycle" },
-    { key: "ambientvol", label: "Ambient volume", type: "num" },
-    { key: "hdr-search", label: "Search", type: "header" },
-    { key: "search", label: "Search provider", type: "cycle" },
-    { key: "searchurl", label: "Search URL", type: "text" },
-    { key: "hdr-launchers", label: "Launchers", type: "header" },
-    { key: "addcustom", label: "Add custom launcher", type: "action" },
-  ];
   const POWER = [
     { key: "exit", label: "Exit OmniDeck", icon: "exit" },
     { key: "suspend", label: "Suspend", icon: "moon" },
@@ -81,31 +36,11 @@
     { key: "poweroff", label: "Shut down", icon: "power" },
   ] as const;
   const CATORDER: Record<string, number> = { games: 0, video: 1, music: 2, apps: 3 };
-  const round2 = (v: number) => Math.round(v * 100) / 100;
-  const cap1 = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-  function settingValue(key: string): string {
-    const s = cfg?.settings; if (!s) return "";
-    if (key === "size") return cap1(s.ui_scale ?? "medium");
-    if (key === "custom") return `${s.ui_scale_custom ?? 1.6}×`;
-    if (key === "blur") return `${s.bg_blur ?? 0}px`;
-    if (key === "bright") return `${Math.round((s.bg_brightness ?? 0.82) * 100)}%`;
-    if (key === "recents") { const n = s.dashboard_recents ?? 8; return n ? `${n}` : "off"; }
-    if (key === "recents_show") return cap1(s.recents_show ?? "both");
-    if (key === "bgdefault") return { color: "Solid color", image: "Custom image" }[s.background_default as string] ?? "Solid color";
-    if (key === "bgcolor") return s.background_color ?? "#05070b";
-    if (key === "bgimage") return s.background_image ? (s.background_image.split("/").pop() ?? "(none)") : "(none)";
-    if (key === "gamebg") return s.game_backgrounds ? "on" : "off";
-    if (key === "appbg") return s.app_backgrounds ? "on" : "off";
-    if (key === "sort") return s.sort;
-    if (key === "runtimes") return s.show_runtimes ? "on" : "off";
-    if (key === "sound") return soundLabel();
-    if (key === "soundvol") return `${Math.round((s.sound_volume ?? 0.6) * 100)}%`;
-    if (key === "livewp") return (s.live_wallpaper ?? "waves") === "waves" ? "Waves" : "Off";
-    if (key === "ambient") return s.ambient ? "on" : "off";
-    if (key === "ambientvol") return `${Math.round((s.ambient_volume ?? 0.35) * 100)}%`;
-    if (key === "search") return SEARCH_MODES.find((m) => m.mode === (s.search_mode ?? "duckduckgo"))?.label ?? "DuckDuckGo";
-    if (key === "searchurl") return s.search_provider || "(not set)";
-    return "";
+  // Display value for a settings row — headers/actions have none, everything else reads its def.
+  function settingValue(d: SettingDef): string {
+    const s = cfg?.settings;
+    if (!s || d.type === "header" || d.type === "action") return "";
+    return d.value(s);
   }
 
   let cap = $state<Capability | null>(null);
@@ -343,18 +278,10 @@
   });
   // hide rows that only apply to a current selection (custom size, bg color/image, custom volume)
   let visibleSettings = $derived(
-    ALL_SETTINGS.filter((s) => {
-      if (s.type === "header") return true; // every section keeps ≥1 unconditional row
+    SETTING_DEFS.filter((d) => {
+      if (d.type === "header") return true; // every section keeps ≥1 unconditional row
       const set = cfg?.settings; if (!set) return true;
-      if (s.key === "custom") return set.ui_scale === "custom";
-      if (s.key === "soundvol") return soundLabel() === "Custom";
-      if (s.key === "ambientvol") return set.ambient;
-      if (s.key === "bgcolor") return (set.background_default ?? "color") === "color";
-      if (s.key === "bgimage") return set.background_default === "image";
-      if (s.key === "searchurl") return set.search_mode === "searxng" || set.search_mode === "custom";
-      // blur/brightness only matter when something is overlaid (game art or app wash)
-      if (s.key === "blur" || s.key === "bright") return (set.game_backgrounds ?? true) || (set.app_backgrounds ?? true) || set.background_default === "image";
-      return true;
+      return d.visible?.(set) ?? true;
     }),
   );
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
@@ -404,18 +331,6 @@
 
   // ---- synthesized navigation sounds (moved to $lib/sfx — reads the live settings) ----
   initSfx(() => ({ on: !!cfg?.settings?.sound, volume: cfg?.settings?.sound_volume ?? 0.6 }));
-  // Volume presets (mirrors the Size presets): Off / Low / Med / High / Custom.
-  const SOUND_PRESETS = [
-    { label: "Off", on: false, vol: 0 },
-    { label: "Low", on: true, vol: 0.3 },
-    { label: "Medium", on: true, vol: 0.6 },
-    { label: "High", on: true, vol: 1.0 },
-  ];
-  function soundLabel(): string {
-    const s = cfg?.settings; if (!s) return "Medium";
-    if (!s.sound) return "Off";
-    return SOUND_PRESETS.find((p) => p.on && Math.abs(p.vol - (s.sound_volume ?? 0.6)) < 0.001)?.label ?? "Custom";
-  }
 
   function tileName(t: Tile) { return t.kind === "app" ? t.app.name : t.game.name; }
   function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
@@ -496,56 +411,25 @@
     Object.assign(cfg.settings, patch);
     api.saveSettings($state.snapshot(cfg.settings)).catch((e) => reportError("Couldn't save settings", e));
   }
-  function adjustSetting(key: string, dir: number) {
+  // D-pad ◀▶ nudge on a numeric row: step by the row's meta, then its side effect (volume blip).
+  function adjustSetting(d: NumDef, dir: number) {
     if (!cfg) return;
-    const s = cfg.settings;
-    const patch: Partial<Settings> = {};
-    if (key === "recents") patch.dashboard_recents = clamp((s.dashboard_recents ?? 8) + dir, 0, 20);
-    else if (key === "custom") patch.ui_scale_custom = round2(clamp((s.ui_scale_custom ?? 1.6) + dir * 0.05, 0.8, 3.5));
-    else if (key === "blur") patch.bg_blur = clamp((s.bg_blur ?? 0) + dir * 2, 0, 24);
-    else if (key === "bright") patch.bg_brightness = round2(clamp((s.bg_brightness ?? 0.82) + dir * 0.05, 0.3, 1.0));
-    else if (key === "soundvol") { const v = round2(clamp((s.sound_volume ?? 0.6) + dir * 0.05, 0, 1)); patch.sound_volume = v; patch.sound = v > 0; }
-    else if (key === "ambientvol") patch.ambient_volume = round2(clamp((s.ambient_volume ?? 0.35) + dir * 0.05, 0, 1));
-    patchSettings(patch);
-    if (key === "soundvol") blip(620, 0.06, 0.42, "sine", true);
+    setNum(d, d.get(cfg.settings) + dir * (d.adjustStep ?? d.step));
+    d.adjusted?.();
   }
   function doAction(key: string) {
     holdStop(); // a held D-pad press that opens this modal must not keep auto-repeating behind it
     if (key === "addcustom") formOpen = true; // LauncherForm owns its drafts; mounting resets them
   }
-  // --- numeric settings: also typeable via a real <input> while editing ---
-  const NUM_META: Record<string, { get: () => number; lo: number; hi: number; step: number; int?: boolean }> = {
-    recents: { get: () => cfg?.settings?.dashboard_recents ?? 8, lo: 0, hi: 20, step: 1, int: true },
-    custom: { get: () => cfg?.settings?.ui_scale_custom ?? 1.6, lo: 0.8, hi: 3.5, step: 0.05 },
-    blur: { get: () => cfg?.settings?.bg_blur ?? 0, lo: 0, hi: 24, step: 1, int: true },
-    bright: { get: () => cfg?.settings?.bg_brightness ?? 0.82, lo: 0.3, hi: 1.0, step: 0.05 },
-    soundvol: { get: () => cfg?.settings?.sound_volume ?? 0.6, lo: 0, hi: 1, step: 0.05 },
-    ambientvol: { get: () => cfg?.settings?.ambient_volume ?? 0.35, lo: 0, hi: 1, step: 0.05 },
-  };
-  function setNum(key: string, raw: number) {
-    const m = NUM_META[key]; if (!cfg || !m || Number.isNaN(raw)) return;
-    let v = clamp(raw, m.lo, m.hi); if (m.int) v = Math.round(v); else v = round2(v);
-    const patch: Partial<Settings> = {};
-    if (key === "recents") patch.dashboard_recents = v;
-    else if (key === "custom") patch.ui_scale_custom = v;
-    else if (key === "blur") patch.bg_blur = v;
-    else if (key === "bright") patch.bg_brightness = v;
-    else if (key === "soundvol") { patch.sound_volume = v; patch.sound = v > 0; }
-    else if (key === "ambientvol") patch.ambient_volume = v;
-    patchSettings(patch);
+  // numeric settings: also typeable via a real <input> while editing
+  function setNum(d: NumDef, raw: number) {
+    if (!cfg || Number.isNaN(raw)) return;
+    patchSettings(d.set(normalizeNum(d, raw)));
   }
-  // text settings (currently just the custom background image path)
-  function setText(key: string, raw: string) {
+  // text settings (background image path, search URL)
+  function setText(d: TextDef, raw: string) {
     if (!cfg) return;
-    const patch: Partial<Settings> = {};
-    if (key === "bgimage") patch.background_image = raw.trim();
-    else if (key === "searchurl") patch.search_provider = raw.trim();
-    patchSettings(patch);
-  }
-  function textValue(key: string): string {
-    if (key === "bgimage") return cfg?.settings?.background_image ?? "";
-    if (key === "searchurl") return cfg?.settings?.search_provider ?? "";
-    return "";
+    patchSettings(d.set(raw.trim()));
   }
   function onBgColor(e: Event) {
     patchSettings({ background_color: (e.target as HTMLInputElement).value });
@@ -563,17 +447,18 @@
   // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise always
   // switches category (so you can never get trapped in Settings).
   function horiz(dir: number) {
-    if (catId === "settings" && settingsEditing && visibleSettings[focus]?.type === "num") { adjustSetting(visibleSettings[focus].key, dir); return; }
+    const row = visibleSettings[focus];
+    if (catId === "settings" && settingsEditing && row?.type === "num") { adjustSetting(row, dir); return; }
     settingsEditing = false;
     moveCat(dir);
   }
   function activate() {
     if (catId === "settings") {
       const row = visibleSettings[focus];
-      if (row?.type === "header") return; // section label, not a setting
-      if (row?.type === "num" || row?.type === "text") settingsEditing = !settingsEditing; // Enter toggles edit
-      else if (row?.type === "action") doAction(row.key);
-      else if (row) cycleSetting(row.key);
+      if (!row || row.type === "header") return; // section label, not a setting
+      if (row.type === "num" || row.type === "text") settingsEditing = !settingsEditing; // Enter toggles edit
+      else if (row.type === "action") doAction(row.key);
+      else cycleSetting(row);
       return;
     }
     const t = items[focus];
@@ -680,38 +565,19 @@
     const d = new Date(ts * 1000);
     return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
   }
-  function cycleSetting(key: string) {
+  // Advance a cycle row to its next state (the per-row logic lives in the def's `cycle`).
+  function cycleSetting(d: CycleDef) {
     if (!cfg) return;
-    const s = cfg.settings;
-    const patch: Partial<Settings> = {};
-    if (key === "size") { const c = SIZE_MODES.indexOf(s.ui_scale ?? "medium"); patch.ui_scale = SIZE_MODES[((c < 0 ? 1 : c) + 1) % SIZE_MODES.length]; }
-    else if (key === "sort") patch.sort = s.sort === "recent" ? "alpha" : "recent";
-    else if (key === "runtimes") patch.show_runtimes = !s.show_runtimes;
-    else if (key === "sound") {
-      // cycle Off → Low → Medium → High (Custom is reached via the Sound volume row)
-      const cur = soundLabel();
-      const i = SOUND_PRESETS.findIndex((p) => p.label === cur);
-      const next = SOUND_PRESETS[(i < 0 ? 0 : i + 1) % SOUND_PRESETS.length];
-      patch.sound = next.on; patch.sound_volume = next.vol;
-      if (next.on) blip(620, 0.06, 0.42, "sine", true);
-    }
-    else if (key === "livewp") patch.live_wallpaper = (s.live_wallpaper ?? "waves") === "waves" ? "off" : "waves";
-    else if (key === "ambient") patch.ambient = !s.ambient;
-    else if (key === "bgdefault") { const c = BG_DEFAULTS.indexOf(s.background_default ?? "color"); patch.background_default = BG_DEFAULTS[((c < 0 ? 0 : c) + 1) % BG_DEFAULTS.length]; }
-    else if (key === "gamebg") patch.game_backgrounds = !s.game_backgrounds;
-    else if (key === "appbg") patch.app_backgrounds = !s.app_backgrounds;
-    else if (key === "bgcolor") { const c = BG_COLORS.indexOf(s.background_color ?? BG_COLORS[0]); patch.background_color = BG_COLORS[((c < 0 ? -1 : c) + 1) % BG_COLORS.length]; }
-    else if (key === "recents_show") { const c = RECENTS_MODES.indexOf(s.recents_show ?? "both"); patch.recents_show = RECENTS_MODES[((c < 0 ? 0 : c) + 1) % RECENTS_MODES.length]; }
-    else if (key === "accent") { const c = ACCENTS.indexOf(s.accent ?? "#4cc2ff"); patch.accent = ACCENTS[((c < 0 ? 0 : c) + 1) % ACCENTS.length]; }
-    else if (key === "search") {
-      const c = SEARCH_MODES.findIndex((m) => m.mode === (s.search_mode ?? "duckduckgo"));
-      const next = SEARCH_MODES[((c < 0 ? 0 : c) + 1) % SEARCH_MODES.length];
-      patch.search_mode = next.mode;
-      if (next.url) patch.search_provider = next.url; // preset
-      else if (SEARCH_MODES.some((m) => m.url === s.search_provider)) patch.search_provider = ""; // entering searxng/custom → clear for the URL field
-    }
+    const patch = d.cycle(cfg.settings);
     patchSettings(patch);
     if (patch.accent) accent = patch.accent;
+  }
+  // Mouse click on a settings row (headers aren't rendered as buttons, so they never get here).
+  function settingRowClick(d: SettingDef, i: number) {
+    focus = i;
+    if (d.type === "num" || d.type === "text") settingsEditing = !settingsEditing;
+    else if (d.type === "action") doAction(d.key);
+    else if (d.type === "cycle") cycleSetting(d);
   }
 
   function isFav(id: string) { return favorites.includes(id); }
@@ -1173,19 +1039,19 @@
               <div class="xitem xshead" aria-hidden="true"><span class="xthumb settings hollow"></span><span class="xsheadlbl">{s.label}</span></div>
             {:else}
             <button class="xitem" class:focused={i === focus} class:editing={settingsEditing && i === focus && (s.type === "num" || s.type === "text")}
-              onclick={() => { focus = i; if (s.type === "num" || s.type === "text") settingsEditing = !settingsEditing; else if (s.type === "action") doAction(s.key); else cycleSetting(s.key); }}>
+              onclick={() => settingRowClick(s, i)}>
               <span class="xthumb settings"><span class="xemoji">{s.type === "action" ? "+" : "›"}</span></span>
               <span class="xname">{s.label}
                 {#if s.type === "num" && settingsEditing && i === focus}
-                  <input class="numedit" type="number" use:focusSelect value={NUM_META[s.key].get()} step={NUM_META[s.key].step} min={NUM_META[s.key].lo} max={NUM_META[s.key].hi}
-                    onchange={(e) => setNum(s.key, parseFloat((e.target as HTMLInputElement).value))} onclick={(e) => e.stopPropagation()} />
+                  <input class="numedit" type="number" use:focusSelect value={s.get(cfg?.settings)} step={s.step} min={s.lo} max={s.hi}
+                    onchange={(e) => setNum(s, parseFloat((e.target as HTMLInputElement).value))} onclick={(e) => e.stopPropagation()} />
                   <span class="xsub">◀▶ or type · Enter</span>
                 {:else if s.type === "text" && settingsEditing && i === focus}
-                  <input class="textedit" type="text" use:focusSelect value={textValue(s.key)} placeholder="/path/to/image.jpg"
-                    onchange={(e) => setText(s.key, (e.target as HTMLInputElement).value)} onclick={(e) => e.stopPropagation()} />
+                  <input class="textedit" type="text" use:focusSelect value={s.get(cfg?.settings)} placeholder="/path/to/image.jpg"
+                    onchange={(e) => setText(s, (e.target as HTMLInputElement).value)} onclick={(e) => e.stopPropagation()} />
                   <span class="xsub">type a path · Enter</span>
                 {:else}
-                  <span class="xsub">{settingValue(s.key)}{s.type === "num" || s.type === "text" ? "  (Enter)" : ""}</span>
+                  <span class="xsub">{settingValue(s)}{s.type === "num" || s.type === "text" ? "  (Enter)" : ""}</span>
                 {/if}
                 {#if s.key === "accent"}<span class="swatch" style="background:{accent}"></span><input class="cwheel" type="color" value={accent} oninput={onAccentColor} onclick={(e) => e.stopPropagation()} />{/if}
                 {#if s.key === "bgcolor"}<span class="swatch" style="background:{cfg?.settings?.background_color ?? '#05070b'}"></span><input class="cwheel" type="color" value={cfg?.settings?.background_color ?? '#05070b'} oninput={onBgColor} onclick={(e) => e.stopPropagation()} />{/if}
