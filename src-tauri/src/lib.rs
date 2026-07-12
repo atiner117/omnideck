@@ -27,6 +27,7 @@ mod media_profiles;
 mod media_server;
 mod mpris;
 mod navpad;
+mod pin;
 mod session;
 mod steamgriddb;
 mod switcher;
@@ -89,7 +90,9 @@ pub fn run() {
             commands::deck_open,
             commands::deck_list,
             commands::deck_show,
-            commands::deck_close
+            commands::deck_close,
+            pin::set_pin,
+            pin::verify_pin
         ])
         .setup(|app| {
             let handle = app.handle().clone();

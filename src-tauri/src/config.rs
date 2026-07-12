@@ -36,6 +36,9 @@ pub struct Settings {
     pub live_wallpaper: String, // animated background: "off" | "waves" (PSP-style ribbon)
     pub ambient: bool, // synthesized ambient background music (subtle, off by default)
     pub ambient_volume: f64, // ambient music volume multiplier (0.0–1.0)
+    // Parental controls (pin.rs). Deterrence, not access control — see pin.rs header.
+    pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it.
+    pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN
 }
 
 impl Default for Settings {
@@ -67,6 +70,8 @@ impl Default for Settings {
             live_wallpaper: "waves".into(),
             ambient: false,
             ambient_volume: 0.35,
+            pin_hash: String::new(),
+            locked_categories: Vec::new(),
         }
     }
 }
@@ -253,8 +258,21 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
+/// `pin_hash` is deliberately preserved from disk: the only write path for the hash is
+/// `save_pin_hash` (via the `set_pin` command, which verifies the current PIN first) —
+/// a settings payload can neither clear nor replace the PIN.
 pub fn save_settings(settings: Settings) -> Result<(), String> {
-    mutate_and_save(|cfg| cfg.settings = settings)
+    mutate_and_save(|cfg| {
+        let pin_hash = std::mem::take(&mut cfg.settings.pin_hash);
+        cfg.settings = settings;
+        cfg.settings.pin_hash = pin_hash;
+    })
+}
+
+/// Persist a new PIN hash (empty = lock removed). Only pin.rs::set_pin calls this,
+/// after verifying the current PIN.
+pub fn save_pin_hash(pin_hash: String) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.settings.pin_hash = pin_hash)
 }
 
 /// Persist a new apps list (used by the in-app "Add apps" catalog screen).
