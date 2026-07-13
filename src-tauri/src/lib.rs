@@ -10,6 +10,7 @@
 //   asset      — the omnideck:// protocol serving on-disk art
 //   apps, capability, config, http, icons, library, steamgriddb — domain modules
 mod apps;
+mod artwork_cache;
 mod asset;
 mod audio;
 mod background;
@@ -93,6 +94,7 @@ pub fn run() {
             commands::media_sections,
             commands::media_browse,
             commands::media_poster,
+            commands::get_artwork,
             commands::media_play,
             commands::bg_image,
             commands::deck_open,
