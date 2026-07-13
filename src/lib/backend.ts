@@ -15,13 +15,14 @@ import type { GamepadEvent } from "./bindings/GamepadEvent";
 import type { Gpu } from "./bindings/Gpu";
 import type { Library } from "./bindings/Library";
 import type { LibrarySummary } from "./bindings/LibrarySummary";
+import type { LiveApp } from "./bindings/LiveApp";
 import type { MediaInfo } from "./bindings/MediaInfo";
 import type { MediaItem } from "./bindings/MediaItem";
 import type { MediaLibrary } from "./bindings/MediaLibrary";
 import type { MediaSections } from "./bindings/MediaSections";
 import type { Settings } from "./bindings/Settings";
 import type { Tier } from "./bindings/Tier";
-export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
+export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, LiveApp, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
 
 // ---- command wrappers (typed returns; reject on backend Err — callers decide UX) ----
 export const getCapability = () => invoke<Capability>("get_capability");
@@ -54,8 +55,7 @@ export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
 
 // ---- deck switcher (iOS-style app cards — switcher.rs / watchdog.rs) ----
-/** A live launched app the deck shows as a card. */
-export type LiveApp = { group: number; name: string; id: string | null };
+// LiveApp is generated (./bindings/LiveApp) and re-exported above — no hand-written twin.
 /** Open the deck: hides all apps so the overlay shows, returns the live-app cards. */
 export const deckOpen = () => invoke<LiveApp[]>("deck_open");
 /** Re-fetch the live-app cards without changing window state. */
