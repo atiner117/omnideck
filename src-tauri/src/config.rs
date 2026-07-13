@@ -16,6 +16,7 @@ pub struct Settings {
     pub sort: String, // "alpha" | "recent"
     pub show_runtimes: bool,
     pub accent: String, // hex, e.g. "#4cc2ff"
+    pub theme: String, // UI theme: "omnidark" | "oled" | "light" | "high-contrast" | "crt" | "deck"
     pub steamgriddb_key: String, // optional; fills in missing box art
     pub onboarded: bool, // false -> show the first-run wizard
     pub ui_scale: String, // legacy; size is now the smooth ui_scale_custom multiplier
@@ -45,6 +46,7 @@ impl Default for Settings {
             sort: "alpha".into(),
             show_runtimes: false,
             accent: "#4cc2ff".into(),
+            theme: "omnidark".into(),
             steamgriddb_key: String::new(),
             // Default TRUE so an existing config (missing this field) does NOT re-trigger
             // the wizard; a freshly generated config overrides this to false (see defaults()).
@@ -92,6 +94,13 @@ impl Settings {
 
         if !is_hex6(&self.accent) {
             self.accent = "#4cc2ff".into();
+        }
+        // Theme ids mirror src/lib/themes/themes.ts (the CSS defines a [data-theme] block per id).
+        if !matches!(
+            self.theme.as_str(),
+            "omnidark" | "oled" | "light" | "high-contrast" | "crt" | "deck"
+        ) {
+            self.theme = "omnidark".into();
         }
         if !is_hex6(&self.background_color) {
             self.background_color = "#05070b".into();
@@ -311,6 +320,7 @@ mod tests {
     fn normalize_sanitizes_bad_strings() {
         let mut s = Settings {
             accent: "red; background:url(http://evil)".into(), // CSS-injection attempt
+            theme: "haxor { evil }".into(),
             background_color: "#zzz".into(),
             search_provider: "javascript:alert(1)".into(), // non-http scheme
             sort: "bogus".into(),
@@ -321,6 +331,7 @@ mod tests {
         };
         s.normalize();
         assert_eq!(s.accent, "#4cc2ff");
+        assert_eq!(s.theme, "omnidark");
         assert_eq!(s.background_color, "#05070b");
         assert_eq!(s.search_provider, ""); // cleared -> UI falls back to DuckDuckGo
         assert_eq!(s.sort, "alpha");
@@ -333,6 +344,7 @@ mod tests {
     fn normalize_keeps_valid_strings() {
         let mut s = Settings {
             accent: "#AABBCC".into(),
+            theme: "high-contrast".into(),
             background_color: "#000000".into(),
             search_provider: "https://searx.example/search?q=".into(),
             sort: "recent".into(),
@@ -341,6 +353,7 @@ mod tests {
         };
         s.normalize();
         assert_eq!(s.accent, "#AABBCC");
+        assert_eq!(s.theme, "high-contrast");
         assert_eq!(s.background_color, "#000000");
         assert_eq!(s.search_provider, "https://searx.example/search?q=");
         assert_eq!(s.sort, "recent");

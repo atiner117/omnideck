@@ -1,0 +1,171 @@
+/*
+ * Themes (NOTES-FEATURE-BACKLOG-2026-07-12 Lane A).
+ *
+ * Each block overrides the design tokens from src/lib/tokens.css for one
+ * `data-theme` id (stamped on <html> by applyTheme in themes.ts). OmniDark is the
+ * token defaults themselves, so it has no block. The runtime props --accent /
+ * --scale / --bg-blur / --bg-bright stay user-driven and untouched.
+ *
+ * Reach: everything that reads the tokens follows the theme automatically
+ * (Modal, NowPlaying, Wizard, and the page background via var(--bg)).
+ * +page.svelte still hardcodes its dark palette pending its deferred token
+ * conversion (review #16) — the Light section at the bottom shims the page's
+ * main text/surface classes at higher specificity until that lands.
+ */
+
+/* The page body always follows the theme background (same value as today for OmniDark). */
+:root[data-theme] body {
+  background: var(--bg);
+}
+
+/* ---- OLED Black — true #000 surfaces for OLED TVs; borders carry the separation ---- */
+:root[data-theme="oled"] {
+  --bg: #000000;
+  --surface: #000000;
+  --surface-2: #070a10;
+  --surface-3: #10182a;
+  --border: #263450;
+  /* text scale unchanged — the stock values already sit on near-black */
+}
+
+/* ---- Light ---- */
+:root[data-theme="light"] {
+  --bg: #eef1f6;
+  --surface: #f7f9fc;
+  --surface-2: #ffffff;
+  --surface-3: #dde4ee;
+  --border: #aebccf;
+  --text-muted: #5b6b82;
+  --text: #2a3547;
+  --text-bright: #0c1320;
+}
+
+/* ---- High Contrast — pure black/white, hard borders (accessibility) ---- */
+:root[data-theme="high-contrast"] {
+  --bg: #000000;
+  --surface: #000000;
+  --surface-2: #0a0a0a;
+  --surface-3: #1f1f1f;
+  --border: #f2f2f2;
+  --text-muted: #d9d9d9;
+  --text: #ffffff;
+  --text-bright: #ffffff;
+}
+
+/* ---- Retro CRT — phosphor-green darks with static scanlines ---- */
+:root[data-theme="crt"] {
+  --bg: #020803;
+  --surface: #04100a;
+  --surface-2: #06170d;
+  --surface-3: #0b2617;
+  --border: #1f5c36;
+  --text-muted: #55b374;
+  --text: #8ce6a8;
+  --text-bright: #d2ffdf;
+}
+/* Static scanlines: fixed, non-interactive, unanimated (nothing for
+   prefers-reduced-motion to object to), subtle enough to read through. */
+:root[data-theme="crt"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.16) 0px,
+    rgba(0, 0, 0, 0.16) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* ---- Deck — Steam-Deck-ish blue/grey ---- */
+:root[data-theme="deck"] {
+  --bg: #0e141b;
+  --surface: #16202d;
+  --surface-2: #1a2634;
+  --surface-3: #2a4059;
+  --border: #3d5875;
+  --text-muted: #8fa3b8;
+  --text: #dce1e8;
+  --text-bright: #ffffff;
+}
+
+/*
+ * ---- Light-theme page shim (temporary) ----
+ * +page.svelte's palette is still hardcoded dark (its token conversion was
+ * deliberately deferred by review #16 / owned by the layout lane). Dark themes
+ * are unaffected, but on Light the page text would be light-on-light, so remap
+ * the page's main classes to the tokens here. `:root[data-theme="light"] .x`
+ * (0,3,0) outweighs Svelte's scoped `.x.svelte-hash` (0,2,0). Delete this
+ * whole section when +page.svelte adopts the tokens.
+ */
+:root[data-theme="light"] main {
+  color: var(--text-bright);
+}
+:root[data-theme="light"] .clock {
+  color: var(--text);
+}
+:root[data-theme="light"] .badge {
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .xcat {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .xclabel {
+  color: var(--text-bright);
+}
+:root[data-theme="light"] .xitem {
+  color: var(--text);
+}
+:root[data-theme="light"] .xthumb {
+  background: var(--surface-3);
+}
+:root[data-theme="light"] .xsheadlbl,
+:root[data-theme="light"] .xempty {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .numedit,
+:root[data-theme="light"] .textedit {
+  background: var(--surface-2);
+  color: var(--text-bright);
+}
+:root[data-theme="light"] .infogrid dt {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .infogrid dd {
+  color: var(--text);
+}
+:root[data-theme="light"] .wlead {
+  color: var(--text);
+}
+:root[data-theme="light"] footer {
+  color: var(--text-muted);
+  border-top-color: var(--border);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+:root[data-theme="light"] footer b,
+:root[data-theme="light"] .fhelp b {
+  color: var(--text);
+}
+/* Art/wash edge fade: same gradient geometry as the page's, tinted from --bg
+   instead of the hardcoded #05070b (alpha stops fa/f0/9e/33 and 59/99 ≈ these %). */
+:root[data-theme="light"] .xbg-fade {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg) 98%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 94%, transparent) 26%,
+      color-mix(in srgb, var(--bg) 62%, transparent) 55%,
+      color-mix(in srgb, var(--bg) 20%, transparent) 100%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg) 35%, transparent) 0%,
+      transparent 32%,
+      color-mix(in srgb, var(--bg) 60%, transparent) 100%
+    );
+}
