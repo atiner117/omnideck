@@ -1136,7 +1136,7 @@
       {:else if !items.length}
         <div class="xempty">
           {#if catId === "dashboard"}Nothing pinned — press <b>□ / F</b> on a tile to add it here.
-          {:else if catId === "games" && libErr}Couldn't load the game library — press <b>R / LT</b> to retry.
+          {:else if catId === "games" && libErr}Couldn't load the game library — press <b>R / L1</b> to retry.
           {:else if catId === "games"}No games found.
           {:else}Empty — press <b>△ / A</b> to add apps & media.{/if}
         </div>
@@ -1300,7 +1300,7 @@
     <div class="ebanner" role="alert" aria-live="assertive">
       <span class="ebmsg" title={bootBanner}>⚠ {bootBanner}</span>
       <span class="ebactions">
-        <button class="ebtn" onclick={retryBoot}>Retry <kbd>R / LT</kbd></button>
+        <button class="ebtn" onclick={retryBoot}>Retry <kbd>R / L1</kbd></button>
         <button class="ebtn" onclick={() => location.reload()}>Reload</button>
         <button class="ebtn dim" onclick={() => (bannerDismissed = true)}>Dismiss <kbd>Esc / ◯</kbd></button>
       </span>

@@ -6,6 +6,7 @@
      lives here. -->
 <script lang="ts">
   import Modal from "./Modal.svelte";
+  import { splitArgv } from "./argv";
   import type { App } from "./backend";
 
   let {
@@ -38,8 +39,15 @@
     let id = base; for (let n = 2; apps.some((a) => a.id === id); n++) id = `${base}-${n}`;
     // A bare URL (e.g. a SearXNG instance) is launched as a browser app so it opens in the
     // browser AND gets its site favicon; anything else is run as a normal argv command.
+    // The split is quote-aware (review #6 / PR #24) so paths with spaces work:
+    // "/My Games/app" --flag.
     const isUrl = /^https?:\/\//i.test(cmd);
-    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : cmd.split(/\s+/);
+    const argv = isUrl ? null : splitArgv(cmd);
+    if (!isUrl && (!argv || argv.length === 0)) {
+      onerror(argv ? "Command is empty" : "Unbalanced quote in command", null);
+      return; // keep the form open so the user can fix it
+    }
+    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : argv!;
     onadd({ id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat }, collided);
   }
 </script>
@@ -61,7 +69,7 @@
     <button class="cbtn" onclick={onclose}>Cancel</button>
     <button class="cbtn danger" onclick={addCustom}>Add</button>
   </div>
-  <p class="phint">Command is split on spaces. Use the full path if it isn't on PATH. Esc to close.</p>
+  <p class="phint">Split on spaces; quote paths that contain them: "/My Games/app" --flag. Use the full path if it isn't on PATH. Esc to close.</p>
 </Modal>
 
 <style>
