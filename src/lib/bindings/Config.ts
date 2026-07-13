@@ -3,29 +3,35 @@ import type { App } from "./App";
 import type { InputConfig } from "./InputConfig";
 import type { LaunchOverride } from "./LaunchOverride";
 import type { MediaServerConfig } from "./MediaServerConfig";
-import type { ScreensaverConfig } from "./ScreensaverConfig";
+import type { RemoteConfig } from "./RemoteConfig";
 import type { Settings } from "./Settings";
 
-export type Config = { settings: Settings, 
+export type Config = { 
+/**
+ * Schema version of this file (see `CONFIG_VERSION`). First field: TOML needs plain
+ * values emitted before tables. Absent in pre-versioning files — those deserialize to
+ * the current version, correct while every shape change so far has been additive.
+ */
+config_version: number, settings: Settings, 
+/**
+ * `[input]` — guide-button hold threshold + session hotkey toggle.
+ */
+input: InputConfig, 
 /**
  * `[launch_overrides]` — per-tile env/args tuning, keyed by tile id. Absent from the
  * generated default config (empty map serializes to nothing) — purely opt-in.
  */
 launch_overrides?: { [key in string]: LaunchOverride }, 
 /**
- * `[input]` — guide-button hold threshold + session hotkey toggle.
- */
-input: InputConfig, 
-/**
  * `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
  * unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
  */
 media_server: MediaServerConfig, 
 /**
- * `[screensaver]` — OLED burn-in protection timings (gamepad.rs idle events +
- * frontend overlay).
+ * `[remote]` — phone-as-remote LAN HTTP server (remote.rs). Off by default; the
+ * token is generated on first enable and masked over IPC like media_server.token.
  */
-screensaver: ScreensaverConfig, apps: Array<App>, 
+remote: RemoteConfig, apps: Array<App>, 
 /**
  * Favorited tile ids (shown on the Home category).
  */
@@ -43,10 +49,4 @@ config_path?: string,
  * Set when config.toml exists but couldn't be parsed/read, so the UI can warn the user
  * ("syntax error — using defaults") instead of silently reverting. Never written to disk.
  */
-config_error?: string | null, 
-/**
- * Whether a parental PIN is set. IPC-only (set by `get_config`, never written to disk):
- * the webview needs presence, not the hash — `settings.pin_hash` is masked over IPC
- * like `media_server.token`, since a 4–6 digit PIN is offline-crackable from its hash.
- */
-has_pin?: boolean | null, };
+config_error?: string | null, };

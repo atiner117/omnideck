@@ -122,12 +122,14 @@ pub fn get_config() -> config::Config {
     let mut cfg = config::load_or_create();
     // The media-server token stays out of the webview: the frontend only needs to know
     // whether a server is configured (media_available covers that). Masked, not moved —
-    // config.toml keeps the real value.
+    // config.toml keeps the real value. Same for the phone-remote token (its ONE
+    // deliberate exposure is the pairing URL from remote_status — see remote.rs).
     cfg.media_server.token.clear();
     // Same for the PIN hash: a 4–6 digit PIN is offline-crackable from its argon2 hash,
     // so the webview only gets presence (has_pin) — verification happens in verify_pin.
     cfg.has_pin = Some(!cfg.settings.pin_hash.is_empty());
     cfg.settings.pin_hash.clear();
+    cfg.remote.token.clear();
     cfg
 }
 
@@ -151,6 +153,7 @@ pub async fn restore_config(src: String) -> Result<config::Config, String> {
     blocking(move || {
         let mut cfg = config::restore_from(std::path::Path::new(&src))?;
         cfg.media_server.token.clear(); // never hand the real token to the webview
+        cfg.remote.token.clear();
         Ok(cfg)
     })
     .await?

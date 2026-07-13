@@ -71,6 +71,7 @@ trait Player {
     fn pause(&self) -> zbus::Result<()>;
     fn next(&self) -> zbus::Result<()>;
     fn previous(&self) -> zbus::Result<()>;
+    fn stop(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn playback_status(&self) -> zbus::Result<String>;
     #[zbus(property)]
@@ -150,11 +151,13 @@ pub async fn control(action: &str) -> Result<(), String> {
         PlayPause,
         Next,
         Previous,
+        Stop,
     }
     let verb = match action {
         "play-pause" => Verb::PlayPause,
         "next" => Verb::Next,
         "previous" => Verb::Previous,
+        "stop" => Verb::Stop,
         _ => return Err(format!("unknown media action: {action}")),
     };
     let conn = current_conn().ok_or("media controls temporarily unavailable (reconnecting to D-Bus)")?;
@@ -174,6 +177,7 @@ pub async fn control(action: &str) -> Result<(), String> {
             Verb::PlayPause => player.play_pause().await,
             Verb::Next => player.next().await,
             Verb::Previous => player.previous().await,
+            Verb::Stop => player.stop().await,
         }
     };
     // Bounded: zbus sets NO method timeout by default, and a deck-frozen (SIGSTOPped)
