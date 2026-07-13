@@ -64,12 +64,17 @@
   --text-bright: #d2ffdf;
 }
 /* Static scanlines: fixed, non-interactive, unanimated (nothing for
-   prefers-reduced-motion to object to), subtle enough to read through. */
+   prefers-reduced-motion to object to), subtle enough to read through.
+   z 5: over the page chrome (header/xmb/toast/footer are z <= 2, and <main> is
+   position:relative with no z-index — no stacking context, so everything shares
+   the root context) but UNDER every overlay: Modal 10/11, NowPlaying 12,
+   Wizard 20, deck/banner 40/41, overscan calibration 50 (#46). Modals and
+   error UI must stay scanline-free and fully legible. */
 :root[data-theme="crt"] body::after {
   content: "";
   position: fixed;
   inset: 0;
-  z-index: 2147483647;
+  z-index: 5;
   pointer-events: none;
   background: repeating-linear-gradient(
     0deg,
