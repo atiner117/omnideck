@@ -117,8 +117,16 @@ impl MediaServerConfig {
 pub struct JellyfinServer {
     base: String,
     token: String,
-    user_id: OnceLock<Option<String>>, // resolved lazily via /Users/Me when not pre-known
+    user_id: OnceLock<String>, // resolved lazily via /Users/Me; only SUCCESSES are cached
     preknown_user: Option<String>,
+}
+
+/// A syntactically-valid Jellyfin item id: non-empty, length-bounded, and only the characters
+/// real ids use (hex GUIDs, occasionally dashed). Rejects anything that could alter the request
+/// path or query (`/`, `?`, `&`, `.`) — the Tauri media commands accept arbitrary frontend
+/// strings, and these ids are interpolated straight into URLs.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// The resolved server for this run (config first, then shim pairing), or None.
@@ -167,16 +175,26 @@ fn shim_pairing() -> Option<JellyfinServer> {
 impl JellyfinServer {
     async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}{path}", self.base);
-        let resp = crate::http::client()
-            .get(&url)
-            .header("X-Emby-Token", &self.token)
-            .send()
-            .await
-            .map_err(|e| format!("media server unreachable: {e}"))?;
+        let resp = self.send_get(&url).await?;
         if !resp.status().is_success() {
             return Err(format!("media server: HTTP {} on {path}", resp.status()));
         }
         resp.json().await.map_err(|e| format!("media server: bad JSON: {e}"))
+    }
+
+    /// GET with one retry on a *transient* network error (connect/timeout) — a living-room
+    /// box's wifi/DNS can blip, and a single retry turns a spurious empty section into a normal
+    /// load. HTTP status errors are deterministic and are NOT retried.
+    async fn send_get(&self, url: &str) -> Result<reqwest::Response, String> {
+        let once = || crate::http::client().get(url).header("X-Emby-Token", &self.token).send();
+        match once().await {
+            Ok(r) => Ok(r),
+            Err(e) if e.is_timeout() || e.is_connect() => {
+                tracing::debug!("media server: transient error on {url}, retrying once: {e}");
+                once().await.map_err(|e| format!("media server unreachable: {e}"))
+            }
+            Err(e) => Err(format!("media server unreachable: {e}")),
+        }
     }
 
     async fn user(&self) -> Result<String, String> {
@@ -184,12 +202,16 @@ impl JellyfinServer {
             return Ok(u.clone());
         }
         if let Some(u) = self.user_id.get() {
-            return u.clone().ok_or_else(|| "no user".into());
+            return Ok(u.clone()); // only ever cached on success, so this is never a poisoned None
         }
         let me = self.get("/Users/Me").await?;
-        let id = me.get("Id").and_then(|v| v.as_str()).map(str::to_string);
-        let _ = self.user_id.set(id.clone());
-        id.ok_or_else(|| "media server: couldn't resolve user".into())
+        let id = me
+            .get("Id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "media server: couldn't resolve user".to_string())?;
+        let _ = self.user_id.set(id.clone()); // cache the success; a transient failure isn't sticky
+        Ok(id)
     }
 
     pub async fn sections(&self) -> Result<MediaSections, String> {
@@ -214,16 +236,29 @@ impl JellyfinServer {
                     .collect()
             })
             .unwrap_or_default();
-        let resume = self
+        // A failed row degrades to empty rather than failing the whole screen, but it's LOGGED
+        // now (was silently indistinguishable from a genuinely empty library) and the get()
+        // retry above already absorbs a single transient blip.
+        let resume = match self
             .get(&format!("/Users/{user}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview"))
             .await
-            .map(|v| items_of(&v["Items"]))
-            .unwrap_or_default();
-        let latest = self
+        {
+            Ok(v) => items_of(&v["Items"]),
+            Err(e) => {
+                tracing::warn!("media: Continue Watching unavailable ({e}) — showing none");
+                Vec::new()
+            }
+        };
+        let latest = match self
             .get(&format!("/Users/{user}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series"))
             .await
-            .map(|v| items_of(&v)) // /Latest returns a bare array
-            .unwrap_or_default();
+        {
+            Ok(v) => items_of(&v), // /Latest returns a bare array
+            Err(e) => {
+                tracing::warn!("media: Latest unavailable ({e}) — showing none");
+                Vec::new()
+            }
+        };
         let name = self
             .get("/System/Info/Public")
             .await
@@ -235,6 +270,9 @@ impl JellyfinServer {
 
     /// Children of a library or series/season — one call covers every drill-down level.
     pub async fn browse(&self, parent: &str) -> Result<Vec<MediaItem>, String> {
+        if !valid_id(parent) {
+            return Err("invalid item id".into());
+        }
         let user = self.user().await?;
         // Non-recursive keeps the natural hierarchy (Series → Seasons → Episodes) and
         // matches how Jellyfin's own clients browse.
@@ -256,6 +294,9 @@ impl JellyfinServer {
     /// Extension comes from sniffing the bytes — the asset protocol serves by extension,
     /// so the cache file must carry a real one.
     pub async fn poster(&self, id: &str) -> Option<PathBuf> {
+        if !valid_id(id) {
+            return None;
+        }
         let dir = poster_cache_dir()?;
         let _ = std::fs::create_dir_all(&dir);
         let safe = id.replace(['/', '.'], "_");
@@ -266,7 +307,7 @@ impl JellyfinServer {
             }
         }
         let url = format!("{}/Items/{id}/Images/Primary?maxWidth=480&quality=90", self.base);
-        let resp = crate::http::client()
+        let mut resp = crate::http::client()
             .get(&url)
             .header("X-Emby-Token", &self.token)
             .send()
@@ -275,7 +316,23 @@ impl JellyfinServer {
         if !resp.status().is_success() {
             return None;
         }
-        let bytes = resp.bytes().await.ok()?;
+        // Cap the streamed body — content-length can be absent or lie, and a poster is a small
+        //480px image; a huge/hostile response must not balloon memory (favicons/grid-art cap
+        // the same way; a shared http helper for all three is a queued reuse cleanup).
+        const MAX_POSTER_BYTES: usize = 16 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    if bytes.len() + chunk.len() > MAX_POSTER_BYTES {
+                        return None;
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(_) => return None,
+            }
+        }
         // Only cache real images (sniff like the icon path does — servers can 200 an error page).
         let ext = if bytes.starts_with(b"\xFF\xD8\xFF") {
             "jpg"
@@ -353,7 +410,18 @@ fn prune(dir: &Path, max_bytes: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::MediaServerConfig;
+    use super::{valid_id, MediaServerConfig};
+
+    #[test]
+    fn valid_id_accepts_jellyfin_ids_and_rejects_injection() {
+        assert!(valid_id("f137a2dd21bbc1b99aa5c0f6bf02a805")); // 32-char hex GUID
+        assert!(valid_id("a1b2-c3d4")); // occasionally dashed
+        assert!(!valid_id("")); // empty
+        assert!(!valid_id("../../System/Info")); // path traversal
+        assert!(!valid_id("id&EnableTranscoding=true")); // query injection
+        assert!(!valid_id("id/Images/Primary")); // path injection
+        assert!(!valid_id(&"a".repeat(65))); // over the length bound
+    }
 
     #[test]
     fn auto_profiles_defaults_on_for_configs_that_dont_mention_it() {
