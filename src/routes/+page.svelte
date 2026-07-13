@@ -14,6 +14,7 @@
   import DeckSwitcher from "$lib/DeckSwitcher.svelte";
   import CatalogModal from "$lib/CatalogModal.svelte";
   import LauncherForm from "$lib/LauncherForm.svelte";
+  import OverscanCalibration from "$lib/components/OverscanCalibration.svelte";
   import { initSfx, sfxMove, sfxEnter } from "$lib/sfx";
   import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
@@ -433,6 +434,7 @@
   function doAction(key: string) {
     holdStop(); // a held D-pad press that opens this modal must not keep auto-repeating behind it
     if (key === "addcustom") formOpen = true; // LauncherForm owns its drafts; mounting resets them
+    else if (key === "overscan") overscanOpen = true; // OverscanCalibration owns its draft too
   }
   // numeric settings: also typeable via a real <input> while editing
   function setNum(d: NumDef, raw: number) {
@@ -706,6 +708,19 @@
   function wizardPrev() { if (wizardStep > 0) wizardStep--; }
   function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; patchSettings({ accent: a }); accent = a; }
 
+  // ---- TV overscan calibration (settings action; the component owns the draft value) ----
+  // While open, `overscanPreview` overrides the saved inset so the WHOLE UI resizes live as
+  // the user adjusts; confirm persists it, cancel just drops the preview (reverts).
+  let overscanOpen = $state(false);
+  let overscanPreview = $state<number | null>(null);
+  let overscanCal = $state<ReturnType<typeof OverscanCalibration> | null>(null); // bind:this — roster forwards input into it
+  let overscanPct = $derived(overscanPreview ?? cfg?.settings?.overscan_pct ?? 0);
+  function overscanDone(pct: number | null) { // null = cancel
+    overscanOpen = false;
+    overscanPreview = null;
+    if (pct != null) patchSettings({ overscan_pct: pct });
+  }
+
   // ---- Unified input router (review #10) ----------------------------------------------------
   // One ordered roster of overlay controllers. The router walks the list and the FIRST open
   // overlay consumes the event — keyboard, gamepad buttons, and stick axes all share this single
@@ -721,6 +736,21 @@
     allowHelp?: boolean; // "?" / F1 still opens Help on top of this overlay
   };
   const OVERLAYS: Overlay[] = [
+    {
+      // TV overscan calibration: preempts everything (it repaints the whole screen). The
+      // component owns the draft; this entry only forwards input — D-pad/stick up/right
+      // grow the inset, down/left shrink, A/Enter save, B/Esc cancel.
+      open: () => overscanOpen,
+      key: (e) => overscanCal?.onkey(e),
+      pad: (c) => {
+        const d = { DPadUp: 1, DPadRight: 1, DPadDown: -1, DPadLeft: -1 }[c];
+        if (d) holdStart(c, () => overscanCal?.nudge(d));
+        else if (c === "South") overscanCal?.confirm();
+        else if (c === "East") overscanCal?.cancel();
+      },
+      stickY: (d) => overscanCal?.nudge(-d), // page "down" (+1) = shrink
+      stickX: (d) => overscanCal?.nudge(d),
+    },
     {
       // Deck switcher: arrows/L-R pick a card, Enter/A/X opens, Del/Select closes it,
       // Esc/B/Guide dismisses.
@@ -1073,7 +1103,7 @@
   });
 </script>
 
-<main style="--accent:{accent}; --scale:{scaleNum}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{cfg?.settings?.background_color ?? '#05070b'}">
+<main class:overscan={overscanPct > 0} style="--accent:{accent}; --scale:{scaleNum}; --overscan:{overscanPct}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{cfg?.settings?.background_color ?? '#05070b'}">
   {#if baseImageShown}<div class="xbg base has" style="background-image:url({bgImageUrl})"></div>{/if}
   <div class="xbg" class:has={!!overlay} class:wash={overlay?.kind === "wash"}
     style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`
@@ -1288,6 +1318,11 @@
       accents={ACCENTS} accent={cfg.settings.accent ?? "#4cc2ff"} />
   {/if}
 
+  {#if overscanOpen}
+    <OverscanCalibration bind:this={overscanCal} pct={cfg?.settings?.overscan_pct ?? 0}
+      onpreview={(p) => (overscanPreview = p)} onconfirm={overscanDone} oncancel={() => overscanDone(null)} />
+  {/if}
+
   <NowPlaying cards={nowCards} {inSession} onerror={reportError}
     ondismiss={(id) => (nowList = nowList.filter((x) => x.id !== id))} />
 
@@ -1325,6 +1360,17 @@
        at full-screen they hit the rem cap, so the primary use is unchanged. */
     --cw: calc(clamp(4.2rem, 8.5vw, 7rem) * var(--scale));
     --ih: calc(clamp(2.8rem, 5.2vh, 4.4rem) * var(--scale));
+  }
+  /* TV safe-area inset (--overscan = % per edge, from settings.overscan_pct or the live
+     calibration preview): shrink the whole UI into the safe rect. The transform makes
+     <main> the containing block for position:fixed descendants, so every modal/backdrop/
+     overlay (`inset: 0`) respects the inset too — one rule, all screens. Only applied when
+     non-zero, so the default stays byte-identical to today. */
+  main.overscan {
+    height: calc(100vh - 2 * var(--overscan) * 1vh);
+    width: calc(100vw - 2 * var(--overscan) * 1vw);
+    margin: calc(var(--overscan) * 1vh) calc(var(--overscan) * 1vw);
+    transform: translateZ(0);
   }
   .xbg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(var(--bg-blur, 0px)) brightness(var(--bg-bright, .82)) saturate(1.12); opacity: 0; transition: opacity .3s ease; z-index: 0; }
   .xbg.has { opacity: 1; }
