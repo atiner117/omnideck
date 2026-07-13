@@ -13,6 +13,7 @@
     ["Add apps & media", "A", "△"],
     ["Search", "/", "Select"],
     ["Item info", "I", "R1"],
+    ["Now Playing controls", "N", "L1"],
     ["Home", "H", "Start"],
     ["Settings", "P", "—"],
     ["Help", "? / F1", "—"],

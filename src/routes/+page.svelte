@@ -134,6 +134,39 @@
     return out.slice(0, 3);
   });
 
+  // Now Playing transport overlay: the bottom-right card stack is pointer/navpad-clickable, but
+  // a controller on the dashboard had no way to reach its prev/play-pause/next/switch/close
+  // controls (the global pad router never focused them). This overlay surfaces the primary
+  // card's actions as a D-pad/A-navigable row. It's dashboard-contextual (opened by L1 or the
+  // `N` key when something's playing), never a global chord — while a launched app is in front
+  // the pad drives the app, not this, so common buttons aren't consumed there.
+  type NpAction = { icon: string; label: string; run: () => void };
+  let npOpen = $state(false);
+  let npFocus = $state(0);
+  const npMediaCtl = (a: string) => api.mediaControl(a).catch((e) => reportError("Media control failed", e));
+  const npActions = $derived.by<NpAction[]>(() => {
+    const c = nowCards[0];
+    if (!c) return [];
+    const a: NpAction[] = [];
+    if (c.media) {
+      a.push({ icon: "⏮", label: "Previous", run: () => npMediaCtl("previous") });
+      a.push({ icon: c.media.status === "Playing" ? "⏸" : "▶", label: "Play / Pause", run: () => npMediaCtl("play-pause") });
+      a.push({ icon: "⏭", label: "Next", run: () => npMediaCtl("next") });
+    }
+    if (c.kind === "app" && inSession)
+      a.push({ icon: "⇄", label: "Switch to app", run: () => { api.switchApp().catch((e) => reportError("Couldn't switch app", e)); npOpen = false; } });
+    if (c.kind === "app")
+      a.push({ icon: "↩", label: "Close & return", run: () => { api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e)); npOpen = false; } });
+    if (c.kind !== "media")
+      a.push({ icon: "✕", label: "Dismiss card", run: () => { nowList = nowList.filter((x) => x.id !== c.id); npOpen = false; } });
+    return a;
+  });
+  function openNowPlaying() { if (nowCards.length) { npFocus = 0; npOpen = true; } }
+  function npMove(d: number) { if (npActions.length) npFocus = clamp(npFocus + d, 0, npActions.length - 1); }
+  function npActivate() { npActions[npFocus]?.run(); }
+  // If the underlying card set empties (media stopped, app closed) while open, dismiss the overlay.
+  $effect(() => { if (npOpen && npActions.length === 0) npOpen = false; else if (npOpen) npFocus = clamp(npFocus, 0, Math.max(0, npActions.length - 1)); });
+
   let allGames = $state<Game[]>([]);
   let favorites = $state<string[]>([]);
   let recentApps = $state<string[]>([]); // app ids, most-recent-first
@@ -874,7 +907,7 @@
   // Single source of truth: is any modal/overlay open? Gates base navigation and stops
   // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
   const anyModal = $derived(
-    deckOpen || wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
+    npOpen || deckOpen || wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
   );
 
   function onKey(e: KeyboardEvent) {
@@ -904,6 +937,14 @@
       else if (e.key === "Enter") deckSelect();
       else if (e.key === "Delete" || e.key === "Backspace") deckKill();
       else if (e.key === "Escape") closeDeck();
+      return;
+    }
+    if (npOpen) {
+      // Now Playing transport: arrows move across the actions, Enter activates, Esc closes.
+      if (e.key === "ArrowLeft" && navGate()) npMove(-1);
+      else if (e.key === "ArrowRight" && navGate()) npMove(1);
+      else if (e.key === "Enter") npActivate();
+      else if (e.key === "Escape") npOpen = false;
       return;
     }
     if (wizardActive) {
@@ -967,6 +1008,7 @@
     if (e.key === "h" || e.key === "H") { goHome(); return; }
     if (e.key === "f" || e.key === "F") { favCurrent(); return; }
     if (e.key === "i" || e.key === "I") { showInfo(); return; }
+    if ((e.key === "n" || e.key === "N") && nowCards.length) { openNowPlaying(); return; }
     if (e.key === "Escape") { settingsEditing = false; return; }
     if (e.key === "ArrowLeft" && navGate()) horiz(-1);
     else if (e.key === "ArrowRight" && navGate()) horiz(1);
@@ -1081,6 +1123,14 @@
           else if (p.code === "East" || p.code === "Start") closeDeck();
           return;
         }
+        if (npOpen) {
+          // Now Playing transport: L/R across the actions, A activates, B closes.
+          if (p.code === "DPadLeft") holdStart(p.code, () => npMove(-1));
+          else if (p.code === "DPadRight") holdStart(p.code, () => npMove(1));
+          else if (p.code === "South") npActivate();
+          else if (p.code === "East" || p.code === "Start") npOpen = false;
+          return;
+        }
         if (wizardActive) {
           if (p.code === "South") wizardNext(); else if (p.code === "East") wizardPrev();
           else if (p.code === "DPadLeft" && wizardStep === 1) wizardAccent(-1);
@@ -1136,6 +1186,7 @@
         if (p.code === "Start") { goHome(); return; }
         if (p.code === "West") { favCurrent(); return; }
         if (p.code === "RightTrigger") { showInfo(); return; }
+        if (p.code === "LeftTrigger" && nowCards.length) { openNowPlaying(); return; } // L1 → Now Playing transport
         if (p.code === "East") { settingsEditing = false; return; }
         if (p.code === "DPadLeft") holdStart(p.code, () => horiz(-1));
         else if (p.code === "DPadRight") holdStart(p.code, () => horiz(1));
@@ -1383,6 +1434,27 @@
         {/each}
       </div>
       <p class="deck-hint">A open · Select ✕ close · B back</p>
+    </section>
+  {/if}
+
+  {#if npOpen}
+    <!-- Now Playing transport: controller/keyboard-reachable twin of the corner card's controls
+         (L1 or N opens it on the dashboard). Pointer/click works too. -->
+    <div class="np-scrim" role="button" tabindex="-1" aria-label="Close Now Playing"
+         onclick={() => (npOpen = false)} onkeydown={(e) => { if (e.key === "Escape") npOpen = false; }}></div>
+    <section class="np-transport" aria-label="Now Playing controls">
+      {#if nowCards[0]}
+        <div class="np-t-title">
+          {nowCards[0].media?.title ?? nowCards[0].name}{#if nowCards[0].media?.artist}<span class="np-t-sub"> — {nowCards[0].media.artist}</span>{/if}
+        </div>
+      {/if}
+      <div class="np-t-row">
+        {#each npActions as a, i (a.label)}
+          <button class="np-t-btn" class:sel={i === npFocus} title={a.label} aria-label={a.label}
+            onclick={() => { npFocus = i; a.run(); }} onmouseenter={() => (npFocus = i)}>{a.icon}</button>
+        {/each}
+      </div>
+      <p class="np-t-hint">{npActions[npFocus]?.label ?? ""} · A activate · B close</p>
     </section>
   {/if}
 
@@ -1647,6 +1719,24 @@
   .deck-card.sel .deck-x { opacity: 1; }
   .deck-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale));
     letter-spacing: .02em; }
+
+  /* --- Now Playing transport overlay (controller-reachable media/app controls) --- */
+  .np-scrim { position: fixed; inset: 0; z-index: 44; background: rgba(3,5,11,0.72); border: 0; }
+  .np-transport { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px; pointer-events: none; }
+  .np-t-title { pointer-events: none; color: #fff; font-weight: 700; max-width: 80vw; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(22px * var(--scale)); }
+  .np-t-sub { color: #9fb0c8; font-weight: 500; }
+  .np-t-row { display: flex; gap: 18px; pointer-events: auto; }
+  .np-t-btn { display: flex; align-items: center; justify-content: center;
+    width: calc(72px * var(--scale)); height: calc(72px * var(--scale)); border-radius: 18px;
+    border: 2px solid rgba(255,255,255,0.10); background: linear-gradient(160deg, #141a26, #0c1119);
+    color: #e7ecf6; cursor: pointer; font-size: calc(28px * var(--scale));
+    transition: transform .16s cubic-bezier(.2,.7,.2,1), border-color .16s, box-shadow .16s; }
+  .np-t-btn.sel { transform: translateY(-8px) scale(1.08); border-color: var(--accent);
+    box-shadow: 0 16px 44px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .np-t-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale)); letter-spacing: .02em; }
+  @media (prefers-reduced-motion: reduce) { .np-t-btn { transition: none !important; } }
 
   /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
      transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
