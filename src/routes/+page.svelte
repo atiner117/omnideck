@@ -19,6 +19,10 @@
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
   import type { Tile } from "$lib/tiles";
   import { SETTING_DEFS, ACCENTS, normalizeNum, type SettingDef, type CycleDef, type NumDef, type TextDef } from "$lib/settings-defs";
+  import GridView from "$lib/components/GridView.svelte";
+  import ListView from "$lib/components/ListView.svelte";
+  import LayoutPicker from "$lib/components/LayoutPicker.svelte";
+  import { LAYOUT_MODES, normalizeLayout, isGridLayout, gridColumns, gridMoveRow, gridMoveCol, type LayoutId } from "$lib/components/layouts";
 
   const CATEGORIES = [
     { id: "dashboard", label: "Home", icon: "home" },
@@ -294,9 +298,25 @@
     SETTING_DEFS.filter((d) => {
       if (d.type === "header") return true; // every section keeps ≥1 unconditional row
       const set = cfg?.settings; if (!set) return true;
-      return d.visible?.(set) ?? true;
+      return d.visible?.(set, cfg?.appearance) ?? true;
     }),
   );
+  // ---- library view mode (appearance.layout — rail | grid | grid-compact | list) ----
+  // Rail stays the inline default; grid/list render via $lib/components. The page keeps
+  // owning `focus` + input routing, so every input path (D-pad, stick, keyboard, wheel,
+  // hold-repeat) works in every mode through the same moveItem/horiz below.
+  let layout = $derived(normalizeLayout(cfg?.appearance?.layout));
+  let gcols = $derived(gridColumns(layout, cfg?.settings?.grid_columns));
+  let gridNav = $derived(catId !== "settings" && isGridLayout(layout)); // settings stays a column in every mode
+  function setLayout(v: LayoutId) {
+    if (!cfg) return;
+    cfg.appearance.layout = v; // fine-grained mutate, same rationale as patchSettings
+    api.saveAppearance($state.snapshot(cfg.appearance)).catch((e) => reportError("Couldn't save layout", e));
+  }
+  function cycleLayout() {
+    const i = LAYOUT_MODES.findIndex((m) => m.id === layout);
+    setLayout(LAYOUT_MODES[(i + 1) % LAYOUT_MODES.length].id);
+  }
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
   // ---- windowed (virtualized) item rail ----
   // The rail translates so the focused row sits at the top of the clipped wrap, meaning only
@@ -306,8 +326,14 @@
   // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
   // same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
-  let winLo = $derived(Math.max(0, focus - WIN_ABOVE));
-  let winItems = $derived(items.slice(winLo, focus + WIN_BELOW));
+  // Grid modes show gcols items per row, so the art window scales with the column count
+  // (6 rows above / 14 below the focused row — covers a 4K compact grid). The rail/list
+  // keep the original 8/40 rows. Grid/list render all rows (content-visibility skips
+  // offscreen paint); this window only bounds ART loading, same as the rail.
+  let winAbove = $derived(gridNav ? gcols * 6 : WIN_ABOVE);
+  let winBelow = $derived(gridNav ? gcols * 14 : WIN_BELOW);
+  let winLo = $derived(Math.max(0, focus - winAbove));
+  let winItems = $derived(items.slice(winLo, focus + winBelow));
   let scaleNum = $derived(
     cfg?.settings?.ui_scale === "custom"
       ? (cfg?.settings?.ui_scale_custom ?? 1.6)
@@ -405,6 +431,12 @@
   function moveItem(d: number) {
     settingsEditing = false;
     if (!itemCount) return;
+    if (gridNav) {
+      // 2D vertical move: wrap top<->bottom (the rail's modulo wrap, column-preserving).
+      focus = gridMoveRow(focus, d, itemCount, gcols);
+      sfxMove();
+      return;
+    }
     let f = (focus + d + itemCount) % itemCount;
     if (catId === "settings") {
       // Skip section headers in the pressed direction (they occupy row slots but aren't rows).
@@ -457,12 +489,17 @@
     patchSettings({ accent: v });
     accent = v;
   }
-  // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise always
-  // switches category (so you can never get trapped in Settings).
+  // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise moves
+  // within the grid row in grid modes — falling off the row's edge (or any non-grid mode)
+  // switches category, so you can never get trapped in Settings OR in a grid.
   function horiz(dir: number) {
     const row = visibleSettings[focus];
     if (catId === "settings" && settingsEditing && row?.type === "num") { adjustSetting(row, dir); return; }
     settingsEditing = false;
+    if (gridNav && itemCount) {
+      const t = gridMoveCol(focus, dir, itemCount, gcols);
+      if (t !== null) { focus = t; sfxMove(); return; }
+    }
     moveCat(dir);
   }
   function activate() {
@@ -581,6 +618,7 @@
   // Advance a cycle row to its next state (the per-row logic lives in the def's `cycle`).
   function cycleSetting(d: CycleDef) {
     if (!cfg) return;
+    if (d.key === "layout") { cycleLayout(); return; } // appearance.layout — its own save path
     const patch = d.cycle(cfg.settings);
     patchSettings(patch);
     if (patch.accent) accent = patch.accent;
@@ -1126,6 +1164,7 @@
                 {:else}
                   <span class="xsub">{settingValue(s)}{s.type === "num" || s.type === "text" ? "  (Enter)" : ""}</span>
                 {/if}
+                {#if s.key === "layout"}<LayoutPicker value={layout} onchange={setLayout} />{/if}
                 {#if s.key === "accent"}<span class="swatch" style="background:{accent}"></span><input class="cwheel" type="color" value={accent} oninput={onAccentColor} onclick={(e) => e.stopPropagation()} />{/if}
                 {#if s.key === "bgcolor"}<span class="swatch" style="background:{cfg?.settings?.background_color ?? '#05070b'}"></span><input class="cwheel" type="color" value={cfg?.settings?.background_color ?? '#05070b'} oninput={onBgColor} onclick={(e) => e.stopPropagation()} />{/if}
               </span>
@@ -1140,6 +1179,12 @@
           {:else if catId === "games"}No games found.
           {:else}Empty — press <b>△ / A</b> to add apps & media.{/if}
         </div>
+      {:else if layout === "list"}
+        <ListView {items} {focus} {art} {appIcons} {iconBg} {favorites}
+          onactivate={(i) => { focus = i; launchTile(items[i]); }} onarterror={artError} />
+      {:else if isGridLayout(layout)}
+        <GridView {items} {focus} cols={gcols} compact={layout === "grid-compact"} {art} {appIcons} {iconBg} {favorites}
+          onactivate={(i) => { focus = i; launchTile(items[i]); }} onarterror={artError} />
       {:else}
         <div class="xitems" style="transform: translateY(calc({-focus} * var(--ih)))">
           {#if winLo > 0}<div class="xpad" style="height: calc({winLo} * var(--ih))" aria-hidden="true"></div>{/if}
