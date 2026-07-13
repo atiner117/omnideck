@@ -433,7 +433,10 @@
     if (!itemCount) return;
     if (gridNav) {
       // 2D vertical move: wrap top<->bottom (the rail's modulo wrap, column-preserving).
-      focus = gridMoveRow(focus, d, itemCount, gcols);
+      // Single-row grids return focus unchanged — no move, so no sfx blip.
+      const next = gridMoveRow(focus, d, itemCount, gcols);
+      if (next === focus) return;
+      focus = next;
       sfxMove();
       return;
     }
@@ -443,6 +446,7 @@
       let guard = 0;
       while (visibleSettings[f]?.type === "header" && guard++ < itemCount) f = (f + d + itemCount) % itemCount;
     }
+    if (f === focus) return; // 1-item wrap: same no-move/no-blip rule as the grid
     focus = f;
     sfxMove();
   }

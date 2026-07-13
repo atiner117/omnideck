@@ -101,14 +101,17 @@
     border: 0; background: none; text-align: left; cursor: pointer;
     padding: calc(0.35rem * var(--scale, 1)) 12px;
     border-radius: 12px;
-    color: #c2cbdb; opacity: 0.72;
+    /* Design tokens with the original dark palette as fallback: identical standalone,
+       theme-following once tokens.css (#41) defines them (Light-theme readability). */
+    color: var(--text, #c2cbdb); opacity: 0.72;
     transition: opacity 0.12s, background 0.12s, transform 0.12s;
     content-visibility: auto;
     contain-intrinsic-size: auto 64px;
   }
   .lrow.focused {
-    opacity: 1; color: #eef2f8;
-    background: #ffffff10;
+    opacity: 1; color: var(--text-bright, #eef2f8);
+    /* text-tinted wash ≈ the old #ffffff10 on dark, stays visible on light surfaces */
+    background: color-mix(in srgb, var(--text, #ffffff) 6%, transparent);
     box-shadow: inset 0 0 0 2px var(--accent); /* the rail's accent ring, row-shaped */
     transform: translateX(6px);
   }
@@ -117,7 +120,7 @@
     width: calc(2.6rem * var(--scale, 1)); height: calc(2.6rem * var(--scale, 1));
     border-radius: 9px; flex: 0 0 auto; overflow: hidden;
     display: grid; place-items: center;
-    background: #1a2233; box-shadow: 0 4px 14px #0007;
+    background: var(--surface-3, #1a2233); box-shadow: 0 4px 14px #0007;
   }
   .lthumb img { width: 100%; height: 100%; object-fit: cover; }
   .lthumb img.appicon { object-fit: contain; padding: 16%; box-sizing: border-box; }
@@ -130,11 +133,11 @@
   .lrow.focused .lname { font-weight: 800; }
   .lfav { font-size: 0.8em; margin-left: 8px; }
   .ldetail {
-    color: #8a96ab; font-size: calc(clamp(11px, 1vw, 14px) * var(--scale, 1));
+    color: var(--text-muted, #8a96ab); font-size: calc(clamp(11px, 1vw, 14px) * var(--scale, 1));
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .lwhen {
-    flex: 0 0 auto; color: #8a96ab; font-variant-numeric: tabular-nums;
+    flex: 0 0 auto; color: var(--text-muted, #8a96ab); font-variant-numeric: tabular-nums;
     font-size: calc(clamp(11px, 1vw, 14px) * var(--scale, 1));
   }
   .lrow:focus { outline: none; }

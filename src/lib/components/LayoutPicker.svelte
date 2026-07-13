@@ -20,6 +20,10 @@
 
 <span class="lp" role="radiogroup" aria-label="Library layout">
   {#each LAYOUT_MODES as m (m.id)}
+    <!-- Mouse-only by design: keyboard/gamepad cycle the enclosing settings row via the
+         page router (which preventDefaults Enter/Space globally), and tabindex=-1 keeps
+         the span unfocusable — a keydown handler here would be dead code. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <span
       class="lpseg"
       class:on={value === m.id}
@@ -28,7 +32,6 @@
       tabindex="-1"
       title={m.label}
       onclick={(e) => pick(e, m.id)}
-      onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") pick(e, m.id); }}
     >
       {#if m.id === "rail"}
         <!-- XMB cascade: offset bars, the focused one larger -->

@@ -101,7 +101,10 @@
     aspect-ratio: 2 / 3; /* Steam box-art portrait */
     border: 0;
     padding: 0;
-    background: #1a2233;
+    /* Design tokens with the original dark palette as fallback: identical standalone,
+       theme-following once tokens.css (#41) defines them. Art overlays (.gname) stay
+       hardcoded — they sit on artwork, not on the page surface. */
+    background: var(--surface-3, #1a2233);
     border-radius: 12px;
     overflow: hidden;
     cursor: pointer;
@@ -126,12 +129,12 @@
   .gfall {
     position: absolute; inset: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 8px; padding: 8px; box-sizing: border-box; background: #1a2233;
+    gap: 8px; padding: 8px; box-sizing: border-box; background: var(--surface-3, #1a2233);
   }
   .gemoji { font-size: calc(1.8rem * var(--scale, 1)); }
   .compact .gemoji { font-size: calc(1.3rem * var(--scale, 1)); }
   .gfname {
-    color: #c2cbdb; font-weight: 600; text-align: center;
+    color: var(--text, #c2cbdb); font-weight: 600; text-align: center;
     font-size: clamp(11px, 1vw, 15px); line-height: 1.25;
     overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical;
     word-break: break-word;
