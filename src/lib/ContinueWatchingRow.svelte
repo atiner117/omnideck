@@ -140,6 +140,9 @@
 {/if}
 
 <style>
+  /* Colors read the design tokens where they exist (integration branch / Lane A themes) and
+     fall back to today's literal values, so the row looks identical standalone but follows
+     the active theme + user accent once mounted under the tokenized tree. */
   .cwrow h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; opacity: 0.85; }
   .cwerr { margin: 0 0 8px; font-size: 13px; color: #f0a0a0; }
   .cwcards { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: thin; }
@@ -147,16 +150,16 @@
   /* Poster button: 2:3 like real box art (MediaModal's .mposter, row-card sized). */
   .cwposter { position: relative; display: grid; place-items: center; width: 132px; height: 198px;
     padding: 0; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
-    background: #22304a; }
+    background: var(--surface-3, #22304a); }
   .cwposter img { width: 100%; height: 100%; object-fit: cover; }
-  .cwposter:focus-visible { outline: 3px solid #7aa2ff; outline-offset: 2px; }
+  .cwposter:focus-visible { outline: 3px solid var(--accent, #7aa2ff); outline-offset: 2px; }
   .cwglyph { font-size: 34px; }
   /* Resume-progress bar pinned to the poster's bottom edge. */
-  .cwbar { position: absolute; left: 0; bottom: 0; height: 4px; background: #7aa2ff; }
+  .cwbar { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--accent, #7aa2ff); }
   .cwdone { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px;
     border: 0; border-radius: 50%; cursor: pointer; font-size: 14px; line-height: 1;
-    color: #dfe7f5; background: rgba(10, 16, 28, 0.75); }
-  .cwdone:hover, .cwdone:focus-visible { background: #7aa2ff; color: #0a101c; outline: none; }
+    color: var(--text, #dfe7f5); background: rgba(10, 16, 28, 0.75); }
+  .cwdone:hover, .cwdone:focus-visible { background: var(--accent, #7aa2ff); color: #0a101c; outline: none; }
   .cwname { margin-top: 6px; font-size: 13px; font-weight: 600; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .cwsub { font-size: 12px; opacity: 0.65; white-space: nowrap; overflow: hidden;
