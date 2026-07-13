@@ -40,7 +40,9 @@ omnideck --help    # all subcommands; --version for the version
 
 ## Code style
 
-- Rust: `cargo fmt` and `cargo clippy` clean before submitting.
+- Rust: `cargo clippy` clean before submitting. The tree is hand-formatted in a compact
+  style (not `cargo fmt` output) and CI does not run rustfmt — match the surrounding code
+  rather than reformatting whole files, which would bury real changes in style churn.
 - Keep platform-specific code isolated (see `capability.rs`, the `#[cfg(unix)]` GPU
   re-exec) so a future Windows/macOS target stays cheap.
 - Prefer detection over hardcoding (e.g. catalog apps only appear if installed).

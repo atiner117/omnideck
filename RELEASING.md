@@ -6,8 +6,9 @@ The runbook for cutting a release. Versions are enforced in CI (`Cargo.toml` ==
 ## 0. Pre-flight (already automated)
 
 - `./packaging/test-session.sh` — the nested-gamescope harness must be 8/8.
-- CI green on `main` (fmt/clippy/test, cargo-deny, cargo-audit, version-sync,
-  ts-rs drift, AUR makepkg in a clean Arch container).
+- CI green on `main` (clippy + test, cargo-deny, cargo-audit, version-sync,
+  ts-rs drift, AUR makepkg in a clean Arch container). Formatting is *not* a CI gate —
+  the tree is hand-maintained in a compact style, not `cargo fmt` output.
 - A real-hardware session pass for anything the harness can't see: display mode
   (grep `session display mode` in `~/.local/state/omnideck/omnideck.<date>.log`),
   Steam launch → focus return, suspend, controllers.
