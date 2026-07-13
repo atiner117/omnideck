@@ -89,7 +89,8 @@ pub fn run() {
             commands::deck_open,
             commands::deck_list,
             commands::deck_show,
-            commands::deck_close
+            commands::deck_close,
+            gamepad::notify_activity
         ])
         .setup(|app| {
             let handle = app.handle().clone();
