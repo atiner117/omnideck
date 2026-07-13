@@ -19,7 +19,7 @@
 // argv itself is still visible in the local process list, accepted for v1 like the rest of
 // the single-user threat model.
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -78,6 +78,8 @@ pub struct MediaServerConfig {
     /// the gamescope session, where the RandR probe is unavailable and the profiles would
     /// otherwise fall back to 60. 0 (default) = auto-detect from the session's RandR mode.
     pub display_fps: f64,
+    /// Artwork disk-cache budget in MB (artwork_cache.rs LRU sweep). 0 (default) = 200 MB.
+    pub art_cache_mb: u64,
 }
 
 /// Manual impl (not derived): `auto_profiles` must default ON — the derive would pick
@@ -95,6 +97,7 @@ impl Default for MediaServerConfig {
             auto_profiles: true,
             audio_samplerate: 0,
             display_fps: 0.0,
+            art_cache_mb: 0,
         }
     }
 }
@@ -282,44 +285,30 @@ impl JellyfinServer {
         &self.token
     }
 
-    /// Fetch + disk-cache the primary poster; returns the cached path for omnideck://.
-    /// Extension comes from sniffing the bytes — the asset protocol serves by extension,
-    /// so the cache file must carry a real one.
+    /// The server base URL (scheme://host[:port], no trailing slash) — the trust anchor
+    /// for `commands::get_artwork`'s URL allowlist (artwork_cache::url_within_base).
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    /// The primary-poster URL for an item (the artwork_cache key for it).
+    pub fn poster_url(&self, id: &str) -> String {
+        format!("{}/Items/{id}/Images/Primary?maxWidth=480&quality=90", self.base)
+    }
+
+    /// Disk-cached primary poster; returns the local path for omnideck://. All the cache
+    /// mechanics (ETag revalidation, atomic writes, LRU budget) live in artwork_cache.rs.
     pub async fn poster(&self, id: &str) -> Option<PathBuf> {
-        let dir = poster_cache_dir()?;
-        let _ = std::fs::create_dir_all(&dir);
-        let safe = id.replace(['/', '.'], "_");
-        for ext in ["jpg", "png", "webp"] {
-            let p = dir.join(format!("{safe}.{ext}"));
-            if p.exists() {
-                return Some(p);
-            }
-        }
-        let url = format!("{}/Items/{id}/Images/Primary?maxWidth=480&quality=90", self.base);
-        let resp = crate::http::client()
-            .get(&url)
-            .header("X-Emby-Token", &self.token)
-            .send()
-            .await
-            .ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
-        let bytes = resp.bytes().await.ok()?;
-        // Only cache real images (sniff like the icon path does — servers can 200 an error page).
-        let ext = if bytes.starts_with(b"\xFF\xD8\xFF") {
-            "jpg"
-        } else if bytes.starts_with(b"\x89PNG") {
-            "png"
-        } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-            "webp"
-        } else {
-            return None;
-        };
-        let path = dir.join(format!("{safe}.{ext}"));
-        std::fs::write(&path, &bytes).ok()?;
-        prune(&dir, 100 * 1024 * 1024);
-        Some(path)
+        crate::artwork_cache::get(&self.poster_url(id), Some(("X-Emby-Token", &self.token))).await
+    }
+
+    /// Warm the poster cache for `ids` in the background (artwork_cache::prefetch, 4
+    /// workers): fired after the landing sections load so rail art is on disk before the
+    /// tiles scroll into view — no pop-in on the next cold boot either.
+    pub fn prefetch_posters(self: &Arc<Self>, ids: impl IntoIterator<Item = String>) {
+        let urls: Vec<String> = ids.into_iter().map(|id| self.poster_url(&id)).collect();
+        let auth = Some(("X-Emby-Token".to_string(), self.token.clone()));
+        crate::artwork_cache::prefetch(urls, auth, 4);
     }
 }
 
@@ -341,44 +330,6 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Poster cache root — also allowlisted in asset.rs so omnideck:// can serve it.
-pub fn poster_cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(base.join("omnideck/media"))
-}
-
-/// Oldest-first eviction once the cache outgrows its budget (steamgriddb.rs pattern).
-fn prune(dir: &Path, max_bytes: u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
-        .flatten()
-        .filter_map(|e| {
-            let m = e.metadata().ok()?;
-            if !m.is_file() {
-                return None;
-            }
-            Some((m.modified().ok()?, m.len(), e.path()))
-        })
-        .collect();
-    let total: u64 = files.iter().map(|(_, len, _)| len).sum();
-    if total <= max_bytes {
-        return;
-    }
-    files.sort_by_key(|(t, _, _)| *t);
-    let mut excess = total - max_bytes;
-    for (_, len, path) in files {
-        if std::fs::remove_file(&path).is_ok() {
-            excess = excess.saturating_sub(len);
-            if excess == 0 {
-                break;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -408,5 +359,14 @@ mod tests {
             toml::from_str("audio_samplerate = 96000\ndisplay_fps = 165.08").unwrap();
         assert_eq!(ms.audio_samplerate, 96000);
         assert!((ms.display_fps - 165.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn art_cache_mb_defaults_zero_and_parses() {
+        // Absent → 0 = "use artwork_cache's 200 MB default".
+        let ms: MediaServerConfig = toml::from_str("").unwrap();
+        assert_eq!(ms.art_cache_mb, 0);
+        let ms: MediaServerConfig = toml::from_str("art_cache_mb = 512").unwrap();
+        assert_eq!(ms.art_cache_mb, 512);
     }
 }
