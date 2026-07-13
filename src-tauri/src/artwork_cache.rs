@@ -283,10 +283,27 @@ async fn fetch(url: &str, auth: Option<(&str, &str)>, validators: Option<&Meta>)
         last_modified: header("last-modified"),
         fetched_unix: now_unix(),
     };
-    match resp.bytes().await {
-        Ok(b) if (b.len() as u64) <= MAX_IMAGE_BYTES => FetchResult::Fetched(b.to_vec(), meta),
-        _ => FetchResult::Failed,
+    match read_body_capped(resp, MAX_IMAGE_BYTES).await {
+        Some(b) => FetchResult::Fetched(b, meta),
+        None => FetchResult::Failed,
     }
+}
+
+/// Read a response body, enforcing `cap` WHILE streaming: a declared Content-Length over
+/// the cap is rejected before the first byte, and an over-long (or lying/chunked) body is
+/// abandoned at the moment it crosses the cap — never buffered whole and checked after.
+async fn read_body_capped(mut resp: reqwest::Response, cap: u64) -> Option<Vec<u8>> {
+    if resp.content_length().is_some_and(|l| l > cap) {
+        return None;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.ok()? {
+        if buf.len() as u64 + chunk.len() as u64 > cap {
+            return None;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Some(buf)
 }
 
 /// Warm the cache for `urls` in the background with `concurrency` parallel workers.
@@ -568,6 +585,43 @@ mod tests {
         assert_eq!(p4, p);
         assert_eq!(hits.load(Ordering::SeqCst), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn body_cap_is_enforced_while_streaming() {
+        use std::io::{Read, Write};
+
+        // Loopback server sending a 20-byte body with an honest Content-Length.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { break };
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let body = b"\xFF\xD8\xFF17-more-jpeg-byte";
+                let mut r = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes();
+                r.extend_from_slice(body);
+                let _ = s.write_all(&r);
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}/art");
+        let fetch_with_cap = |cap: u64| {
+            tauri::async_runtime::block_on(async {
+                let resp = crate::http::client().get(&url).send().await.unwrap();
+                read_body_capped(resp, cap).await
+            })
+        };
+        // Over the cap → rejected up front off the declared length, nothing buffered.
+        assert_eq!(fetch_with_cap(10), None);
+        // At/over the body size → full body comes through.
+        assert_eq!(fetch_with_cap(20).as_deref(), Some(&b"\xFF\xD8\xFF17-more-jpeg-byte"[..]));
+        assert_eq!(fetch_with_cap(1024).map(|b| b.len()), Some(20));
     }
 
     #[test]
