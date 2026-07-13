@@ -60,6 +60,9 @@ jobs:
       - name: Svelte type-check
         run: bun run check
 
+      - name: Frontend unit tests
+        run: bun run test
+
       - name: Frontend build
         run: bun run build
 

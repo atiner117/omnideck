@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "$lib/backend";
   import type { App, Game, Config, Capability, MediaInfo, Settings, LiveApp } from "$lib/backend";
+  import { clamp, railWindow } from "$lib/nav";
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
   import Wizard from "$lib/Wizard.svelte";
@@ -325,8 +326,9 @@
   // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
   // same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
-  let winLo = $derived(Math.max(0, focus - WIN_ABOVE));
-  let winItems = $derived(items.slice(winLo, focus + WIN_BELOW));
+  let winRange = $derived(railWindow(items.length, focus, WIN_ABOVE, WIN_BELOW));
+  let winLo = $derived(winRange.lo);
+  let winItems = $derived(items.slice(winRange.lo, winRange.hi));
   let scaleNum = $derived(
     cfg?.settings?.ui_scale === "custom"
       ? (cfg?.settings?.ui_scale_custom ?? 1.6)
@@ -377,7 +379,6 @@
   }
 
   function tileName(t: Tile) { return t.kind === "app" ? t.app.name : t.game.name; }
-  function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
   let lastNav = 0;
   function navGate() { const n = performance.now(); if (n - lastNav < 100) return false; lastNav = n; return true; }
 
