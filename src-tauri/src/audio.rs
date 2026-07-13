@@ -3,8 +3,15 @@
 // back to `pactl list short sinks`. All invocations are argv-only (no shell), and
 // `audio_set_output` only accepts a sink name that came from our own enumeration, so a
 // crafted frontend value can never reach pactl.
+//
+// Every pactl invocation is bounded by `PACTL_TIMEOUT` (a wedged sound-server socket
+// otherwise hangs the child forever), and the commands are async + spawn_blocking so
+// even the bounded wait never runs on the UI/IPC thread.
 
 use serde::Serialize;
+use std::io::Read;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct AudioSink {
@@ -16,19 +23,75 @@ pub struct AudioSink {
     pub is_default: bool,
 }
 
-fn pactl(args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("pactl")
+/// Hard cap on any single pactl invocation. pactl talks to the local PipeWire/Pulse
+/// socket and normally answers in milliseconds; if the sound server wedges, an unbounded
+/// `.output()`/`.status()` wait would hang the IPC call forever.
+const PACTL_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Debug)]
+struct CmdOutput {
+    success: bool,
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run `cmd args…` with captured output, killing it after `timeout`. The pipes are
+/// drained on their own threads so a chatty child can't fill the pipe buffer and
+/// deadlock against the wait loop; the poll interval only adds ~20 ms of latency.
+fn run_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> Result<CmdOutput, String> {
+    let mut child = std::process::Command::new(cmd)
         .args(args)
-        .output()
-        .map_err(|e| format!("failed to run pactl: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "`pactl {}` failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to run {cmd}: {e}"))?;
+
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let out_thread = drain(child.stdout.take());
+    let err_thread = drain(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait(); // reap; closes the pipes so the drain threads finish
+                return Err(format!(
+                    "`{cmd} {}` timed out after {}s — sound server not responding?",
+                    args.join(" "),
+                    timeout.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("failed waiting for {cmd}: {e}"));
+            }
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out_thread.join().unwrap_or_default()).into_owned();
+    let stderr = String::from_utf8_lossy(&err_thread.join().unwrap_or_default()).into_owned();
+    Ok(CmdOutput { success: status.success(), code: status.code(), stdout, stderr })
+}
+
+fn pactl(args: &[&str]) -> Result<String, String> {
+    let out = run_with_timeout("pactl", args, PACTL_TIMEOUT)?;
+    if !out.success {
+        return Err(format!("`pactl {}` failed: {}", args.join(" "), out.stderr.trim()));
+    }
+    Ok(out.stdout)
 }
 
 /// Parse `pactl -f json list sinks` output. None if the payload isn't the expected
@@ -90,25 +153,36 @@ fn validate_sink_id<'a>(sinks: &'a [AudioSink], id: &str) -> Result<&'a AudioSin
         .ok_or_else(|| format!("unknown audio sink: {id}"))
 }
 
-#[tauri::command]
-pub fn audio_outputs() -> Result<Vec<AudioSink>, String> {
-    list_sinks()
+fn set_output(id: &str) -> Result<(), String> {
+    let sinks = list_sinks()?;
+    let sink = validate_sink_id(&sinks, id)?;
+    let out = run_with_timeout("pactl", &["set-default-sink", &sink.name], PACTL_TIMEOUT)?;
+    if out.success {
+        Ok(())
+    } else {
+        let code = out.code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
+        Err(format!(
+            "`pactl set-default-sink {}` failed (exit {code}): {}",
+            sink.name,
+            out.stderr.trim()
+        ))
+    }
 }
 
 #[tauri::command]
-pub fn audio_set_output(id: String) -> Result<(), String> {
-    let sinks = list_sinks()?;
-    let sink = validate_sink_id(&sinks, &id)?;
-    let status = std::process::Command::new("pactl")
-        .args(["set-default-sink", &sink.name])
-        .status()
-        .map_err(|e| format!("failed to run pactl: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
-        Err(format!("`pactl set-default-sink {}` failed (exit {code})", sink.name))
-    }
+pub async fn audio_outputs() -> Result<Vec<AudioSink>, String> {
+    // Blocking pool: pactl is fast when healthy, but even the bounded 3 s worst case
+    // must not run on the IPC thread.
+    tauri::async_runtime::spawn_blocking(list_sinks)
+        .await
+        .map_err(|e| format!("audio task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn audio_set_output(id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || set_output(&id))
+        .await
+        .map_err(|e| format!("audio task failed: {e}"))?
 }
 
 #[cfg(test)]
@@ -160,5 +234,26 @@ mod tests {
         assert!(validate_sink_id(&sinks, "alsa_output.pci-0000_0b_00.4.analog-stereo").is_ok());
         assert!(validate_sink_id(&sinks, "evil; rm -rf /").is_err());
         assert!(validate_sink_id(&sinks, "").is_err());
+    }
+
+    #[test]
+    fn run_with_timeout_captures_output() {
+        let out = run_with_timeout("echo", &["hello"], Duration::from_secs(5)).unwrap();
+        assert!(out.success);
+        assert_eq!(out.stdout.trim(), "hello");
+    }
+
+    #[test]
+    fn run_with_timeout_kills_a_hung_child() {
+        let started = Instant::now();
+        let err = run_with_timeout("sleep", &["30"], Duration::from_millis(150)).unwrap_err();
+        assert!(err.contains("timed out"), "got: {err}");
+        // Killed promptly — nowhere near the child's 30 s, and no zombie left waiting.
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn run_with_timeout_reports_spawn_failure() {
+        assert!(run_with_timeout("omnideck-no-such-binary", &[], Duration::from_secs(1)).is_err());
     }
 }
