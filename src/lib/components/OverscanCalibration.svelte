@@ -88,10 +88,13 @@
 </div>
 
 <style>
-  /* Above every other overlay (Modal backdrop/dialog are z 10/11): calibration is launched
-     from Settings with nothing else open, but it must win if that ever changes. */
+  /* z 50: above every other fixed surface — deck is 41, deck-scrim/error-banner 40,
+     Wizard 20, Modal 10/11. The banner is NOT a roster overlay (it can co-occur with
+     calibration, e.g. a Steam library error at boot), so a z tie loses to its later
+     DOM position; calibration's whole job is clean edges, so it must paint on top.
+     If a new surface ever needs to beat this, bump deliberately — don't tie. */
   .ovcal {
-    position: fixed; inset: 0; z-index: 40;
+    position: fixed; inset: 0; z-index: 50;
     background: #05070b; /* opaque: the frame/markers must be the only thing near the edges */
     display: grid; place-items: center;
     color: #eef2f8; outline: none;
