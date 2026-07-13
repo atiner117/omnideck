@@ -60,6 +60,7 @@ trait Player {
     fn play_pause(&self) -> zbus::Result<()>;
     fn next(&self) -> zbus::Result<()>;
     fn previous(&self) -> zbus::Result<()>;
+    fn stop(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn playback_status(&self) -> zbus::Result<String>;
     #[zbus(property)]
@@ -137,6 +138,7 @@ pub async fn control(action: &str) -> Result<(), String> {
         "play-pause" => player.play_pause().await,
         "next" => player.next().await,
         "previous" => player.previous().await,
+        "stop" => player.stop().await,
         _ => return Err(format!("unknown media action: {action}")),
     }
     .map_err(|e| e.to_string())

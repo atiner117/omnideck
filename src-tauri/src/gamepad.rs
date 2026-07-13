@@ -14,6 +14,25 @@ struct GamepadEvent {
     name: String,
 }
 
+/// Synthetic pad input (the phone remote, remote.rs): emit the same `gamepad-event`
+/// press/release pair a physical button produces — `code` uses gilrs debug names
+/// ("DPadUp", "South", …) so the webview's existing input handling can't tell the
+/// difference and no new frontend path is needed.
+pub fn emit_synthetic_button(handle: &tauri::AppHandle, code: &str) {
+    for (kind, value) in [("button_pressed", 1.0), ("button_released", 0.0)] {
+        let _ = handle.emit(
+            "gamepad-event",
+            GamepadEvent {
+                kind: kind.into(),
+                code: code.into(),
+                value,
+                gamepad: "remote".into(),
+                name: "Phone Remote".into(),
+            },
+        );
+    }
+}
+
 pub fn gamepad_loop(handle: tauri::AppHandle) {
     let mut gilrs = match gilrs::Gilrs::new() {
         Ok(g) => g,

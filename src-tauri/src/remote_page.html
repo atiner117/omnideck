@@ -1,0 +1,141 @@
+<!doctype html>
+<!-- OmniDeck phone remote — served by remote.rs at `/`. Fully self-contained (inline
+     CSS/JS, no CDN): the phone may have no internet, only LAN. The token arrives in the
+     URL #fragment from the pairing QR (fragments never leave the browser), is stored in
+     localStorage, and is sent as an X-Remote-Token header on every API call. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="theme-color" content="#05070b">
+<title>OmniDeck Remote</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: #05070b; color: #e8edf2;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; gap: 14px;
+    padding: 16px; max-width: 420px; margin: 0 auto;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation;
+  }
+  header { display: flex; align-items: center; gap: 10px; }
+  header h1 { font-size: 18px; font-weight: 600; flex: 1; }
+  #dot { width: 12px; height: 12px; border-radius: 50%; background: #666; flex: none;
+         transition: background .2s; }
+  #dot.ok { background: #3ddc84; }
+  #dot.bad { background: #ff5252; }
+  #np { font-size: 13px; color: #9fb0c0; min-height: 2.4em; line-height: 1.2em;
+        overflow: hidden; }
+  #np b { color: #e8edf2; font-weight: 600; }
+  .row { display: grid; gap: 10px; }
+  .transport { grid-template-columns: 1fr 1.6fr 1fr; }
+  .volume { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  button {
+    appearance: none; border: 1px solid #1d2733; border-radius: 14px;
+    background: #0d141d; color: #e8edf2; font-size: 22px; font-weight: 600;
+    min-height: 64px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .08s, transform .08s;
+  }
+  button:active { background: #17324a; transform: scale(.96); }
+  button.accent { background: #123044; border-color: #1e5a7d; color: #4cc2ff; }
+  .pad { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr;
+         gap: 10px; aspect-ratio: 1.15; }
+  .pad button { min-height: 0; font-size: 24px; }
+  .pad .select { background: #123044; border-color: #1e5a7d; color: #4cc2ff; font-size: 16px;
+                 letter-spacing: .06em; }
+  .pad .blank { visibility: hidden; }
+  #pair { font-size: 13px; color: #ffb45e; background: #221a0d; border: 1px solid #4a3517;
+          border-radius: 10px; padding: 10px 12px; display: none; }
+  footer { font-size: 11px; color: #55636f; text-align: center; margin-top: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OmniDeck Remote</h1>
+  <div id="dot" title="connection"></div>
+</header>
+<div id="pair">Not paired — open this page from the QR code / pairing link shown in
+OmniDeck's settings (it carries the access token).</div>
+<div id="np">&nbsp;</div>
+
+<div class="row transport">
+  <button data-api="/api/transport/previous" aria-label="previous">&#9198;</button>
+  <button data-api="/api/transport/play-pause" class="accent" aria-label="play / pause">&#9199;</button>
+  <button data-api="/api/transport/next" aria-label="next">&#9197;</button>
+</div>
+<div class="row volume">
+  <button data-api="/api/volume/down" aria-label="volume down">&#128265;</button>
+  <button data-api="/api/volume/mute" aria-label="mute">&#128263;</button>
+  <button data-api="/api/volume/up" aria-label="volume up">&#128266;</button>
+  <button data-api="/api/transport/stop" aria-label="stop">&#9209;</button>
+</div>
+<div class="pad">
+  <button class="blank"></button>
+  <button data-api="/api/nav/up" aria-label="up">&#9650;</button>
+  <button class="blank"></button>
+  <button data-api="/api/nav/left" aria-label="left">&#9664;</button>
+  <button data-api="/api/nav/select" class="select" aria-label="select">OK</button>
+  <button data-api="/api/nav/right" aria-label="right">&#9654;</button>
+  <button data-api="/api/nav/back" aria-label="back" style="font-size:16px">BACK</button>
+  <button data-api="/api/nav/down" aria-label="down">&#9660;</button>
+  <button class="blank"></button>
+</div>
+<footer>navigation drives OmniDeck's own UI &middot; volume &amp; playback work everywhere</footer>
+
+<script>
+(() => {
+  const KEY = 'omnideck-remote-token';
+  // Pairing: token rides in the #fragment of the QR URL. Persist it, then scrub the
+  // fragment from the address bar so it isn't shoulder-surfable / kept in history.
+  let token = '';
+  if (location.hash.length > 1) {
+    token = decodeURIComponent(location.hash.slice(1));
+    try { localStorage.setItem(KEY, token); } catch (_) {}
+    history.replaceState(null, '', location.pathname);
+  } else {
+    try { token = localStorage.getItem(KEY) || ''; } catch (_) {}
+  }
+
+  const dot = document.getElementById('dot');
+  const np = document.getElementById('np');
+  const pair = document.getElementById('pair');
+  pair.style.display = token ? 'none' : 'block';
+
+  function setState(ok) {
+    dot.className = ok === null ? '' : ok ? 'ok' : 'bad';
+  }
+
+  async function api(path, method) {
+    try {
+      const r = await fetch(path, { method, headers: { 'X-Remote-Token': token } });
+      if (r.status === 401) { pair.style.display = 'block'; setState(false); return null; }
+      setState(r.ok);
+      return r.ok ? r.json() : null;
+    } catch (_) { setState(false); return null; }
+  }
+
+  for (const b of document.querySelectorAll('button[data-api]')) {
+    b.addEventListener('click', () => {
+      if (navigator.vibrate) navigator.vibrate(8);
+      api(b.dataset.api, 'POST');
+    });
+  }
+
+  async function refresh() {
+    const s = await api('/api/status', 'GET');
+    if (!s) { np.innerHTML = '&nbsp;'; return; }
+    const m = s.now_playing;
+    np.innerHTML = m
+      ? `<b>${esc(m.title)}</b>${m.artist ? ' — ' + esc(m.artist) : ''}<br>${esc(m.status)} · ${esc(m.player)}`
+      : 'Nothing playing';
+  }
+  const esc = (t) => String(t).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+
+  refresh();
+  setInterval(refresh, 4000);
+})();
+</script>
+</body>
+</html>

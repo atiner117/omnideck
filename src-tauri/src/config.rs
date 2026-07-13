@@ -217,6 +217,10 @@ pub struct Config {
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
     #[serde(default)]
     pub media_server: crate::media_server::MediaServerConfig,
+    /// `[remote]` — phone-as-remote LAN HTTP server (remote.rs). Off by default; the
+    /// token is generated on first enable and masked over IPC like media_server.token.
+    #[serde(default)]
+    pub remote: crate::remote::RemoteConfig,
     pub apps: Vec<apps::App>,
     /// Favorited tile ids (shown on the Home category).
     pub favorites: Vec<String>,
@@ -242,6 +246,7 @@ impl Default for Config {
             config_version: CONFIG_VERSION,
             settings: Settings::default(),
             media_server: Default::default(),
+            remote: Default::default(),
             input: Default::default(),
             launch_overrides: Default::default(),
             apps: Vec::new(),
@@ -274,6 +279,7 @@ fn defaults() -> Config {
             ..Default::default()
         },
         media_server: Default::default(),
+        remote: Default::default(),
         input: Default::default(),
         launch_overrides: Default::default(),
         apps: apps::list(),
@@ -320,6 +326,7 @@ pub fn load_or_create() -> Config {
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
         cfg.media_server.normalize();
+        cfg.remote.normalize();
         cfg.input.normalize();
         for ov in cfg.launch_overrides.values_mut() {
             ov.normalize();
@@ -385,6 +392,11 @@ pub fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
     mutate_and_save(|cfg| cfg.recent_apps = recent_apps)
 }
 
+/// Persist a change to the `[remote]` table (phone-remote enable/token — remote.rs).
+pub fn update_remote(f: impl FnOnce(&mut crate::remote::RemoteConfig)) -> Result<(), String> {
+    mutate_and_save(|cfg| f(&mut cfg.remote))
+}
+
 // ---- Backup / restore (roadmap #5) ----
 //
 // config.toml accumulates curated state (custom launchers, favorites, recents, media-server
@@ -401,6 +413,7 @@ fn sanitize_for_backup(mut cfg: Config, include_credentials: bool) -> Config {
     if !include_credentials {
         cfg.media_server.token = String::new();
         cfg.settings.steamgriddb_key = String::new();
+        cfg.remote.token = String::new();
     }
     cfg
 }
@@ -415,6 +428,7 @@ fn parse_backup(text: &str) -> Result<Config, String> {
         })?;
     cfg.settings.normalize();
     cfg.media_server.normalize();
+    cfg.remote.normalize();
     cfg.config_path = String::new();
     cfg.config_error = None;
     Ok(cfg)
@@ -457,6 +471,9 @@ pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
         }
         if cfg.settings.steamgriddb_key.is_empty() {
             cfg.settings.steamgriddb_key = current.settings.steamgriddb_key;
+        }
+        if cfg.remote.token.is_empty() {
+            cfg.remote.token = current.remote.token;
         }
     }
 
@@ -502,18 +519,21 @@ mod tests {
         let mut cfg = Config::default();
         cfg.settings.steamgriddb_key = "sgdb-secret".into();
         cfg.media_server.token = "jf-secret".into();
+        cfg.remote.token = "remotesecret".into();
         cfg.config_path = "/home/x/.config/omnideck/config.toml".into();
         cfg.config_error = Some("boom".into());
 
         let clean = sanitize_for_backup(cfg.clone(), false);
         assert_eq!(clean.settings.steamgriddb_key, "");
         assert_eq!(clean.media_server.token, "");
+        assert_eq!(clean.remote.token, "");
         assert_eq!(clean.config_path, "");
         assert!(clean.config_error.is_none());
 
         let keep = sanitize_for_backup(cfg, true);
         assert_eq!(keep.settings.steamgriddb_key, "sgdb-secret");
         assert_eq!(keep.media_server.token, "jf-secret");
+        assert_eq!(keep.remote.token, "remotesecret");
         assert_eq!(keep.config_path, ""); // IPC-only fields always stripped
     }
 

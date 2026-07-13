@@ -3,6 +3,7 @@ import type { App } from "./App";
 import type { InputConfig } from "./InputConfig";
 import type { LaunchOverride } from "./LaunchOverride";
 import type { MediaServerConfig } from "./MediaServerConfig";
+import type { RemoteConfig } from "./RemoteConfig";
 import type { Settings } from "./Settings";
 
 export type Config = { 
@@ -25,7 +26,12 @@ launch_overrides?: { [key in string]: LaunchOverride },
  * `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
  * unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
  */
-media_server: MediaServerConfig, apps: Array<App>, 
+media_server: MediaServerConfig, 
+/**
+ * `[remote]` — phone-as-remote LAN HTTP server (remote.rs). Off by default; the
+ * token is generated on first enable and masked over IPC like media_server.token.
+ */
+remote: RemoteConfig, apps: Array<App>, 
 /**
  * Favorited tile ids (shown on the Home category).
  */
