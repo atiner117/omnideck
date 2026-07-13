@@ -40,6 +40,25 @@ pub struct MediaItem {
     pub played_pct: Option<f64>,
     pub runtime_mins: Option<u64>,
     pub series: Option<String>, // parent series name for episodes
+    /// Resume point in seconds (from UserData.PlaybackPositionTicks; 1 tick = 100 ns).
+    /// None/0 = start from the beginning.
+    pub position_secs: Option<u64>,
+    /// Fully-watched flag (UserData.Played) — drives the watched checkmark + mark_unwatched.
+    pub played: Option<bool>,
+}
+
+/// Jellyfin item/user ids are GUIDs — 32 hex chars, sometimes dashed. Gate every id the
+/// FRONTEND supplies before it's interpolated into a URL path, so a crafted id can't smuggle
+/// path segments (`../`) or query text into a request the token authenticates.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Jellyfin ticks (100 ns) → whole seconds, rounding down.
+pub fn ticks_to_secs(ticks: u64) -> u64 {
+    ticks / 10_000_000
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -186,17 +205,36 @@ fn shim_pairing() -> Option<JellyfinServer> {
 }
 
 impl JellyfinServer {
-    async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
+    /// One authenticated request with a bounded retry: a single re-send after 250 ms on
+    /// TRANSIENT transport errors only (connect refused mid-restart, timeout on a sleepy
+    /// NAS spin-up). HTTP error statuses are returned immediately — a 401/404 won't get
+    /// better by asking again. Both call sites (GET reads, PlayedItems POST/DELETE) are
+    /// idempotent, so the retry can never double-apply anything.
+    async fn request(&self, method: reqwest::Method, path: &str) -> Result<reqwest::Response, String> {
         let url = format!("{}{path}", self.base);
-        let resp = crate::http::client()
-            .get(&url)
-            .header("X-Emby-Token", &self.token)
-            .send()
-            .await
-            .map_err(|e| format!("media server unreachable: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("media server: HTTP {} on {path}", resp.status()));
+        for attempt in 0..2 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            let sent = crate::http::client()
+                .request(method.clone(), &url)
+                .header("X-Emby-Token", &self.token)
+                .send()
+                .await;
+            match sent {
+                Ok(resp) if resp.status().is_success() => return Ok(resp),
+                Ok(resp) => return Err(format!("media server: HTTP {} on {path}", resp.status())),
+                Err(e) if attempt == 0 && (e.is_connect() || e.is_timeout()) => {
+                    tracing::debug!("media: transient error on {path}, retrying once: {e}");
+                }
+                Err(e) => return Err(format!("media server unreachable: {e}")),
+            }
         }
+        unreachable!("retry loop always returns")
+    }
+
+    async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
+        let resp = self.request(reqwest::Method::GET, path).await?;
         resp.json().await.map_err(|e| format!("media server: bad JSON: {e}"))
     }
 
@@ -209,7 +247,12 @@ impl JellyfinServer {
         }
         let me = self.get("/Users/Me").await?;
         let id = me.get("Id").and_then(|v| v.as_str()).map(str::to_string);
-        let _ = self.user_id.set(id.clone());
+        // Cache only a SUCCESSFUL resolve: a 200 with no Id (reverse proxy served an error
+        // page as JSON, wrong endpoint behind a rewrite) must not poison the OnceLock until
+        // restart — leave it unset so the next call re-asks.
+        if id.is_some() {
+            let _ = self.user_id.set(id.clone());
+        }
         id.ok_or_else(|| "media server: couldn't resolve user".into())
     }
 
@@ -236,12 +279,12 @@ impl JellyfinServer {
             })
             .unwrap_or_default();
         let resume = self
-            .get(&format!("/Users/{user}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview"))
+            .get(&resume_path(&user))
             .await
             .map(|v| items_of(&v["Items"]))
             .unwrap_or_default();
         let latest = self
-            .get(&format!("/Users/{user}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series"))
+            .get(&latest_path(&user))
             .await
             .map(|v| items_of(&v)) // /Latest returns a bare array
             .unwrap_or_default();
@@ -254,8 +297,38 @@ impl JellyfinServer {
         Ok(MediaSections { server_name: name, resume, latest, libraries })
     }
 
+    /// The Continue Watching rail: in-progress video items with their resume positions
+    /// (`position_secs` from UserData.PlaybackPositionTicks).
+    pub async fn continue_watching(&self) -> Result<Vec<MediaItem>, String> {
+        let user = self.user().await?;
+        let v = self.get(&resume_path(&user)).await?;
+        Ok(items_of(&v["Items"]))
+    }
+
+    /// Recently-added movies/series (the "Latest" shelf). `/Items/Latest` returns a bare
+    /// array, not an `{ Items: [...] }` envelope like the other listing endpoints.
+    pub async fn recently_added(&self) -> Result<Vec<MediaItem>, String> {
+        let user = self.user().await?;
+        let v = self.get(&latest_path(&user)).await?;
+        Ok(items_of(&v))
+    }
+
+    /// Set/clear the fully-watched flag: POST marks played, DELETE marks unplayed
+    /// (`/Users/{user}/PlayedItems/{id}` — both are idempotent, safe under the retry).
+    pub async fn set_played(&self, id: &str, played: bool) -> Result<(), String> {
+        if !valid_id(id) {
+            return Err("invalid media item id".into());
+        }
+        let user = self.user().await?;
+        let method = if played { reqwest::Method::POST } else { reqwest::Method::DELETE };
+        self.request(method, &played_path(&user, id)).await.map(|_| ())
+    }
+
     /// Children of a library or series/season — one call covers every drill-down level.
     pub async fn browse(&self, parent: &str) -> Result<Vec<MediaItem>, String> {
+        if !valid_id(parent) {
+            return Err("invalid media item id".into());
+        }
         let user = self.user().await?;
         // Non-recursive keeps the natural hierarchy (Series → Seasons → Episodes) and
         // matches how Jellyfin's own clients browse.
@@ -286,6 +359,9 @@ impl JellyfinServer {
     /// Extension comes from sniffing the bytes — the asset protocol serves by extension,
     /// so the cache file must carry a real one.
     pub async fn poster(&self, id: &str) -> Option<PathBuf> {
+        if !valid_id(id) {
+            return None;
+        }
         let dir = poster_cache_dir()?;
         let _ = std::fs::create_dir_all(&dir);
         let safe = id.replace(['/', '.'], "_");
@@ -323,11 +399,32 @@ impl JellyfinServer {
     }
 }
 
+// URL-path builders for the user-scoped endpoints, split out so tests can pin the exact
+// request shapes without a live server. `user` comes from the server's own /Users/Me (or the
+// shim pairing), never the frontend.
+fn resume_path(user: &str) -> String {
+    format!("/Users/{user}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview")
+}
+
+fn latest_path(user: &str) -> String {
+    format!("/Users/{user}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series")
+}
+
+fn played_path(user: &str, id: &str) -> String {
+    format!("/Users/{user}/PlayedItems/{id}")
+}
+
 fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
     v.as_array()
         .map(|a| {
             a.iter()
                 .filter_map(|i| {
+                    // A 0-tick position means "no resume point" — map it to None so the
+                    // frontend's `position_secs != null` check is the whole resume test.
+                    let position_secs = i["UserData"]["PlaybackPositionTicks"]
+                        .as_u64()
+                        .map(ticks_to_secs)
+                        .filter(|s| *s > 0);
                     Some(MediaItem {
                         id: i["Id"].as_str()?.to_string(),
                         name: i["Name"].as_str()?.to_string(),
@@ -336,6 +433,8 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
                         played_pct: i["UserData"]["PlayedPercentage"].as_f64(),
                         runtime_mins: i["RunTimeTicks"].as_u64().map(|t| t / 600_000_000),
                         series: i["SeriesName"].as_str().map(str::to_string),
+                        position_secs,
+                        played: i["UserData"]["Played"].as_bool(),
                     })
                 })
                 .collect()
@@ -383,7 +482,82 @@ fn prune(dir: &Path, max_bytes: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::MediaServerConfig;
+    use super::{
+        items_of, latest_path, played_path, resume_path, ticks_to_secs, valid_id,
+        MediaServerConfig,
+    };
+
+    #[test]
+    fn ticks_convert_to_whole_seconds() {
+        assert_eq!(ticks_to_secs(0), 0);
+        assert_eq!(ticks_to_secs(10_000_000), 1); // 1 s exactly
+        assert_eq!(ticks_to_secs(9_999_999), 0); // sub-second rounds down
+        assert_eq!(ticks_to_secs(600_000_000), 60); // 1 min
+        assert_eq!(ticks_to_secs(36_000_000_000), 3600); // 1 h
+        // A real Jellyfin resume point: 47 min 30 s into a movie.
+        assert_eq!(ticks_to_secs(28_500_000_000), 2850);
+    }
+
+    #[test]
+    fn id_validation_accepts_guids_and_rejects_url_metacharacters() {
+        assert!(valid_id("f137a2dd21bbc1b99aa5c0f6bf02a805")); // undashed GUID (Jellyfin's usual)
+        assert!(valid_id("f137a2dd-21bb-c1b9-9aa5-c0f6bf02a805")); // dashed form
+        assert!(!valid_id("")); // empty
+        assert!(!valid_id("../Users/admin")); // path traversal
+        assert!(!valid_id("abc?api_key=steal")); // query injection
+        assert!(!valid_id("abc/def")); // extra path segment
+        assert!(!valid_id("abc def")); // whitespace
+        assert!(!valid_id(&"a".repeat(65))); // over the GUID-shaped budget
+    }
+
+    #[test]
+    fn user_scoped_paths_have_the_documented_shapes() {
+        let u = "f137a2dd21bbc1b99aa5c0f6bf02a805";
+        assert_eq!(
+            resume_path(u),
+            format!("/Users/{u}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview")
+        );
+        assert_eq!(
+            latest_path(u),
+            format!("/Users/{u}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series")
+        );
+        assert_eq!(played_path(u, "abc123"), format!("/Users/{u}/PlayedItems/abc123"));
+    }
+
+    #[test]
+    fn items_parse_resume_position_and_played_flag() {
+        let v = serde_json::json!([
+            {
+                "Id": "aaa", "Name": "Halfway Movie", "Type": "Movie",
+                "RunTimeTicks": 72_000_000_000u64, // 2 h
+                "UserData": {
+                    "PlaybackPositionTicks": 36_000_000_000u64, // 1 h in
+                    "PlayedPercentage": 50.0,
+                    "Played": false
+                }
+            },
+            {
+                "Id": "bbb", "Name": "Finished Episode", "Type": "Episode",
+                "SeriesName": "Some Show",
+                "UserData": { "PlaybackPositionTicks": 0, "Played": true }
+            },
+            { "Id": "ccc", "Name": "Untouched", "Type": "Movie" }
+        ]);
+        let items = items_of(&v);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].position_secs, Some(3600));
+        assert_eq!(items[0].played_pct, Some(50.0));
+        assert_eq!(items[0].played, Some(false));
+        assert_eq!(items[0].runtime_mins, Some(120));
+        // 0 ticks = no resume point, not "resume at 0:00".
+        assert_eq!(items[1].position_secs, None);
+        assert_eq!(items[1].played, Some(true));
+        assert_eq!(items[1].series.as_deref(), Some("Some Show"));
+        // No UserData at all → all watch-state fields None.
+        assert_eq!(items[2].position_secs, None);
+        assert_eq!(items[2].played, None);
+        assert_eq!(items[2].played_pct, None);
+    }
 
     #[test]
     fn auto_profiles_defaults_on_for_configs_that_dont_mention_it() {
