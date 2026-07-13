@@ -68,6 +68,7 @@ const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
 )]
 trait Player {
     fn play_pause(&self) -> zbus::Result<()>;
+    fn pause(&self) -> zbus::Result<()>;
     fn next(&self) -> zbus::Result<()>;
     fn previous(&self) -> zbus::Result<()>;
     #[zbus(property)]
@@ -183,6 +184,33 @@ pub async fn control(action: &str) -> Result<(), String> {
         Ok(r) => r.map_err(|e| e.to_string()),
         Err(_) => Err("player did not respond (it may be frozen while hidden)".into()),
     }
+}
+
+/// Pause every player that is currently Playing (the sleep timer's expiry action). Unlike
+/// `control` this fans out to ALL Playing players, not just the tracked one — falling
+/// asleep to music while a paused video sits behind it must silence the music, whichever
+/// the Now Playing card happens to show. Pause (not Stop, not kill): position is kept, so
+/// resuming in the morning is one button. Best-effort per player — one dead proxy mustn't
+/// keep the others playing all night. Returns how many players were actually paused.
+/// (Players with no MPRIS presence — e.g. mpv without an MPRIS plugin — are not reachable
+/// from here; that gap is documented, not papered over with a kill.)
+pub async fn pause_all() -> usize {
+    let Some(conn) = CONN.get() else { return 0 };
+    let playing: Vec<String> = crate::sync::lock_or_recover(state(), "mpris.players")
+        .iter()
+        .filter(|(_, p)| p.status == "Playing")
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut paused = 0;
+    for name in playing {
+        let Ok(builder) = PlayerProxy::builder(conn).destination(name.clone()) else { continue };
+        let Ok(player) = builder.build().await else { continue };
+        match player.pause().await {
+            Ok(()) => paused += 1,
+            Err(e) => tracing::warn!("sleep timer: pausing {name} failed: {e}"),
+        }
+    }
+    paused
 }
 
 /// Fetch a player's full state once (on appear / on a Metadata-invalidated signal).

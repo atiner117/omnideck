@@ -31,6 +31,7 @@ mod navpad;
 mod pin;
 mod proc;
 mod session;
+mod sleep_timer;
 mod steamgriddb;
 mod switcher;
 mod sync;
@@ -103,7 +104,10 @@ pub fn run() {
             pin::set_pin,
             pin::verify_pin,
             pin::set_locked_categories,
-            commands::check_update
+            commands::check_update,
+            commands::set_sleep_timer,
+            commands::cancel_sleep_timer,
+            commands::get_sleep_timer
         ])
         .setup(|app| {
             let handle = app.handle().clone();
