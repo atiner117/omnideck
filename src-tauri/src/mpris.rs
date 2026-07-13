@@ -159,8 +159,27 @@ pub async fn control(action: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Cap on the D-Bus round-trips in `fetch_player`. The watcher pumps BOTH signal streams
+/// from one task, so a wedged player (stopped process, hung browser) that never answers a
+/// method call would otherwise stall owner-change AND property handling forever. 2 s is
+/// generous for a local bus round-trip; a player that can't answer by then has no useful
+/// state to show anyway.
+const FETCH_PLAYER_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Fetch a player's full state once (on appear / on a Metadata-invalidated signal).
+/// Bounded by `FETCH_PLAYER_TIMEOUT` — a non-responding player yields None instead of
+/// blocking the watcher loop.
 async fn fetch_player(conn: &zbus::Connection, name: &str, owner: String) -> Option<PlayerState> {
+    match tokio::time::timeout(FETCH_PLAYER_TIMEOUT, fetch_player_inner(conn, name, owner)).await {
+        Ok(p) => p,
+        Err(_) => {
+            tracing::debug!("mpris: {name} did not answer within {FETCH_PLAYER_TIMEOUT:?} — skipping");
+            None
+        }
+    }
+}
+
+async fn fetch_player_inner(conn: &zbus::Connection, name: &str, owner: String) -> Option<PlayerState> {
     let player = PlayerProxy::builder(conn).destination(name.to_string()).ok()?.build().await.ok()?;
     let root = MediaPlayer2Proxy::builder(conn).destination(name.to_string()).ok()?.build().await.ok()?;
     let status = player.playback_status().await.unwrap_or_else(|_| "Stopped".into());
