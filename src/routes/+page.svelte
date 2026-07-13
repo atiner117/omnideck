@@ -155,6 +155,16 @@
     toastErrTimer = setTimeout(() => (toastErr = ""), 5000);
   }
 
+  // Durable boot failures (config/library/capability/catalog), keyed by subsystem. Unlike the
+  // 5s action toast above, these persist until the subsystem loads — a couch user shouldn't
+  // miss "library error" in a toast that's gone before they look up. Retry re-runs the failed
+  // loaders (see loadCapability/loadCatalog/loadConfigAndLibrary).
+  let bootErrors = $state<Record<string, string>>({});
+  function setBootError(key: string, msg: string | null) {
+    if (msg) bootErrors = { ...bootErrors, [key]: msg };
+    else if (key in bootErrors) { const next = { ...bootErrors }; delete next[key]; bootErrors = next; }
+  }
+
   let art = $state<Record<string, string>>({});
   let logos = $state<Record<string, string>>({});
   let gridBox = $state<Record<string, boolean>>({});
@@ -868,6 +878,9 @@
   );
 
   function onKey(e: KeyboardEvent) {
+    // F5 retries a failed boot from anywhere (the panel's keyboard twin) — cheap and global,
+    // independent of the XMB nav state.
+    if (e.key === "F5" && Object.keys(bootErrors).length) { e.preventDefault(); retryBoot(); return; }
     // A real <input>/<select> is focused (settings number field, custom-launcher form):
     // let it handle typing/arrows natively; only Enter/Escape blur out of it.
     if (isTyping()) {
@@ -962,26 +975,56 @@
     else if (e.key === "Enter") activate();
   }
 
+  // Boot-time subsystem loaders — named so the boot-error panel's Retry can re-run just the
+  // ones that failed. Each clears its bootError on success and records it on failure.
+  async function loadCapability() {
+    try { cap = await api.getCapability(); setBootError("capability", null); }
+    catch (e) { setBootError("capability", `Capability probe failed: ${e}`); }
+  }
+  async function loadCatalog() {
+    try { catalog = await api.getCatalog(); setBootError("catalog", null); }
+    catch (e) { setBootError("catalog", `Couldn't load the app catalog: ${e}`); }
+  }
+  async function loadConfigAndLibrary() {
+    try {
+      const c = await api.getConfig();
+      cfg = c;
+      accent = c.settings?.accent ?? "#b14cff";
+      favorites = c.favorites ?? [];
+      recentApps = c.recent_apps ?? [];
+      if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
+      status = ""; // config loaded — clear the "Loading…" toast; the dashboard can render now
+      // A parse error isn't a hard load failure (we fell back to defaults) but the user should
+      // still see it and be able to fix + retry — surface it in the durable panel, not a toast.
+      setBootError("config", c.config_error ?? null);
+    } catch (e) {
+      status = "";
+      setBootError("config", `Couldn't load settings: ${e}`);
+      return; // no cfg — don't load the library into a half-initialized state
+    }
+    // Art loads lazily per windowed row (see the winItems $effect), not per game here.
+    try {
+      const lib = await api.getLibrary();
+      allGames = lib.games ?? [];
+      setBootError("library", null);
+    } catch (e) {
+      setBootError("library", `Library error: ${e}`);
+    }
+  }
+  /** Re-run the boot loaders that are currently in an error state (the panel's Retry). */
+  function retryBoot() {
+    if (bootErrors.capability) loadCapability();
+    if (bootErrors.catalog) loadCatalog();
+    if (bootErrors.config || bootErrors.library) loadConfigAndLibrary();
+  }
+
   onMount(() => {
     window.addEventListener("keydown", onKey);
-    api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
-    api.mediaAvailable().then((v) => (mediaAvail = v)).catch(() => {}); // adds the Media Library tile
+    loadCapability();
+    api.mediaAvailable().then((v) => (mediaAvail = v)).catch(() => {}); // optional; missing = no tile
     api.inGamescopeSession().then((v) => (inSession = v)).catch((e) => console.debug("[omnideck] inGamescopeSession probe failed", e));
-    api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
-    api.getConfig()
-      .then((c) => {
-        cfg = c;
-        accent = c.settings?.accent ?? "#b14cff";
-        favorites = c.favorites ?? [];
-        recentApps = c.recent_apps ?? [];
-        if (c.config_error) reportError(c.config_error, null); // config.toml didn't parse — warn, don't silently revert
-        if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
-      })
-      .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
-      .finally(() => {
-        // art loads lazily per windowed row (see the winItems $effect), not per game here
-        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; }).catch((e) => (status = `library error: ${e}`));
-      });
+    loadCatalog();
+    loadConfigAndLibrary();
 
     // Per-frame sampling catches brief dips a 500ms average smooths away; we only commit the
     // numbers to reactive state once per 500ms window so the tracker adds no per-frame cost.
@@ -1433,6 +1476,19 @@
   {#if status}<div class="toast">{status}</div>{/if}
   {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
+  <!-- Durable boot-failure panel: persists (unlike the 5s toast) until the subsystem loads,
+       with a Retry that re-runs just the failed loaders. Pointer/keyboard-focusable now; F5
+       also retries. (Controller-button retry can piggyback on the Now Playing focus work.) -->
+  {#if Object.keys(bootErrors).length}
+    <div class="boot-errors" role="alert" aria-live="assertive">
+      <div class="boot-errors-hd">⚠ OmniDeck had trouble starting</div>
+      <ul>
+        {#each Object.entries(bootErrors) as [key, msg] (key)}<li>{msg}</li>{/each}
+      </ul>
+      <button class="boot-retry" onclick={retryBoot}>Retry (F5)</button>
+    </div>
+  {/if}
+
   <footer>
     <span class="fdiag"><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"}</span>
     <span class="fhints"><b>Enter/✕</b> select · <b>Esc/◯</b> back · <button class="fhelp" onclick={() => { holdStop(); helpOpen = true; }}><b>?</b> help</button></span>
@@ -1522,6 +1578,16 @@
 
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
   .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
+
+  /* Durable boot-failure panel (persists until retried, unlike the toasts above). */
+  .boot-errors { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); z-index: 60;
+    max-width: min(680px, 90vw); background: #1a0e0e; border: 2px solid #c0392b; border-radius: 16px;
+    padding: 18px 24px; color: #f4e9e9; box-shadow: 0 18px 60px #00000088; }
+  .boot-errors-hd { font-weight: 800; font-size: clamp(15px, 1.7vw, 21px); margin-bottom: 8px; }
+  .boot-errors ul { margin: 0 0 14px; padding-left: 20px; font-size: clamp(13px, 1.4vw, 17px); line-height: 1.5; }
+  .boot-retry { background: #c0392b; color: #fff; border: 0; border-radius: 999px; cursor: pointer;
+    font: inherit; font-weight: 700; padding: 9px 22px; }
+  .boot-retry:hover, .boot-retry:focus-visible { background: #d84a3b; outline: 2px solid #fff; }
 
   /* Now Playing card styles live in $lib/NowPlaying.svelte */
   /* Modal shell (.prefs*, backdrop, close) AND the shared modal-content vocabulary
