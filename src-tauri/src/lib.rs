@@ -98,7 +98,8 @@ pub fn run() {
             audio::audio_set_output,
             gamepad::notify_activity,
             pin::set_pin,
-            pin::verify_pin
+            pin::verify_pin,
+            pin::set_locked_categories
         ])
         .setup(|app| {
             let handle = app.handle().clone();
