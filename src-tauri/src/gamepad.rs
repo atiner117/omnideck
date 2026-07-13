@@ -41,6 +41,23 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         std::collections::HashMap::new();
     const AXIS_EPS: f32 = 0.05;
 
+    // L2/R2 press synthesis (NEEDS HARDWARE VERIFICATION on the target pads): analog
+    // triggers are ABS axes on evdev, and many pads deliver them only as gilrs
+    // `ButtonChanged(LeftTrigger2/RightTrigger2, value)` — a digital ButtonPressed never
+    // fires, so the frontend's L2/R2 bindings (Now Playing previous/next) would never
+    // trigger. Synthesize a `button_pressed` on the rising edge (>= TRIG_PRESS) and a
+    // `button_released` on the falling edge (<= TRIG_RELEASE; the gap is hysteresis
+    // against half-pull chatter). The `trig_down` set dedupes against pads that DO send
+    // native digital events, whichever order gilrs delivers them — the webview sees
+    // exactly one press/release per pull either way.
+    const TRIG_PRESS: f32 = 0.5;
+    const TRIG_RELEASE: f32 = 0.25;
+    let mut trig_down: std::collections::HashSet<(gilrs::GamepadId, gilrs::Button)> =
+        std::collections::HashSet::new();
+    fn is_trigger2(b: gilrs::Button) -> bool {
+        matches!(b, gilrs::Button::LeftTrigger2 | gilrs::Button::RightTrigger2)
+    }
+
     // Guide/Home button, console-style: SHORT press switches between OmniDeck and the
     // launched app (it keeps running — music keeps playing); LONG hold (>= 800 ms) closes
     // it. The close fires the moment the hold crosses the threshold — while the button is
@@ -82,6 +99,43 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
             // ignores them); Guide never reaches here.
             if let Some(np) = navpad.as_mut() {
                 np.handle(&event);
+            }
+            // Trigger press synthesis / dedup (see TRIG_PRESS above). Placed after
+            // np.handle so the uinput bridge always sees the raw native events.
+            match &event {
+                gilrs::EventType::ButtonPressed(b, _) if is_trigger2(*b) => {
+                    if !trig_down.insert((id, *b)) {
+                        continue; // synthetic press already emitted for this pull
+                    }
+                }
+                gilrs::EventType::ButtonReleased(b, _) if is_trigger2(*b) => {
+                    if !trig_down.remove(&(id, *b)) {
+                        continue; // synthetic release already emitted
+                    }
+                }
+                gilrs::EventType::ButtonChanged(b, v, _) if is_trigger2(*b) => {
+                    let synth = if *v >= TRIG_PRESS && trig_down.insert((id, *b)) {
+                        Some(("button_pressed", 1.0))
+                    } else if *v <= TRIG_RELEASE && trig_down.remove(&(id, *b)) {
+                        Some(("button_released", 0.0))
+                    } else {
+                        None
+                    };
+                    if let Some((kind, value)) = synth {
+                        let _ = handle.emit(
+                            "gamepad-event",
+                            GamepadEvent {
+                                kind: kind.to_string(),
+                                code: format!("{b:?}"),
+                                value,
+                                gamepad: format!("{id:?}"),
+                                name: name.clone(),
+                            },
+                        );
+                    }
+                    // fall through: the raw button_changed is still forwarded below
+                }
+                _ => {}
             }
             // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
             if let gilrs::EventType::AxisChanged(a, v, _) = &event {
