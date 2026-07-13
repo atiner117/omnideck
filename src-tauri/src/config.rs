@@ -37,8 +37,8 @@ pub struct Settings {
     pub ambient: bool, // synthesized ambient background music (subtle, off by default)
     pub ambient_volume: f64, // ambient music volume multiplier (0.0–1.0)
     // Parental controls (pin.rs). Deterrence, not access control — see pin.rs header.
-    pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it.
-    pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN
+    pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it; masked over IPC (see Config::has_pin).
+    pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN. Only set_locked_categories writes it (PIN-verified).
 }
 
 impl Default for Settings {
@@ -155,6 +155,12 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional = nullable))] // absent over IPC when None
     pub config_error: Option<String>,
+    /// Whether a parental PIN is set. IPC-only (set by `get_config`, never written to disk):
+    /// the webview needs presence, not the hash — `settings.pin_hash` is masked over IPC
+    /// like `media_server.token`, since a 4–6 digit PIN is offline-crackable from its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))] // absent over IPC unless get_config sets it
+    pub has_pin: Option<bool>,
 }
 
 /// The XDG config base: $XDG_CONFIG_HOME (when absolute), else ~/.config. Shared with
@@ -182,6 +188,7 @@ fn defaults() -> Config {
         recent_apps: Vec::new(),
         config_path: String::new(),
         config_error: None,
+        has_pin: None,
     }
 }
 
@@ -250,6 +257,7 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
     }
     mutate(&mut cfg);
     cfg.config_path = String::new(); // never written to disk
+    cfg.has_pin = None; // IPC-only, never written to disk
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -258,14 +266,21 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
-/// `pin_hash` is deliberately preserved from disk: the only write path for the hash is
-/// `save_pin_hash` (via the `set_pin` command, which verifies the current PIN first) —
-/// a settings payload can neither clear nor replace the PIN.
+/// The parental-control fields are deliberately preserved from disk (server-authoritative):
+/// - `pin_hash` is only written by `save_pin_hash` (via the `set_pin` command, which
+///   verifies the current PIN first);
+/// - `locked_categories` is only written by `save_locked_categories` (via the
+///   `set_locked_categories` command, PIN-verified when a PIN is set) — otherwise a plain
+///   settings save could empty the locked list and unlock everything without the PIN.
+///
+/// A settings payload can therefore neither clear/replace the PIN nor change the locks.
 pub fn save_settings(settings: Settings) -> Result<(), String> {
     mutate_and_save(|cfg| {
         let pin_hash = std::mem::take(&mut cfg.settings.pin_hash);
+        let locked = std::mem::take(&mut cfg.settings.locked_categories);
         cfg.settings = settings;
         cfg.settings.pin_hash = pin_hash;
+        cfg.settings.locked_categories = locked;
     })
 }
 
@@ -273,6 +288,12 @@ pub fn save_settings(settings: Settings) -> Result<(), String> {
 /// after verifying the current PIN.
 pub fn save_pin_hash(pin_hash: String) -> Result<(), String> {
     mutate_and_save(|cfg| cfg.settings.pin_hash = pin_hash)
+}
+
+/// Persist the PIN-locked category ids. Only pin.rs::set_locked_categories calls this,
+/// after verifying the PIN (when one is set).
+pub fn save_locked_categories(locked_categories: Vec<String>) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.settings.locked_categories = locked_categories)
 }
 
 /// Persist a new apps list (used by the in-app "Add apps" catalog screen).

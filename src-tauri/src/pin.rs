@@ -33,17 +33,24 @@ fn pin_matches(stored_hash: &str, pin: &str) -> bool {
     Argon2::default().verify_password(pin.as_bytes(), &parsed).is_ok()
 }
 
+/// Pure PIN gate: Ok when no PIN is set, or when `pin` is provided and matches the
+/// stored hash. Shared by every mutation that must be PIN-authorized.
+fn require_pin(stored_hash: &str, pin: Option<&str>) -> Result<(), String> {
+    if stored_hash.is_empty() {
+        return Ok(()); // no lock configured
+    }
+    match pin {
+        Some(p) if pin_matches(stored_hash, p) => Ok(()),
+        _ => Err("current PIN is incorrect".into()),
+    }
+}
+
 /// Pure set-PIN transition: given the stored hash, decide the next one.
 /// - A PIN is already set (non-empty hash): `current` must be provided and correct.
 /// - No PIN set: `current` is ignored.
 /// - Empty `new` clears the PIN (Settings docs: empty hash = no lock).
 fn next_pin_hash(stored_hash: &str, current: Option<&str>, new: &str) -> Result<String, String> {
-    if !stored_hash.is_empty() {
-        match current {
-            Some(c) if pin_matches(stored_hash, c) => {}
-            _ => return Err("current PIN is incorrect".into()),
-        }
-    }
+    require_pin(stored_hash, current)?;
     if new.is_empty() {
         return Ok(String::new()); // clear the lock
     }
@@ -64,6 +71,20 @@ pub async fn set_pin(current: Option<String>, new: String) -> Result<(), String>
     .map_err(|e| format!("pin task failed: {e}"))?
 }
 
+/// Replace the PIN-locked category ids. When a PIN is set, `pin` must match it — the
+/// server-authoritative counterpart to `save_settings` preserving `locked_categories`,
+/// so a plain settings save can't unlock everything without knowing the PIN.
+#[tauri::command]
+pub async fn set_locked_categories(pin: Option<String>, categories: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let stored = config::load_or_create().settings.pin_hash;
+        require_pin(&stored, pin.as_deref())?;
+        config::save_locked_categories(categories)
+    })
+    .await
+    .map_err(|e| format!("pin task failed: {e}"))?
+}
+
 /// True when `pin` matches the stored PIN hash. Always false when no PIN is set.
 #[tauri::command]
 pub async fn verify_pin(pin: String) -> bool {
@@ -77,7 +98,21 @@ pub async fn verify_pin(pin: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_pin, next_pin_hash, pin_matches};
+    use super::{hash_pin, next_pin_hash, pin_matches, require_pin};
+
+    #[test]
+    fn require_pin_gates_mutations() {
+        // No PIN configured: everything is allowed, with or without a pin argument.
+        assert!(require_pin("", None).is_ok());
+        assert!(require_pin("", Some("1234")).is_ok());
+        // PIN configured: only the correct PIN passes — missing/wrong/empty are rejected,
+        // so locked_categories cannot be changed by a plain settings payload.
+        let stored = hash_pin("1234").expect("hash");
+        assert!(require_pin(&stored, Some("1234")).is_ok());
+        assert!(require_pin(&stored, None).is_err());
+        assert!(require_pin(&stored, Some("0000")).is_err());
+        assert!(require_pin(&stored, Some("")).is_err());
+    }
 
     #[test]
     fn set_then_verify_roundtrip() {

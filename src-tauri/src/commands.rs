@@ -114,6 +114,10 @@ pub fn get_config() -> config::Config {
     // whether a server is configured (media_available covers that). Masked, not moved —
     // config.toml keeps the real value.
     cfg.media_server.token.clear();
+    // Same for the PIN hash: a 4–6 digit PIN is offline-crackable from its argon2 hash,
+    // so the webview only gets presence (has_pin) — verification happens in verify_pin.
+    cfg.has_pin = Some(!cfg.settings.pin_hash.is_empty());
+    cfg.settings.pin_hash.clear();
     cfg
 }
 
