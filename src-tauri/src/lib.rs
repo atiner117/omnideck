@@ -29,6 +29,7 @@ mod media_server;
 mod mpris;
 mod navpad;
 mod session;
+mod sleep_timer;
 mod steamgriddb;
 mod switcher;
 mod sync;
@@ -94,7 +95,10 @@ pub fn run() {
             commands::deck_list,
             commands::deck_show,
             commands::deck_close,
-            commands::check_update
+            commands::check_update,
+            commands::set_sleep_timer,
+            commands::cancel_sleep_timer,
+            commands::get_sleep_timer
         ])
         .setup(|app| {
             let handle = app.handle().clone();

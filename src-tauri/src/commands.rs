@@ -486,6 +486,29 @@ pub async fn app_icon(url: String) -> Option<String> {
     icons::favicon(&url).await
 }
 
+// --- Sleep timer (sleep_timer.rs) ---
+
+/// Arm the sleep timer: pause playback in `minutes`. Re-setting REPLACES a running timer.
+/// Deliberately not persisted across restarts (see sleep_timer.rs). Returns the initial
+/// status so the UI can render the countdown without a second round-trip.
+#[tauri::command]
+pub fn set_sleep_timer(app: tauri::AppHandle, minutes: u32) -> Result<crate::sleep_timer::SleepTimerStatus, String> {
+    crate::sleep_timer::set(app, minutes)
+}
+
+/// Cancel the sleep timer; false when none was armed (idempotent).
+#[tauri::command]
+pub fn cancel_sleep_timer() -> bool {
+    crate::sleep_timer::cancel()
+}
+
+/// Remaining/total seconds of the armed timer, or None. The frontend calls this once at
+/// mount (before its `sleep-timer-tick` listener attaches), then relies on events.
+#[tauri::command]
+pub fn get_sleep_timer() -> Option<crate::sleep_timer::SleepTimerStatus> {
+    crate::sleep_timer::get()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_safe_browser_arg, spawn_error};
