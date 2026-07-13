@@ -369,13 +369,37 @@ fn write_response(stream: &mut TcpStream, resp: &Response) {
 pub struct Server {
     port: u16,
     shutdown: Arc<AtomicBool>,
+    /// Accept-loop thread, joined in `stop()` so the listening socket is truly
+    /// closed (port released) before `stop()` returns. `Mutex<Option<..>>`
+    /// because `stop()` takes `&self` and `JoinHandle::join` consumes.
+    accept_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Server {
+    /// Signal shutdown, wake the accept loop, and wait (bounded) for the accept
+    /// thread to exit. On return the listener is dropped and the port is free —
+    /// an immediate rebind (the settings off→on toggle) cannot hit EADDRINUSE.
     pub fn stop(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
         // Unblock the accept() so the loop observes the flag and exits.
         let _ = TcpStream::connect(("127.0.0.1", self.port));
+        let handle = crate::sync::lock_or_recover(&self.accept_thread, "remote.accept_thread").take();
+        if let Some(handle) = handle {
+            // Bounded join: the loop exits promptly after the wake, but never hang
+            // the caller (a settings toggle on the main thread) if something wedges.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                tracing::warn!(
+                    "remote: accept thread on port {} didn't exit within 2s — port may linger briefly",
+                    self.port
+                );
+            }
+        }
     }
 }
 
@@ -390,7 +414,7 @@ fn spawn_server(listener: TcpListener, token: String, dispatch: Arc<dyn Dispatch
     let shutdown = Arc::new(AtomicBool::new(false));
     let active = Arc::new(AtomicUsize::new(0));
     let flag = shutdown.clone();
-    std::thread::spawn(move || {
+    let accept_thread = std::thread::spawn(move || {
         for stream in listener.incoming() {
             if flag.load(Ordering::SeqCst) {
                 break;
@@ -417,7 +441,30 @@ fn spawn_server(listener: TcpListener, token: String, dispatch: Arc<dyn Dispatch
         }
         tracing::info!("remote: listener on port {port} stopped");
     });
-    Server { port, shutdown }
+    Server { port, shutdown, accept_thread: Mutex::new(Some(accept_thread)) }
+}
+
+/// Bind with a short retry loop. `stop()` joins the accept thread so the old
+/// socket is normally gone before we get here, but belt-and-braces: if the OS
+/// (or the 2s join fallback path) still holds the port — Rust's `TcpListener`
+/// sets SO_REUSEADDR but not SO_REUSEPORT, so a lingering LISTEN socket means
+/// EADDRINUSE — retry with backoff for up to ~1s before giving up.
+fn bind_with_retry(port: u16) -> Result<TcpListener, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let mut delay = std::time::Duration::from_millis(25);
+    loop {
+        match TcpListener::bind(("0.0.0.0", port)) {
+            Ok(l) => return Ok(l),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() + delay <= deadline =>
+            {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(200));
+            }
+            Err(e) => return Err(format!("remote: couldn't listen on port {port}: {e}")),
+        }
+    }
 }
 
 /// The one live server behind the Tauri commands (tests construct Servers directly and
@@ -427,10 +474,10 @@ static RUNNING: Mutex<Option<Server>> = Mutex::new(None);
 fn start(port: u16, token: String, dispatch: Arc<dyn Dispatch>) -> Result<u16, String> {
     let mut slot = crate::sync::lock_or_recover(&RUNNING, "remote.server");
     if let Some(old) = slot.take() {
+        // Joins the accept thread — the old listener is closed when this returns.
         old.stop();
     }
-    let listener = TcpListener::bind(("0.0.0.0", port))
-        .map_err(|e| format!("remote: couldn't listen on port {port}: {e}"))?;
+    let listener = bind_with_retry(port)?;
     let server = spawn_server(listener, token, dispatch);
     let bound = server.port;
     *slot = Some(server);
@@ -691,14 +738,33 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = spawn_server(listener, "t".into(), Arc::new(Recorder::default()));
         server.stop();
-        // The accept loop exits and the port becomes bindable again (poll briefly — the
-        // loop needs a beat to observe the flag).
-        for _ in 0..50 {
-            if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+        // stop() joins the accept thread, so the port must be bindable the moment it
+        // returns — NO polling. This is the settings off→on toggle on a fixed port:
+        // rebinding the same port must succeed deterministically.
+        let relisten = TcpListener::bind(("127.0.0.1", port))
+            .expect("port must be free the moment stop() returns");
+        // And the rebound server actually serves — the toggle really came back up.
+        let server2 = spawn_server(relisten, "t2".into(), Arc::new(Recorder::default()));
+        let page = send(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        server2.stop();
+    }
+
+    #[test]
+    fn repeated_stop_start_cycles_on_the_same_port_are_deterministic() {
+        // Hammer the toggle: several off→on cycles on the same port, no sleeps.
+        // Any lingering listener would surface as an EADDRINUSE panic here.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut server = spawn_server(listener, "t".into(), Arc::new(Recorder::default()));
+        for i in 0..5 {
+            server.stop();
+            let l = TcpListener::bind(("127.0.0.1", port))
+                .unwrap_or_else(|e| panic!("cycle {i}: rebind failed: {e}"));
+            server = spawn_server(l, "t".into(), Arc::new(Recorder::default()));
         }
-        panic!("port {port} still bound after stop()");
+        let page = send(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        server.stop();
     }
 }
