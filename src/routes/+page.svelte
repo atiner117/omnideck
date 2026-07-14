@@ -117,6 +117,7 @@
   // metadata (song/artist) from the `media` poll below.
   type NowEntry = { id: string; kind: string; name: string; category: string };
   let nowList = $state<NowEntry[]>([]);
+  let launchSeq = 0; // bumped per launch → a unique Now Playing / exit-correlation id per instance
   let media = $state<MediaInfo | null>(null);
   // One card per launch entry; a media app's card shows its song. If something is playing
   // that we didn't launch (e.g. music already open), show a standalone media card too.
@@ -597,7 +598,9 @@
   let deckFocus = $state(0);
   // An app's launcher icon/emoji for its card, matched by launch id then name (games show 🎮).
   function deckIcon(a: LiveApp): string {
-    const app = apps.find((x) => x.id === a.id) ?? apps.find((x) => x.name === a.name);
+    // Launch ids are `${tileId}#${seq}` now — match on the tile-id prefix, then fall back to name.
+    const tileId = a.id?.split("#")[0];
+    const app = apps.find((x) => x.id === tileId) ?? apps.find((x) => x.name === a.name);
     return app?.icon ?? "🎮";
   }
   async function openDeck() {
@@ -705,7 +708,11 @@
   async function launchTile(t: Tile) {
     if (t.kind === "app" && t.app.id === "media-library") { openMedia(); return; }
     const name = t.kind === "game" ? t.game.name : t.app.name;
-    const id = t.id; // tile id doubles as the launch / now-playing correlation key
+    // A UNIQUE per-launch id (not the tile id) so relaunching an app/game while an earlier
+    // instance is still alive gives each its own Now Playing card. Sharing the tile id meant
+    // the older instance's exit event cleared the newer card too. The backend passes this
+    // straight back as the exit key; the tile id stays the favorites/recents key.
+    const id = `${t.id}#${++launchSeq}`;
     try {
       const category = t.kind === "game" ? "games" : catOf(t.app);
       if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, id); }
