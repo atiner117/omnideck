@@ -58,7 +58,15 @@ pub struct Capability {
     pub diagnostics: Vec<String>,
 }
 
+/// Cached, process-lifetime hardware probe. The result is stable for a run (hardware doesn't
+/// change mid-session), and this sits on media_play's and the child-launch env setup's hot
+/// paths — so the sysfs/PATH/ICD scans below run exactly once and every later call is a clone.
 pub fn probe() -> Capability {
+    static CACHE: std::sync::OnceLock<Capability> = std::sync::OnceLock::new();
+    CACHE.get_or_init(probe_uncached).clone()
+}
+
+fn probe_uncached() -> Capability {
     let (render_nodes, drm_cards, kms_connectors) = scan_dri();
     let kms_active = !kms_connectors.is_empty();
     let gpus = scan_pci_gpus();
