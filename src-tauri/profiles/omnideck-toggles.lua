@@ -36,6 +36,10 @@ local UPSCALE = {
   { name = "off",     scale = "bilinear" },
 }
 local upscale = 1
+-- Set true by a 'seek' while interpolation is active; consumed on the next 'playback-restart'
+-- to rebuild the flushed optical-flow filter. Declared here (before rebuild_vf) so a manual
+-- rebuild during the seek→restart window cancels a now-redundant heal (no double @omniinterp).
+local heal_pending = false
 
 -- ---- vf chain -------------------------------------------------------------
 -- Labeled entries so each dimension owns its slot; rebuild keeps a fixed order
@@ -50,9 +54,10 @@ local function rebuild_vf()
   if f then
     mp.commandv("vf", "append", "@omniinterp:vapoursynth=" .. f)
   end
+  heal_pending = false -- rebuild re-established @omniinterp; cancel any pending seek-heal
 end
 
-local function osd(msg) mp.osd_message(msg, 1.6) end
+local function osd(msg, secs) mp.osd_message(msg, secs or 1.6) end
 
 -- ---- toggles ---------------------------------------------------------------
 local function cycle_interp()
@@ -107,7 +112,7 @@ end
 -- ---- seek self-heal ---------------------------------------------------------
 -- Drop the interpolation entry the moment a seek starts; re-append when playback
 -- restarts. Cheap when interpolation is off (no-op), invisible when on (~1 frame).
-local heal_pending = false
+-- heal_pending is declared up in the state section so rebuild_vf can cancel it.
 mp.register_event("seek", function()
   if INTERP[interp].file then
     mp.commandv("vf", "remove", "@omniinterp")
