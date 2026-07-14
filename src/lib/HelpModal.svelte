@@ -43,8 +43,8 @@
 
 <style>
   .helpgrid { display: grid; grid-template-columns: 1fr auto auto; gap: 7px 26px; margin: 4px 0 8px; align-items: baseline; }
-  .hhead { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
-  .hsect { grid-column: 1 / -1; color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; padding-top: 10px; }
+  .hhead { color: var(--text-label); font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+  .hsect { grid-column: 1 / -1; color: var(--text-label); font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; padding-top: 10px; }
   .haction { color: #dde5f0; font-size: clamp(13px, 1.4vw, 16px); font-weight: 600; }
   .hkey { color: var(--accent); font-size: clamp(12px, 1.3vw, 15px); font-weight: 700; white-space: nowrap; }
 </style>

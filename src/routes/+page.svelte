@@ -1575,8 +1575,23 @@
 </main>
 
 <style>
+  /* Design tokens — the surface/text/border vocabulary shared across every component.
+     Change a shade once here; components reference var(--…). Defined on :root so the values
+     cascade to every component (fixed/position-independent ones included). The dynamic
+     --accent / --scale / --bg-* are set on <main> instead (they depend on user settings). */
+  :global(:root) {
+    --surface-deep: #05070b;  /* deepest background / scrim base */
+    --surface: #1b2540;       /* control / button surface */
+    --surface-card: #0c1320;  /* raised card surface */
+    --border: #2c3a5c;        /* default hairline border */
+    --text-muted: #9fb0c8;    /* secondary text */
+    --text-soft: #cdd7e6;     /* soft light text */
+    --text-label: #6b7790;    /* uppercase captions / labels */
+    --text-dim: #7e8aa0;      /* dim state text */
+    --danger: #c0392b;        /* error / destructive */
+  }
   :global(html), :global(body) { margin: 0; height: 100%; }
-  :global(body) { background: #05070b; overflow: hidden; }
+  :global(body) { background: var(--surface-deep); overflow: hidden; }
 
   main {
     position: relative; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column;
@@ -1602,8 +1617,8 @@
   header { display: flex; align-items: center; justify-content: space-between; padding: 1.8vh 2.4vw 1vh; }
   .brand { font-size: clamp(20px, 2.4vw, 36px); font-weight: 800; letter-spacing: 3px; color: var(--accent); }
   .meta { display: flex; gap: 10px; align-items: center; }
-  .clock { color: #cdd7e6; font-weight: 700; font-variant-numeric: tabular-nums; font-size: calc(clamp(13px, 1.5vw, 19px) * var(--scale)); margin-right: 4px; }
-  .badge { background: #121a2b99; border: 1px solid #25324d; border-radius: 999px; padding: 5px 14px; color: #9fb0c8; font-size: clamp(11px, 1.2vw, 14px); }
+  .clock { color: var(--text-soft); font-weight: 700; font-variant-numeric: tabular-nums; font-size: calc(clamp(13px, 1.5vw, 19px) * var(--scale)); margin-right: 4px; }
+  .badge { background: #121a2b99; border: 1px solid #25324d; border-radius: 999px; padding: 5px 14px; color: var(--text-muted); font-size: clamp(11px, 1.2vw, 14px); }
   .gear { cursor: pointer; font-size: 1.05em; line-height: 1; }
 
   .xmb { flex: 1; position: relative; min-height: 0; }
@@ -1630,7 +1645,7 @@
      label aligned with row names via an invisible thumb-width spacer. */
   .xthumb.hollow { background: none; box-shadow: none; }
   .xitem.xshead { opacity: 1; cursor: default; align-items: flex-end; padding-bottom: 6px; }
-  .xsheadlbl { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
+  .xsheadlbl { color: var(--text-label); font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
   .xthumb img { width: 100%; height: 100%; object-fit: cover; }
   .xthumb img.appicon { object-fit: contain; padding: 18%; box-sizing: border-box; }
   .xthumb .xemoji { font-size: calc(1.5rem * var(--scale)); }
@@ -1640,8 +1655,8 @@
   .xname .xsub { color: var(--accent); font-weight: 700; font-size: .8em; }
   .xfav { font-size: .8em; }
   .swatch { width: 30px; height: 18px; border-radius: 5px; display: inline-block; border: 1px solid #ffffff44; }
-  .numedit { width: 5em; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
-  .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
+  .numedit { width: 5em; background: var(--surface-card); border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
+  .textedit { width: 18em; max-width: 40vw; background: var(--surface-card); border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
   /* Suppress the default focus ring on elements that already show focus another way (inputs'
      accent border, the in-app .focused highlight used by controller/mouse nav)... */
   .numedit:focus, .textedit:focus, .cbtn:focus,
@@ -1656,15 +1671,15 @@
   .xempty b { color: var(--accent); }
 
   .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
-  .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
+  .toast.err { background: var(--danger); color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
 
   /* Durable boot-failure panel (persists until retried, unlike the toasts above). */
   .boot-errors { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); z-index: 60;
-    max-width: min(680px, 90vw); background: #1a0e0e; border: 2px solid #c0392b; border-radius: 16px;
+    max-width: min(680px, 90vw); background: #1a0e0e; border: 2px solid var(--danger); border-radius: 16px;
     padding: 18px 24px; color: #f4e9e9; box-shadow: 0 18px 60px #00000088; }
   .boot-errors-hd { font-weight: 800; font-size: clamp(15px, 1.7vw, 21px); margin-bottom: 8px; }
   .boot-errors ul { margin: 0 0 14px; padding-left: 20px; font-size: clamp(13px, 1.4vw, 17px); line-height: 1.5; }
-  .boot-retry { background: #c0392b; color: #fff; border: 0; border-radius: 999px; cursor: pointer;
+  .boot-retry { background: var(--danger); color: #fff; border: 0; border-radius: 999px; cursor: pointer;
     font: inherit; font-weight: 700; padding: 9px 22px; }
   .boot-retry:hover, .boot-retry:focus-visible { background: #d84a3b; outline: 2px solid #fff; }
 
@@ -1677,15 +1692,15 @@
   .cwheel::-webkit-color-swatch { border: none; border-radius: 4px; }
 
   .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
-  .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
+  .infogrid dt { color: var(--text-dim); font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
   .infogrid dd { margin: 0; color: #dde5f0; font-size: clamp(12px, 1.3vw, 15px); word-break: break-word; }
   .confirm-btns { display: flex; gap: 12px; justify-content: flex-end; margin: 14px 0 4px; }
-  .cbtn { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
+  .cbtn { background: var(--surface); border: 1px solid var(--border); color: var(--text-soft); border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
   .cbtn:hover { border-color: var(--accent); }
   .cbtn.danger { background: var(--accent); color: #04121f; border-color: transparent; }
   .frow { display: flex; align-items: center; gap: 14px; margin: 8px 0; }
-  .frow label { width: 96px; flex: 0 0 auto; color: #9fb0c8; font-weight: 600; font-size: clamp(13px, 1.3vw, 15px); }
-  .frow input, .frow select { flex: 1; background: #0c1320; border: 1px solid #2c3a5c; color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
+  .frow label { width: 96px; flex: 0 0 auto; color: var(--text-muted); font-weight: 600; font-size: clamp(13px, 1.3vw, 15px); }
+  .frow input, .frow select { flex: 1; background: var(--surface-card); border: 1px solid var(--border); color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
   .frow input:focus, .frow select:focus { outline: none; border-color: var(--accent); }
 
   /* wizard styles live in $lib/Wizard.svelte; .wlead stays — the confirm modal uses it too */
@@ -1721,7 +1736,7 @@
   .deck-name { font-size: calc(17px * var(--scale)); font-weight: 600; max-width: 90%;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .deck-x { position: absolute; top: -12px; right: -12px; width: 34px; height: 34px; border-radius: 50%;
-    border: 2px solid rgba(255,255,255,0.14); background: #05070b; color: #c2cbdb; cursor: pointer;
+    border: 2px solid rgba(255,255,255,0.14); background: var(--surface-deep); color: #c2cbdb; cursor: pointer;
     font-size: 15px; opacity: 0; transition: opacity .16s; }
   .deck-card.sel .deck-x { opacity: 1; }
   .deck-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale));
@@ -1733,7 +1748,7 @@
     align-items: center; justify-content: center; gap: 22px; pointer-events: none; }
   .np-t-title { pointer-events: none; color: #fff; font-weight: 700; max-width: 80vw; text-align: center;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(22px * var(--scale)); }
-  .np-t-sub { color: #9fb0c8; font-weight: 500; }
+  .np-t-sub { color: var(--text-muted); font-weight: 500; }
   .np-t-row { display: flex; gap: 18px; pointer-events: auto; }
   .np-t-btn { display: flex; align-items: center; justify-content: center;
     width: calc(72px * var(--scale)); height: calc(72px * var(--scale)); border-radius: 18px;
