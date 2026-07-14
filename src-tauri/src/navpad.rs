@@ -66,6 +66,10 @@ pub struct NavPad {
     last_check: Instant,
     logged_active: bool, // last active-state we logged, so transitions log once each
     emitted_since_active: bool, // did we deliver anything this activation? (diagnostic)
+    /// Consecutive uinput emit failures; the bridge self-disables past EMIT_FAIL_LIMIT so a
+    /// device that starts rejecting writes can't flood the session log at the ~8 ms loop rate.
+    emit_fails: u32,
+    disabled: bool,
     // Navigation state.
     dirs: [Dir; 4],
     ptr_x: f32,
@@ -106,6 +110,8 @@ impl NavPad {
                     last_check: Instant::now() - ACTIVE_CACHE,
                     logged_active: false,
                     emitted_since_active: false,
+                    emit_fails: 0,
+                    disabled: false,
                     dirs: Default::default(),
                     ptr_x: 0.0,
                     ptr_y: 0.0,
@@ -128,6 +134,9 @@ impl NavPad {
     /// Is a launched app in front? Same gate policy as the switcher (session-only unless
     /// OMNIDECK_FORCE_HOTKEY), refreshed at most every ACTIVE_CACHE.
     fn active(&mut self) -> bool {
+        if self.disabled {
+            return false; // uinput went bad — the whole bridge is inert (handle/tick no-op)
+        }
         if !crate::session::in_session() && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none() {
             return false;
         }
@@ -153,12 +162,32 @@ impl NavPad {
     }
 
     fn emit(&mut self, events: &[InputEvent]) {
-        if let Err(e) = self.dev.emit(events) {
-            tracing::warn!("navpad: emit failed: {e}");
-        } else if !self.emitted_since_active {
-            // First delivery of an activation — proves the uinput device is being read.
-            tracing::info!("navpad: delivered first input to the focused app");
-            self.emitted_since_active = true;
+        // Past this many consecutive failures the device is treated as gone: disable the bridge
+        // so we stop trying (and stop logging) every tick, rather than flooding the log forever.
+        const EMIT_FAIL_LIMIT: u32 = 20;
+        match self.dev.emit(events) {
+            Ok(()) => {
+                if self.emit_fails > 0 {
+                    tracing::info!("navpad: uinput writes recovered after {} failure(s)", self.emit_fails);
+                    self.emit_fails = 0;
+                }
+                if !self.emitted_since_active {
+                    // First delivery of an activation — proves the uinput device is being read.
+                    tracing::info!("navpad: delivered first input to the focused app");
+                    self.emitted_since_active = true;
+                }
+            }
+            Err(e) => {
+                self.emit_fails += 1;
+                if self.emit_fails == 1 {
+                    // Log only the transition into failure — not every subsequent tick.
+                    tracing::warn!("navpad: uinput emit failed ({e}) — will disable after repeated failures");
+                }
+                if self.emit_fails >= EMIT_FAIL_LIMIT {
+                    self.disabled = true;
+                    tracing::warn!("navpad: disabled after {EMIT_FAIL_LIMIT} consecutive emit failures — controller no longer drives launched apps this session");
+                }
+            }
         }
     }
 
