@@ -3,6 +3,8 @@
   import * as api from "$lib/backend";
   import type { App, Game, Config, Capability, MediaInfo, Settings, LiveApp } from "$lib/backend";
   import { clamp, railWindow } from "$lib/nav";
+  import { mintLaunchId, baseId } from "$lib/launchId";
+  import { cardActions, type NpAction } from "$lib/npActions";
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
   import Wizard from "$lib/Wizard.svelte";
@@ -117,7 +119,6 @@
   // metadata (song/artist) from the `media` poll below.
   type NowEntry = { id: string; kind: string; name: string; category: string };
   let nowList = $state<NowEntry[]>([]);
-  let launchSeq = 0; // bumped per launch → a unique Now Playing / exit-correlation id per instance
   let media = $state<MediaInfo | null>(null);
   // One card per launch entry; a media app's card shows its song. If something is playing
   // that we didn't launch (e.g. music already open), show a standalone media card too.
@@ -141,26 +142,19 @@
   // card's actions as a D-pad/A-navigable row. It's dashboard-contextual (opened by L1 or the
   // `N` key when something's playing), never a global chord — while a launched app is in front
   // the pad drives the app, not this, so common buttons aren't consumed there.
-  type NpAction = { icon: string; label: string; run: () => void };
   let npOpen = $state(false);
   let npFocus = $state(0);
-  const npMediaCtl = (a: string) => api.mediaControl(a).catch((e) => reportError("Media control failed", e));
   const npActions = $derived.by<NpAction[]>(() => {
     const c = nowCards[0];
     if (!c) return [];
-    const a: NpAction[] = [];
-    if (c.media) {
-      a.push({ icon: "⏮", label: "Previous", run: () => npMediaCtl("previous") });
-      a.push({ icon: c.media.status === "Playing" ? "⏸" : "▶", label: "Play / Pause", run: () => npMediaCtl("play-pause") });
-      a.push({ icon: "⏭", label: "Next", run: () => npMediaCtl("next") });
-    }
-    if (c.kind === "app" && inSession)
-      a.push({ icon: "⇄", label: "Switch to app", run: () => { api.switchApp().catch((e) => reportError("Couldn't switch app", e)); npOpen = false; } });
-    if (c.kind === "app")
-      a.push({ icon: "↩", label: "Close & return", run: () => { api.closeCurrentApp().catch((e) => reportError("Couldn't close app", e)); npOpen = false; } });
-    if (c.kind !== "media")
-      a.push({ icon: "✕", label: "Dismiss card", run: () => { nowList = nowList.filter((x) => x.id !== c.id); npOpen = false; } });
-    return a;
+    // The same builder the corner card stack renders (NowPlaying.svelte) — one control
+    // set, two surfaces. `after` closes the overlay on the terminal actions.
+    return cardActions(c, {
+      inSession,
+      onerror: reportError,
+      ondismiss: (id) => (nowList = nowList.filter((x) => x.id !== id)),
+      after: () => (npOpen = false),
+    });
   });
   function openNowPlaying() { if (nowCards.length) { npFocus = 0; npOpen = true; } }
   function npMove(d: number) { if (npActions.length) npFocus = clamp(npFocus + d, 0, npActions.length - 1); }
@@ -598,8 +592,8 @@
   let deckFocus = $state(0);
   // An app's launcher icon/emoji for its card, matched by launch id then name (games show 🎮).
   function deckIcon(a: LiveApp): string {
-    // Launch ids are `${tileId}#${seq}` now — match on the tile-id prefix, then fall back to name.
-    const tileId = a.id?.split("#")[0];
+    // Launch ids are `tileId#seq` ($lib/launchId) — match the tile id, then fall back to name.
+    const tileId = a.id ? baseId(a.id) : undefined;
     const app = apps.find((x) => x.id === tileId) ?? apps.find((x) => x.name === a.name);
     return app?.icon ?? "🎮";
   }
@@ -609,7 +603,12 @@
     deckFocus = 0;
     deckOpen = true;
   }
-  function closeDeck() { deckOpen = false; }
+  // Dismiss = put back what opening the deck took away: deck_open hid (and possibly froze)
+  // the foreground app, so a tap-tap round trip must land back in it, not strand it hidden.
+  function closeDeck() {
+    deckOpen = false;
+    api.deckCancel().catch((e) => console.debug("[omnideck] deck cancel failed", e));
+  }
   function deckMove(d: number) { if (deckApps.length) deckFocus = clamp(deckFocus + d, 0, deckApps.length - 1); }
   // Focus the selected card so a real-session keyboard reaches the deck (and for a11y) and it
   // scrolls into view. The gamepad path doesn't need this (events arrive via gilrs regardless).
@@ -626,7 +625,14 @@
   async function deckKill() {
     const a = deckApps[deckFocus];
     if (!a) return;
-    await api.deckClose(a.group).catch((e) => console.debug("[omnideck] deck close failed", e));
+    try {
+      await api.deckClose(a.group);
+    } catch (e) {
+      // Keep the card: the app is still running, and silently dropping it claimed a close
+      // that didn't happen (reopening the deck resurrected the "closed" card).
+      reportError("Couldn't close app", e);
+      return;
+    }
     deckApps = deckApps.filter((x) => x.group !== a.group);
     if (deckApps.length === 0) { deckOpen = false; return; }
     deckFocus = clamp(deckFocus, 0, deckApps.length - 1);
@@ -675,9 +681,11 @@
     } else {
       mediaOpen = false;
       status = `▶ ${r.name}…`;
-      const key = `media-${r.id}`;
+      // The backend mints the per-LAUNCH key (media-<id>#<seq>) — keying the card on the
+      // item id let a replay of the same item share a key, and the first instance's exit
+      // then cleared the card of the one still playing.
       api.mediaPlay(r.id, r.name)
-        .then(() => { nowList = [{ id: key, kind: "app", name: r.name, category: "video" }, ...nowList.filter((e) => e.id !== key)].slice(0, 3); })
+        .then((key) => { nowList = [{ id: key, kind: "app", name: r.name, category: "video" }, ...nowList.filter((e) => e.id !== key)].slice(0, 3); })
         .catch((e) => reportError("Playback failed", e));
       later(() => (status = ""), 3500);
     }
@@ -708,11 +716,10 @@
   async function launchTile(t: Tile) {
     if (t.kind === "app" && t.app.id === "media-library") { openMedia(); return; }
     const name = t.kind === "game" ? t.game.name : t.app.name;
-    // A UNIQUE per-launch id (not the tile id) so relaunching an app/game while an earlier
-    // instance is still alive gives each its own Now Playing card. Sharing the tile id meant
-    // the older instance's exit event cleared the newer card too. The backend passes this
-    // straight back as the exit key; the tile id stays the favorites/recents key.
-    const id = `${t.id}#${++launchSeq}`;
+    // A UNIQUE per-launch id (not the tile id) — see $lib/launchId for the format contract.
+    // The backend passes this straight back as the exit key; the tile id stays the
+    // favorites/recents key.
+    const id = mintLaunchId(t.id);
     try {
       const category = t.kind === "game" ? "games" : catOf(t.app);
       if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, id); }
@@ -1670,7 +1677,10 @@
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
 
-  .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
+  /* z-index 70: toasts are transient alerts and must clear every overlay — the deck (40/41),
+     the Now Playing transport scrim (44/45), and the boot-error panel (60). At the old
+     stacking (2) a media-control error fired behind the open transport's scrim. */
+  .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); z-index: 70; background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
   .toast.err { background: var(--danger); color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
 
   /* Durable boot-failure panel (persists until retried, unlike the toasts above). */

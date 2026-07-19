@@ -25,9 +25,22 @@
 // Xwayland — Chromium, Firefox, mpv, Qt — with zero per-app integration.
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key, RelativeAxisType};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const ACTIVE_CACHE: Duration = Duration::from_millis(300);
+
+/// Bumped by the switcher on every hide/show transition so the activation gate re-checks
+/// immediately instead of trusting a ≤300 ms stale answer: a stale `true` right after
+/// deck_open meant the first press injected a click into OmniDeck's own UI (which could
+/// land on the deck scrim and dismiss it), and a stale `false` right after deck_show
+/// dropped the first presses meant for the re-shown app.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Called by the switcher after any hide/show so `active()` re-probes on the next event.
+pub fn invalidate() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
 const REPEAT_FIRST: Duration = Duration::from_millis(400);
 const REPEAT_NEXT: Duration = Duration::from_millis(90);
 const WHEEL_REPEAT: Duration = Duration::from_millis(120);
@@ -64,6 +77,7 @@ pub struct NavPad {
     // Activation gate (cached — an X round-trip per input event would be silly).
     cached_active: bool,
     last_check: Instant,
+    seen_gen: u64, // GENERATION value the cache was computed at (see invalidate)
     logged_active: bool, // last active-state we logged, so transitions log once each
     emitted_since_active: bool, // did we deliver anything this activation? (diagnostic)
     /// Consecutive uinput emit failures; the bridge self-disables past EMIT_FAIL_LIMIT so a
@@ -108,6 +122,7 @@ impl NavPad {
                     dev,
                     cached_active: false,
                     last_check: Instant::now() - ACTIVE_CACHE,
+                    seen_gen: 0,
                     logged_active: false,
                     emitted_since_active: false,
                     emit_fails: 0,
@@ -137,10 +152,12 @@ impl NavPad {
         if self.disabled {
             return false; // uinput went bad — the whole bridge is inert (handle/tick no-op)
         }
-        if !crate::session::in_session() && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none() {
+        if !crate::switcher::session_ok() {
             return false;
         }
-        if self.last_check.elapsed() >= ACTIVE_CACHE {
+        let gen = GENERATION.load(Ordering::Relaxed);
+        if gen != self.seen_gen || self.last_check.elapsed() >= ACTIVE_CACHE {
+            self.seen_gen = gen;
             self.cached_active = crate::switcher::any_app_visible();
             self.last_check = Instant::now();
             // Log each transition once so a session log answers "did the bridge engage?"
@@ -242,11 +259,14 @@ impl NavPad {
     }
 
     /// Translate one gilrs event. Call AFTER the Guide handling; cheap no-op when the
-    /// bridge isn't active.
-    pub fn handle(&mut self, event: &gilrs::EventType) {
+    /// bridge isn't active. Returns true when the event was delivered to the app — the
+    /// caller must then NOT forward it to the webview: the hidden dashboard's handler has
+    /// no app-in-front gate, so a forwarded press would also activate tiles / toggle
+    /// favorites / open modals behind the app the user is actually driving.
+    pub fn handle(&mut self, event: &gilrs::EventType) -> bool {
         use gilrs::{Axis, Button, EventType as G};
         if !self.active() {
-            return;
+            return false;
         }
         match *event {
             G::ButtonPressed(b, _) | G::ButtonReleased(b, _) => {
@@ -287,6 +307,7 @@ impl NavPad {
             },
             _ => {}
         }
+        true
     }
 
     /// Periodic work: auto-repeat, pointer motion, wheel repeat, and stuck-state cleanup

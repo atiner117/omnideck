@@ -49,8 +49,9 @@ export const saveRecentApps = (recentApps: string[]) => invoke<void>("save_recen
 export const gameProperties = (appid: string) => invoke<void>("game_properties", { appid });
 export const powerAction = (action: string) => invoke<void>("power_action", { action });
 export const closeCurrentApp = () => invoke<boolean>("close_current_app");
-/** Hide/show the launched app without closing it (session app switcher). */
-export const switchApp = () => invoke<boolean>("switch_app");
+/** Bring a launched app forward without closing it. With a launch id, shows THAT app's
+ *  group (deck-card semantics); without one, the legacy global toggle. */
+export const switchApp = (id?: string) => invoke<boolean>("switch_app", { id: id ?? null });
 export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
 
@@ -64,6 +65,8 @@ export const deckList = () => invoke<LiveApp[]>("deck_list");
 export const deckShow = (group: number) => invoke<void>("deck_show", { group });
 /** Close one app group (a card's close / Select). */
 export const deckClose = (group: number) => invoke<void>("deck_close", { group });
+/** Deck dismissed without picking a card — restore what deck_open hid (re-show + thaw). */
+export const deckCancel = () => invoke<boolean>("deck_cancel");
 
 // ---- media server (Jellyfin browse/play — media_server.rs) ----
 export const mediaAvailable = () => invoke<boolean>("media_available");
@@ -71,7 +74,9 @@ export const mediaSections = () => invoke<MediaSections>("media_sections");
 export const mediaBrowse = (parent: string) => invoke<MediaItem[]>("media_browse", { parent });
 /** Fetch+cache an item's poster; resolves to the on-disk path for an omnideck:// URL. */
 export const mediaPoster = (id: string) => invoke<string | null>("media_poster", { id });
-export const mediaPlay = (id: string, name: string) => invoke<void>("media_play", { id, name });
+/** Starts playback; resolves to the per-LAUNCH exit key — use it as the Now Playing card id
+ *  so a replay of the same item can't share (and later clear) another instance's card. */
+export const mediaPlay = (id: string, name: string) => invoke<string>("media_play", { id, name });
 
 // ---- events ----
 /** A launched app/game exited — payload is the launch id (the tile id) we passed at launch. */

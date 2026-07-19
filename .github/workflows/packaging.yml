@@ -35,14 +35,21 @@ jobs:
         run: |
           pkgver=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
           url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${pkgver}.tar.gz"
-          if curl -sfIL "$url" >/dev/null; then
+          # Only a definitive 404 means "tag not pushed yet". A bare `curl -sf` treated ANY
+          # failure (429 rate limit, 5xx, DNS blip) as no-tag and silently skipped checksum
+          # validation — a false-green packaging check on a real release.
+          code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+          if [ "$code" = "200" ]; then
             echo "release tarball for v${pkgver} exists — strict mode (download + b2sums)"
             echo "MAKEPKG_EXTRA=" >> "$GITHUB_ENV"
-          else
+          elif [ "$code" = "404" ]; then
             echo "no v${pkgver} tag yet — building the current checkout (checksums skipped)"
             git archive --format=tar.gz --prefix="omnideck-${pkgver}/" \
               -o "packaging/omnideck-${pkgver}.tar.gz" HEAD
             echo "MAKEPKG_EXTRA=--skipchecksums" >> "$GITHUB_ENV"
+          else
+            echo "::error::cannot tell whether the v${pkgver} tarball exists (HTTP ${code}) — refusing to guess a mode; re-run the job"
+            exit 1
           fi
       # Run the Arch toolchain in a container; checkout stays on the host (which has git).
       - name: makepkg + namcap

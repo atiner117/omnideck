@@ -41,8 +41,9 @@ clap = { version = "4", features = ["derive"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
 # backoff sleep in the MPRIS reconnect supervisor (already in-tree via reqwest/zbus; the
-# `time` feature is all we need — the runtime itself is tauri's tokio)
-tokio = { version = "1", default-features = false, features = ["time"] }
+# runtime itself is tauri's tokio). `time` for sleeps/timeouts, `macros` for the join!
+# that runs the media-section fetches concurrently.
+tokio = { version = "1", default-features = false, features = ["time", "macros"] }
 # global Ctrl+Alt+Home grab inside the gamescope session (keyboard path back to OmniDeck
 # while a launched app holds focus — the keyboard twin of the gamepad Guide button)
 x11rb = { version = "0.13", features = ["randr"] }

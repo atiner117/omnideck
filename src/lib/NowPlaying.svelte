@@ -1,12 +1,10 @@
 <script lang="ts">
   // Now Playing card stack (bottom right): one card per launch-tracked entry, enriched
   // with live MPRIS metadata when the entry is a media app, plus a standalone card for
-  // media OmniDeck didn't launch. Pure presentation + direct media/app IPC — the launch
-  // list itself lives in the page (it's shared with launch/exit tracking).
-  import * as api from "$lib/backend";
-  import type { MediaInfo } from "$lib/backend";
-
-  export type NowCard = { id: string; kind: string; name: string; category: string; media: MediaInfo | null };
+  // media OmniDeck didn't launch. Pure presentation — the control set (and its IPC) comes
+  // from $lib/npActions, shared with the page's pad-navigable transport overlay; the
+  // launch list itself lives in the page (it's shared with launch/exit tracking).
+  import { cardActions, type NowCard } from "$lib/npActions";
 
   let {
     cards,
@@ -20,16 +18,12 @@
     ondismiss: (id: string) => void;
     onerror: (ctx: string, e: unknown) => void;
   } = $props();
-
-  function mediaControl(action: string) {
-    // no re-poll needed: the player's PropertiesChanged fires a `media-changed` event
-    api.mediaControl(action).catch((e) => onerror("Media control failed", e));
-  }
 </script>
 
 {#if cards.length}
   <div class="nowstack">
     {#each cards as c (c.id)}
+      {@const actions = cardActions(c, { inSession, onerror, ondismiss })}
       <div class="nowplaying">
         {#if c.media && c.media.status === "Playing"}<span class="np-eq"><i></i><i></i><i></i></span>
         {:else if c.media}<span class="np-icon">⏸</span>
@@ -41,15 +35,17 @@
         </span>
         {#if c.media}
           <span class="np-controls">
-            <button class="np-c" title="Previous" aria-label="Previous track" onclick={() => mediaControl("previous")}>⏮</button>
-            <button class="np-c" title="Play / Pause" aria-label="Play or pause" onclick={() => mediaControl("play-pause")}>{c.media.status === "Playing" ? "⏸" : "▶"}</button>
-            <button class="np-c" title="Next" aria-label="Next track" onclick={() => mediaControl("next")}>⏭</button>
+            {#each actions.filter((a) => a.kind === "media") as act (act.aria)}
+              <button class="np-c" title={act.title} aria-label={act.aria} onclick={act.run}>{act.icon}</button>
+            {/each}
           </span>
         {/if}
-        <!-- ⇄ only in the gamescope session: on a desktop, unmap would hide the window from the real WM -->
-        {#if c.kind === "app" && inSession}<button class="np-c" title="Switch to the app" aria-label="Switch to app" onclick={() => api.switchApp().catch((e) => onerror("Couldn't switch app", e))}>⇄</button>{/if}
-        {#if c.kind === "app"}<button class="np-c" title="Close &amp; return (Guide hold / Ctrl+Alt+End)" aria-label="Close app and return" onclick={() => api.closeCurrentApp().catch((e) => onerror("Couldn't close app", e))}>↩</button>{/if}
-        {#if c.kind !== "media"}<button class="np-x" title="Dismiss (doesn't close the app)" aria-label="Dismiss card" onclick={() => ondismiss(c.id)}>✕</button>{/if}
+        {#each actions.filter((a) => a.kind === "app") as act (act.aria)}
+          <button class="np-c" title={act.title} aria-label={act.aria} onclick={act.run}>{act.icon}</button>
+        {/each}
+        {#each actions.filter((a) => a.kind === "dismiss") as act (act.aria)}
+          <button class="np-x" title={act.title} aria-label={act.aria} onclick={act.run}>{act.icon}</button>
+        {/each}
       </div>
     {/each}
   </div>

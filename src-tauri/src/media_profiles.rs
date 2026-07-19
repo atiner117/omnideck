@@ -84,19 +84,26 @@ fn tier_info(t: &Tier) -> String {
     format!("generated for: display {disp} | cpu threads {} | gpu {}{audio}", t.cpu_threads, t.gpu)
 }
 
-/// mpv built with the VapourSynth filter? Cached for the process lifetime — this shells
-/// out to `mpv --no-config --vf=help` once.
+/// mpv built with the VapourSynth filter? A definitive answer (the probe actually ran) is
+/// cached for the process lifetime; a spawn failure/timeout is NOT — an always-on launcher
+/// that cached one transient failure would silently skip auto-profiles until restart.
+/// Bounded: a wedged mpv (stalled NFS binary) must not hang the play path forever.
 pub fn vapoursynth_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let out = std::process::Command::new("mpv")
-            .args(["--no-config", "--vf=help"])
-            .output();
-        match out {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).contains("vapoursynth"),
-            Err(_) => false,
+    static AVAILABLE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+    let mut cached = crate::sync::lock_or_recover(&AVAILABLE, "media_profiles.vs_available");
+    if let Some(v) = *cached {
+        return v;
+    }
+    let mut cmd = std::process::Command::new("mpv");
+    cmd.args(["--no-config", "--vf=help"]);
+    match crate::proc::output_with_timeout(cmd, std::time::Duration::from_secs(5)) {
+        Some(o) if o.status.success() => {
+            let v = String::from_utf8_lossy(&o.stdout).contains("vapoursynth");
+            *cached = Some(v);
+            v
         }
-    })
+        _ => false, // transient — retry on the next play
+    }
 }
 
 const TEMPLATES: &[(&str, &str)] = &[
@@ -159,7 +166,9 @@ pub fn ensure_profiles(tier: &Tier) -> Option<PathBuf> {
         let path = dir.join(name);
         let content = render(template, &dir, tier);
         match std::fs::read_to_string(&path) {
-            Ok(cur) if !is_generated(&cur) => {
+            // Empty is never "user-owned": it's the corpse of an interrupted write — repair
+            // it rather than honoring a blank file as a deliberate opt-out forever.
+            Ok(cur) if !is_generated(&cur) && !cur.trim().is_empty() => {
                 tracing::debug!("mpv-profiles: {name} is user-owned (header removed), keeping it");
                 continue;
             }
@@ -174,7 +183,10 @@ pub fn ensure_profiles(tier: &Tier) -> Option<PathBuf> {
                 continue;
             }
         }
-        if let Err(e) = std::fs::write(&path, &content) {
+        // Atomic (temp + rename), same contract as config.toml: a crash mid-write must not
+        // leave a truncated header-less file, which the user-owned check above would then
+        // refuse to repair on every future boot while media_play keeps --include-ing it.
+        if let Err(e) = crate::config::write_atomic(&path, content.as_bytes()) {
             tracing::warn!("mpv-profiles: writing {name} failed: {e}");
             return None;
         }
@@ -247,7 +259,12 @@ mod tests {
             assert!(!out.contains("/home/"), "{name}: hardcoded home path");
         }
         let conf = render(TEMPLATES[0].1, dir, &tier);
-        assert!(conf.contains("input-conf=/cfg/omnideck/mpv-profiles/input.conf"));
+        // input-conf would REPLACE the user's own ~/.config/mpv/input.conf (script bindings
+        // don't need it); soxr fails audio init closed on FFmpeg builds without libsoxr.
+        // Check DIRECTIVES (uncommented lines) — the conf's comments explain both bans.
+        let directive = |opt: &str| conf.lines().any(|l| l.trim_start().starts_with(opt));
+        assert!(!directive("input-conf="), "mpv.conf must not override the user's input.conf");
+        assert!(!directive("af="), "mpv.conf must not pin an af chain (soxr fails closed)");
         // The toggle script owns the filter dimensions (no preset combo-profiles anymore);
         // it must be loaded by the conf and know where the .vpy files live.
         assert!(conf.contains("scripts-append=/cfg/omnideck/mpv-profiles/omnideck-toggles.lua"));

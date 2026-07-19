@@ -54,11 +54,32 @@ check() { # <label> <vpy> <override> <expected> <tolerance>
   fi
 }
 
+# The ultra profile is BUDGETED per host (cpu_threads x 12 Mpx/s, baked at render time)
+# with a 2x-source passthrough floor — fixed 82.5/60 bands only hold on hosts whose budget
+# clears them (>=6 threads for this 1280x720 source). Derive the expected rate the same way
+# the rendered .vpy does, so the test validates the contract instead of failing on small
+# CPUs that are correctly lowering the target.
+budget="$(grep -oP '^budget = float\("\K[0-9]+' "$dir/interpolate-ultra.vpy" 2>/dev/null || echo 0)"
+ultra_expect() { # <display-hz> -> the fps the rendered ultra profile should produce
+  awk -v hz="$1" -v budget="$budget" 'BEGIN{
+    src = 24000/1001; w = 1280; h = 720;
+    t = (hz > 100) ? hz/2 : hz;
+    if (budget > 0 && w*h*t > budget) t = budget/(w*h);
+    if (t < 2*src) t = src;                       # passthrough floor
+    printf "%.3f", t;
+  }'
+}
+ultra_tol() { # <expected> -> tolerance: ~11% when interpolating, 2.5 on passthrough
+  awk -v e="$1" 'BEGIN{ printf "%.1f", (e > 30) ? e*0.11 : 2.5 }'
+}
+e165="$(ultra_expect 165)"; e60="$(ultra_expect 60)"
+
 echo "profile dir: $dir"
-check "basic @165Hz panel " interpolate-basic.vpy 165  165   17
-check "ultra @165Hz panel " interpolate-ultra.vpy 165  82.5  9
-check "basic @60Hz panel  " interpolate-basic.vpy 60   60    6
-check "ultra @60Hz panel  " interpolate-ultra.vpy 60   60    6
-check "denoise passthrough" denoise.vpy           165  23.976 2.5
+echo "ultra pixel budget: ${budget} px/s -> expect ~${e165} @165Hz, ~${e60} @60Hz"
+check "basic @165Hz panel " interpolate-basic.vpy 165  165     17
+check "ultra @165Hz panel " interpolate-ultra.vpy 165  "$e165" "$(ultra_tol "$e165")"
+check "basic @60Hz panel  " interpolate-basic.vpy 60   60      6
+check "ultra @60Hz panel  " interpolate-ultra.vpy 60   "$e60"  "$(ultra_tol "$e60")"
+check "denoise passthrough" denoise.vpy           165  23.976  2.5
 
 exit "$fail"

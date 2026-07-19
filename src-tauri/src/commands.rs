@@ -30,6 +30,16 @@ pub fn power_action(action: String) -> Result<(), String> {
     ))
 }
 
+/// Run `f` on the blocking pool and await it. Every command whose body does real work
+/// (X11 round-trips, process spawns, fsync) must route through this instead of running
+/// inline on the main thread (sync commands do — that's the UI-freeze class bg_image and
+/// media_play were converted to fix). One place owns the join-error policy.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn get_capability() -> capability::Capability {
     capability::probe()
@@ -122,10 +132,18 @@ pub fn get_config() -> config::Config {
 /// unreadable/undecodable — the frontend then falls back to the full-image `get_art` path,
 /// so a failure is never worse than before, just not faster. See background.rs for why.
 #[tauri::command]
-pub fn bg_image(path: String) -> Option<String> {
-    let display = crate::gpu::session_display_mode().map(|(w, h, _)| (w, h));
-    let out = crate::background::prepared(&path, display)?;
-    Some(out.to_string_lossy().into_owned())
+pub async fn bg_image(path: String) -> Option<String> {
+    // blocking: the first run decodes + re-encodes a full-resolution photo (hundreds of
+    // ms) — as a sync command this ran inline on the main thread and froze the UI at
+    // startup, the exact stall background.rs exists to remove.
+    blocking(move || {
+        let display = crate::gpu::session_display_mode().map(|(w, h, _)| (w, h));
+        let out = crate::background::prepared(&path, display)?;
+        Some(out.to_string_lossy().into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// True when a media server is reachable-by-configuration (config or adopted shim pairing).
@@ -157,7 +175,14 @@ pub async fn media_poster(id: String) -> Option<String> {
 /// client when installed and preferred. The stream URL is built server-side from the item
 /// id — the frontend never supplies a URL, so there's nothing to validate away.
 #[tauri::command]
-pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+pub async fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<String, String> {
+    // blocking: the body does an X11/RandR probe, the (first-play) mpv capability probe,
+    // and profile-template I/O — as a sync command all of that ran inline on the main
+    // thread, freezing the UI and every other IPC call for the duration.
+    blocking(move || media_play_blocking(app, id, name)).await?
+}
+
+fn media_play_blocking(app: tauri::AppHandle, id: String, name: String) -> Result<String, String> {
     if !crate::media_server::valid_id(&id) {
         return Err("invalid media id".into());
     }
@@ -214,14 +239,26 @@ pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(),
     } else {
         return Err("neither mpv nor jellyfinmediaplayer is installed".into());
     };
+    // Per-LAUNCH exit key, not per item (same fix launchTile got): replaying an item while
+    // an earlier instance is still alive must not share a key, or the first exit clears the
+    // survivor's Now Playing card. Returned so the frontend keys its card identically.
+    static MEDIA_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let key = format!(
+        "media-{id}#{}",
+        MEDIA_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     // Through the normal launch path: own process group + watch_child, so the Guide
     // button, the switcher, and the Now Playing card treat playback like any launched app.
-    launch_command(app, exec, Some(name), Some(format!("media-{id}")))
+    launch_command(app, exec, Some(name), Some(key.clone()))?;
+    Ok(key)
 }
 
+/// The four save commands fsync the config file AND its directory (write_atomic) — that's
+/// disk I/O that must not run inline on the main thread, so they ride the blocking pool
+/// like every other I/O command. save_recent_apps fires on every app launch.
 #[tauri::command]
-pub fn save_settings(settings: config::Settings) -> Result<(), String> {
-    config::save_settings(settings)
+pub async fn save_settings(settings: config::Settings) -> Result<(), String> {
+    blocking(move || config::save_settings(settings)).await?
 }
 
 // --- Deck switcher (iOS-style app cards) ---
@@ -232,10 +269,28 @@ pub fn save_settings(settings: config::Settings) -> Result<(), String> {
 
 /// Open the deck: hide all launched apps (so the overlay is visible) and return the live-app
 /// cards. An empty list means nothing is running — the frontend can skip showing the deck.
+/// Async: hide_all's unmap-verify loop can sleep ~400 ms and the freeze policy shells out
+/// to pactl — none of that may run inline on the main thread (sync commands do).
 #[tauri::command]
-pub fn deck_open() -> Vec<watchdog::LiveApp> {
-    crate::switcher::hide_all();
-    watchdog::live_apps()
+pub async fn deck_open() -> Vec<watchdog::LiveApp> {
+    blocking(|| {
+        // Same gate show_group enforces: outside a session the hide can't work and every
+        // card select is refused — opening an inert deck just swallowed controller input.
+        if !crate::switcher::session_ok() {
+            return Vec::new();
+        }
+        crate::switcher::hide_all();
+        watchdog::live_apps()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Deck dismissed without picking a card (second Guide tap, B, Escape, scrim): restore what
+/// deck_open hid — re-show + SIGCONT — so the tap-tap round trip lands back in the app.
+#[tauri::command]
+pub async fn deck_cancel() -> bool {
+    blocking(crate::switcher::deck_cancel).await.unwrap_or(false)
 }
 
 /// Current live-app cards without touching window state (e.g. refreshing after one closes).
@@ -244,16 +299,27 @@ pub fn deck_list() -> Vec<watchdog::LiveApp> {
     watchdog::live_apps()
 }
 
+/// Only group ids the watchdog is actually tracking may reach `kill`: the id comes from the
+/// webview, and an arbitrary u32 (or a stale id from a recycled pgid) must not signal
+/// unrelated processes — `kill -TERM -1` would TERM the user's entire session.
+fn known_group(group: u32) -> Result<(), String> {
+    if watchdog::live_groups().contains(&group) { Ok(()) } else { Err("unknown app group".into()) }
+}
+
 /// Bring one app group to the front (deck card selected).
 #[tauri::command]
-pub fn deck_show(group: u32) -> Result<(), String> {
-    if crate::switcher::show_group(group) { Ok(()) } else { Err("could not show that app".into()) }
+pub async fn deck_show(group: u32) -> Result<(), String> {
+    known_group(group)?;
+    let ok = blocking(move || crate::switcher::show_group(group)).await.unwrap_or(false);
+    if ok { Ok(()) } else { Err("could not show that app".into()) }
 }
 
 /// Close one app group (deck card's close affordance / Select).
 #[tauri::command]
-pub fn deck_close(group: u32) -> Result<(), String> {
-    if watchdog::close_group(group) { Ok(()) } else { Err("could not close that app".into()) }
+pub async fn deck_close(group: u32) -> Result<(), String> {
+    known_group(group)?;
+    let ok = blocking(move || watchdog::close_group(group)).await.unwrap_or(false);
+    if ok { Ok(()) } else { Err("could not close that app".into()) }
 }
 
 /// True if `arg` is safe to pass to a browser after the BROWSER token: an http(s) URL, or
@@ -338,18 +404,18 @@ pub fn get_catalog() -> Vec<apps::App> {
 }
 
 #[tauri::command]
-pub fn save_apps(apps: Vec<apps::App>) -> Result<(), String> {
-    config::save_apps(apps)
+pub async fn save_apps(apps: Vec<apps::App>) -> Result<(), String> {
+    blocking(move || config::save_apps(apps)).await?
 }
 
 #[tauri::command]
-pub fn save_favorites(favorites: Vec<String>) -> Result<(), String> {
-    config::save_favorites(favorites)
+pub async fn save_favorites(favorites: Vec<String>) -> Result<(), String> {
+    blocking(move || config::save_favorites(favorites)).await?
 }
 
 #[tauri::command]
-pub fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
-    config::save_recent_apps(recent_apps)
+pub async fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
+    blocking(move || config::save_recent_apps(recent_apps)).await?
 }
 
 /// Open Steam's per-game Properties dialog for the focused game.
@@ -389,11 +455,20 @@ pub fn close_current_app() -> bool {
     watchdog::return_home()
 }
 
-/// Switch between OmniDeck and the launched app without closing it (UI path; Guide press /
-/// Ctrl+Alt+Home do the same). Returns true if something was hidden or re-shown.
+/// Switch between OmniDeck and a launched app without closing it. With a launch `id` (a Now
+/// Playing card's entry), brings THAT app's group forward like a deck card — the global
+/// toggle re-mapped EVERY hidden app at once, so a per-app ⇄ button surfaced them all. A
+/// STALE id (the app just exited, its card not yet removed) is a no-op for the same reason:
+/// falling through to the toggle would surface every hidden app. Only an ABSENT id (legacy
+/// callers) means the global toggle.
 #[tauri::command]
-pub fn switch_app() -> bool {
-    crate::switcher::toggle().is_some()
+pub async fn switch_app(id: Option<String>) -> bool {
+    blocking(move || match id.as_deref() {
+        Some(key) => watchdog::group_of_id(key).map(crate::switcher::show_group).unwrap_or(false),
+        None => crate::switcher::toggle().is_some(),
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// True when OmniDeck is running as a gamescope session (vs. a window on the desktop). Lets

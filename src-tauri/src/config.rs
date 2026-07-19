@@ -247,12 +247,19 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// half-written one — which matters here because the load path deliberately refuses to
 /// overwrite an unparseable config, so one truncated write would otherwise wedge all future
 /// saves until the user repaired the file by hand.
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let parent = path
+///
+/// Rename-replace has two sharp edges the plain `fs::write` it replaced didn't, both
+/// handled here: a symlinked destination is resolved first (write through to the TARGET —
+/// renaming over the link would sever a dotfiles-managed config), and the destination's
+/// permissions are copied onto the temp before the swap (a chmod-600 config holding the
+/// media-server token must not come back as umask 0644 after every auto-save).
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dest = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let parent = dest
         .parent()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("config");
+    let stem = dest.file_name().and_then(|n| n.to_str()).unwrap_or("config");
     let tmp = parent.join(format!(
         ".{stem}.tmp-{}-{}",
         std::process::id(),
@@ -268,7 +275,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(&tmp); // don't leave the partial temp behind
         return Err(e);
     }
-    fs::rename(&tmp, path)?;
+    if let Ok(meta) = fs::metadata(&dest) {
+        let _ = fs::set_permissions(&tmp, meta.permissions());
+    }
+    fs::rename(&tmp, &dest)?;
     // Best-effort: fsync the directory so the rename itself survives power loss.
     if let Ok(dir) = fs::File::open(parent) {
         let _ = dir.sync_all();

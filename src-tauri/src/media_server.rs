@@ -216,7 +216,22 @@ impl JellyfinServer {
 
     pub async fn sections(&self) -> Result<MediaSections, String> {
         let user = self.user().await?;
-        let views = self.get(&format!("/Users/{user}/Views")).await?;
+        // The four fetches are independent — run them concurrently instead of stacking
+        // four serial LAN round-trips on every media-screen open. join! (not try_join!):
+        // resume/latest/server-name degrade per-section below; only Views failing fails
+        // the whole screen.
+        let views_url = format!("/Users/{user}/Views");
+        let resume_url =
+            format!("/Users/{user}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview");
+        let latest_url =
+            format!("/Users/{user}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series");
+        let (views, resume_res, latest_res, info_res) = tokio::join!(
+            self.get(&views_url),
+            self.get(&resume_url),
+            self.get(&latest_url),
+            self.get("/System/Info/Public"),
+        );
+        let views = views?;
         let libraries = views["Items"]
             .as_array()
             .map(|a| {
@@ -239,29 +254,21 @@ impl JellyfinServer {
         // A failed row degrades to empty rather than failing the whole screen, but it's LOGGED
         // now (was silently indistinguishable from a genuinely empty library) and the get()
         // retry above already absorbs a single transient blip.
-        let resume = match self
-            .get(&format!("/Users/{user}/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview"))
-            .await
-        {
+        let resume = match resume_res {
             Ok(v) => items_of(&v["Items"]),
             Err(e) => {
                 tracing::warn!("media: Continue Watching unavailable ({e}) — showing none");
                 Vec::new()
             }
         };
-        let latest = match self
-            .get(&format!("/Users/{user}/Items/Latest?Limit=16&IncludeItemTypes=Movie,Series"))
-            .await
-        {
+        let latest = match latest_res {
             Ok(v) => items_of(&v), // /Latest returns a bare array
             Err(e) => {
                 tracing::warn!("media: Latest unavailable ({e}) — showing none");
                 Vec::new()
             }
         };
-        let name = self
-            .get("/System/Info/Public")
-            .await
+        let name = info_res
             .ok()
             .and_then(|v| v["ServerName"].as_str().map(str::to_string))
             .unwrap_or_else(|| "Jellyfin".into());

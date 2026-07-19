@@ -131,6 +131,21 @@ fn emit_current(app: &tauri::AppHandle) {
 
 /// Control the tracked player. Errs when no session bus / no player — the UI toasts it.
 pub async fn control(action: &str) -> Result<(), String> {
+    // ONE list owns both validation and dispatch: parse the verb up front (fail fast,
+    // before any D-Bus work), then match the enum exhaustively below. Keeping two string
+    // lists in sync was a footgun — a verb added to the guard but not the dispatch would
+    // silently fall into the catch-all and fire the wrong control.
+    enum Verb {
+        PlayPause,
+        Next,
+        Previous,
+    }
+    let verb = match action {
+        "play-pause" => Verb::PlayPause,
+        "next" => Verb::Next,
+        "previous" => Verb::Previous,
+        _ => return Err(format!("unknown media action: {action}")),
+    };
     let conn = current_conn().ok_or("media controls temporarily unavailable (reconnecting to D-Bus)")?;
     let name = crate::sync::lock_or_recover(state(), "mpris.players")
         .iter()
@@ -143,13 +158,21 @@ pub async fn control(action: &str) -> Result<(), String> {
         .build()
         .await
         .map_err(|e| e.to_string())?;
-    match action {
-        "play-pause" => player.play_pause().await,
-        "next" => player.next().await,
-        "previous" => player.previous().await,
-        _ => return Err(format!("unknown media action: {action}")),
+    let call = async {
+        match verb {
+            Verb::PlayPause => player.play_pause().await,
+            Verb::Next => player.next().await,
+            Verb::Previous => player.previous().await,
+        }
+    };
+    // Bounded: zbus sets NO method timeout by default, and a deck-frozen (SIGSTOPped)
+    // paused player keeps its bus connection open but never replies — without this, every
+    // transport press pended forever (dead button, no toast) and then all fired at once
+    // when the app was thawed.
+    match tokio::time::timeout(Duration::from_secs(2), call).await {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(_) => Err("player did not respond (it may be frozen while hidden)".into()),
     }
-    .map_err(|e| e.to_string())
 }
 
 /// Fetch a player's full state once (on appear / on a Metadata-invalidated signal).
@@ -249,11 +272,24 @@ pub async fn watch(app: tauri::AppHandle) {
                 };
             }
         }
+        // The session is over: any straggler task from it must stop touching state NOW,
+        // not when the next session happens to start — the gap is the whole backoff window.
+        SESSION_GEN.fetch_add(1, Ordering::SeqCst);
         // Connection is gone: drop it (control() now reports "temporarily unavailable"), clear
         // cached players, and push `None` so no stale card survives the gap.
         *crate::sync::lock_or_recover(&CONN, "mpris.conn") = None;
-        crate::sync::lock_or_recover(state(), "mpris.players").clear();
-        emit_current(&app);
+        let had_players = {
+            let mut players = crate::sync::lock_or_recover(state(), "mpris.players");
+            let had = !players.is_empty();
+            players.clear();
+            had
+        };
+        // Emit only when a card could actually be showing: on a host with no session bus at
+        // all, an unconditional emit here pushed a null `media-changed` into the webview
+        // every backoff tick (15 s) for the life of the process.
+        if had_players {
+            emit_current(&app);
+        }
     }
 }
 

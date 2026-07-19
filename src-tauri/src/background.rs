@@ -66,10 +66,17 @@ pub fn prepared(src: &str, display: Option<(u32, u32)>) -> Option<PathBuf> {
     } else {
         img
     };
-    // Encode to a tmp sibling then rename, so a concurrent reader never sees a half file.
-    let tmp = out.with_extension("jpg.tmp");
-    prepared.to_rgb8().save_with_format(&tmp, image::ImageFormat::Jpeg).ok()?;
-    std::fs::rename(&tmp, &out).ok()?;
+    // Encode in memory, then publish through config's atomic writer (unique per-process
+    // temp + rename). The old fixed `.jpg.tmp` sibling let two concurrent preparations
+    // (app startup racing `omnideck bgprep`, or a double-fired settings $effect) truncate
+    // each other mid-write and rename a torn JPEG into the cache — which the mtime-keyed
+    // `out.exists()` check above would then serve forever.
+    let mut buf = Vec::new();
+    prepared
+        .to_rgb8()
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .ok()?;
+    crate::config::write_atomic(&out, &buf).ok()?;
     tracing::info!("background: prepared {iw}x{ih} -> {}", prepared.width());
     Some(out)
 }

@@ -37,6 +37,15 @@ pub fn live_apps() -> Vec<LiveApp> {
     crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").clone()
 }
 
+/// The live group whose launch id is `id` — lets a Now Playing card's per-app actions
+/// route through the deck primitives (show THIS group) instead of the global toggle.
+pub fn group_of_id(id: &str) -> Option<u32> {
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS")
+        .iter()
+        .find(|a| a.id.as_deref() == Some(id))
+        .map(|a| a.group)
+}
+
 /// Close EVERY still-running launched app so gamescope refocuses OmniDeck. Deliberate
 /// semantics: "close" is the console-style escape hatch — the user wants their launcher
 /// back, and with app B stacked over a still-running app A, closing only the newest (the
@@ -59,7 +68,11 @@ pub fn return_home() -> bool {
 /// Close a single launched app group (the deck switcher's per-card close). Same CONT-then-
 /// TERM discipline as return_home; the child's watch_child thread reaps + emits app-exited.
 pub fn close_group(group: u32) -> bool {
-    signal_group(group)
+    let ok = signal_group(group);
+    // The group is going away — its pgid must not linger in the switcher's freeze list,
+    // where the exit hook's blanket SIGCONT could later hit a recycled pgid.
+    crate::switcher::forget_stopped(group);
+    ok
 }
 
 /// SIGTERM a whole process group (CONT first so a switcher-frozen group can act on it).

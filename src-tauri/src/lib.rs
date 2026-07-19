@@ -27,6 +27,7 @@ mod media_profiles;
 mod media_server;
 mod mpris;
 mod navpad;
+mod proc;
 mod session;
 mod steamgriddb;
 mod switcher;
@@ -89,7 +90,8 @@ pub fn run() {
             commands::deck_open,
             commands::deck_list,
             commands::deck_show,
-            commands::deck_close
+            commands::deck_close,
+            commands::deck_cancel
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -115,6 +117,14 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application")
+        .run(|_app, event| {
+            // However the process ends (Quit button, window close, session teardown):
+            // switcher-frozen app groups must not outlive us — SIGTERM can't wake a
+            // SIGSTOPped process, so exiting without a CONT strands them stopped forever.
+            if let tauri::RunEvent::Exit = event {
+                switcher::resume_stopped_groups();
+            }
+        })
 }

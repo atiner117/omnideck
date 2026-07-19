@@ -53,8 +53,15 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
 
     // Virtual keyboard/mouse bridge: while a launched app is in front, the pad drives IT
     // (arrows/Enter/Esc, pointer on the right stick — see navpad.rs). None when /dev/uinput
-    // isn't writable; everything else works without it.
-    let mut navpad = crate::navpad::NavPad::new();
+    // isn't writable; everything else works without it. Only built where it can ever fire —
+    // on a plain desktop the activation gate never passes, so constructing it just left a
+    // phantom kernel input device registered for the whole run.
+    let mut navpad = if crate::switcher::session_ok() {
+        crate::navpad::NavPad::new()
+    } else {
+        tracing::info!("navpad: not in a gamescope session — virtual input bridge not created");
+        None
+    };
 
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
@@ -77,11 +84,14 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                 }
                 _ => {}
             }
-            // App in front → the pad drives the app through the uinput bridge. Events are
-            // STILL forwarded to the webview below (existing behavior — it's hidden and
-            // ignores them); Guide never reaches here.
+            // App in front → the pad drives the app through the uinput bridge, and the
+            // event is CONSUMED. The hidden dashboard's handler has no app-in-front gate,
+            // so forwarding the same press also activated tiles / toggled favorites /
+            // opened modals behind the app the user was driving. Guide never reaches here.
             if let Some(np) = navpad.as_mut() {
-                np.handle(&event);
+                if np.handle(&event) {
+                    continue;
+                }
             }
             // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
             if let gilrs::EventType::AxisChanged(a, v, _) = &event {

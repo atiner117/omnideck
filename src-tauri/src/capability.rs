@@ -60,10 +60,27 @@ pub struct Capability {
 
 /// Cached, process-lifetime hardware probe. The result is stable for a run (hardware doesn't
 /// change mid-session), and this sits on media_play's and the child-launch env setup's hot
-/// paths — so the sysfs/PATH/ICD scans below run exactly once and every later call is a clone.
+/// paths — so the sysfs/PATH/ICD scans below run once and every later call is a clone.
+///
+/// Only SETTLED answers are cached: a PCI GPU with no usable render node/ICD usually means
+/// the probe ran before udev/driver setup finished (session autostart) — memoizing that
+/// would pin "no usable GPU" (auto-profiles off, wrong env decisions) for the whole run.
+/// Re-scanning until it settles is a few sysfs dir reads; a genuinely GPU-less host still
+/// caches immediately. BOUNDED, though: a GPU still unusable after several probes is a fact
+/// of the host (installed card, no usable driver), not boot lag — accept and cache it
+/// rather than re-walking sysfs/PATH/ICDs on every play for the whole run.
 pub fn probe() -> Capability {
     static CACHE: std::sync::OnceLock<Capability> = std::sync::OnceLock::new();
-    CACHE.get_or_init(probe_uncached).clone()
+    static UNSETTLED_PROBES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if let Some(c) = CACHE.get() {
+        return c.clone();
+    }
+    let cap = probe_uncached();
+    let settled = cap.has_real_gpu || cap.gpus.is_empty();
+    if settled || UNSETTLED_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 8 {
+        let _ = CACHE.set(cap.clone());
+    }
+    cap
 }
 
 fn probe_uncached() -> Capability {
