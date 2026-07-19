@@ -82,7 +82,17 @@ export const mediaSections = () => invoke<MediaSections>("media_sections");
 export const mediaBrowse = (parent: string) => invoke<MediaItem[]>("media_browse", { parent });
 /** Fetch+cache an item's poster; resolves to the on-disk path for an omnideck:// URL. */
 export const mediaPoster = (id: string) => invoke<string | null>("media_poster", { id });
-export const mediaPlay = (id: string, name: string) => invoke<void>("media_play", { id, name });
+/** Play an item. `startSecs` resumes mid-item (mpv `--start=`); omit to play from the top. */
+export const mediaPlay = (id: string, name: string, startSecs?: number) =>
+  invoke<void>("media_play", { id, name, startSecs });
+/** In-progress items with resume positions (`position_secs`) — the Continue Watching row. */
+export const getContinueWatching = () => invoke<MediaItem[]>("get_continue_watching");
+/** Recently-added movies/series (the "Latest" shelf). */
+export const getRecentlyAdded = () => invoke<MediaItem[]>("get_recently_added");
+/** Set the fully-watched flag on an item (also clears its resume point server-side). */
+export const markWatched = (id: string) => invoke<void>("mark_watched", { id });
+/** Clear the fully-watched flag. */
+export const markUnwatched = (id: string) => invoke<void>("mark_unwatched", { id });
 
 // ---- events ----
 /** A launched app/game exited — payload is the launch id (the tile id) we passed at launch. */

@@ -175,6 +175,40 @@ pub async fn media_browse(parent: String) -> Result<Vec<crate::media_server::Med
     crate::media_server::server().ok_or("no media server configured")?.browse(&parent).await
 }
 
+/// The Continue Watching rail: in-progress items with resume positions (`position_secs`).
+/// Standalone (vs. carving it out of `media_sections`) so the home-screen row can refresh
+/// after playback ends without re-fetching libraries + server info.
+#[tauri::command]
+pub async fn get_continue_watching() -> Result<Vec<crate::media_server::MediaItem>, String> {
+    crate::media_server::server().ok_or("no media server configured")?.continue_watching().await
+}
+
+/// Recently-added movies/series (the "Latest" shelf), same standalone rationale.
+#[tauri::command]
+pub async fn get_recently_added() -> Result<Vec<crate::media_server::MediaItem>, String> {
+    crate::media_server::server().ok_or("no media server configured")?.recently_added().await
+}
+
+/// Set the fully-watched flag on an item (long-press / context action on a media row).
+#[tauri::command]
+pub async fn mark_watched(id: String) -> Result<(), String> {
+    crate::media_server::server().ok_or("no media server configured")?.set_played(&id, true).await
+}
+
+/// Clear the fully-watched flag (and any resume point Jellyfin kept alongside it).
+#[tauri::command]
+pub async fn mark_unwatched(id: String) -> Result<(), String> {
+    crate::media_server::server().ok_or("no media server configured")?.set_played(&id, false).await
+}
+
+/// The mpv flag for a resume position, or None when playback should start from the top.
+/// Rejects non-finite and non-positive values (a NaN would render as "--start=NaN" and kill
+/// the launch); whole seconds are plenty — Jellyfin's own resume granularity is coarser.
+fn mpv_start_flag(start_secs: Option<f64>) -> Option<String> {
+    let s = start_secs.filter(|s| s.is_finite() && *s >= 1.0)?;
+    Some(format!("--start={}", s.floor() as u64))
+}
+
 /// Fetch+cache an item's poster; returns the on-disk path for an omnideck:// URL.
 #[tauri::command]
 pub async fn media_poster(id: String) -> Option<String> {
@@ -184,9 +218,22 @@ pub async fn media_poster(id: String) -> Option<String> {
 
 /// Play a media item: mpv direct-stream by default (real 4K hwdec), the Jellyfin desktop
 /// client when installed and preferred. The stream URL is built server-side from the item
-/// id — the frontend never supplies a URL, so there's nothing to validate away.
+/// id — the frontend never supplies a URL, so the only input to gate is the id itself
+/// (GUID-shaped, checked before it's interpolated into the stream path).
+///
+/// `start_secs` resumes mid-item (Continue Watching row): mpv gets `--start=<secs>`. The
+/// desktop-client path ignores it — jellyfinmediaplayer reads resume points off the server
+/// itself.
 #[tauri::command]
-pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+pub fn media_play(
+    app: tauri::AppHandle,
+    id: String,
+    name: String,
+    start_secs: Option<f64>,
+) -> Result<(), String> {
+    if !crate::media_server::valid_id(&id) {
+        return Err("invalid media item id".into());
+    }
     let srv = crate::media_server::server().ok_or("no media server configured")?;
     let ms = config::load_or_create().media_server;
     let prefer_mpv = ms.kind.is_empty() || ms.prefer_mpv; // adopted-pairing default: mpv
@@ -233,6 +280,10 @@ pub fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<(),
         }
         exec.push("--force-window=immediate".into());
         exec.push(format!("--force-media-title={name}"));
+        // Resume point (Continue Watching): seek before the first frame renders, not after.
+        if let Some(flag) = mpv_start_flag(start_secs) {
+            exec.push(flag);
+        }
         // Auth rides in a header, not the URL: stream_url() carries no api_key, so the
         // token stays out of mpv's log/OSD/IPC/watch-later and server access logs. (mpv
         // splits --http-header-fields on commas; Jellyfin tokens are hex, so no escaping.)
@@ -488,7 +539,19 @@ pub async fn app_icon(url: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_safe_browser_arg, spawn_error};
+    use super::{is_safe_browser_arg, mpv_start_flag, spawn_error};
+
+    #[test]
+    fn start_flag_only_for_real_positive_positions() {
+        assert_eq!(mpv_start_flag(None), None); // plain play
+        assert_eq!(mpv_start_flag(Some(0.0)), None); // "from the top" needs no flag
+        assert_eq!(mpv_start_flag(Some(0.4)), None); // sub-second resume = noise
+        assert_eq!(mpv_start_flag(Some(-30.0)), None); // negative = mpv end-relative; never pass it
+        assert_eq!(mpv_start_flag(Some(f64::NAN)), None); // would render "--start=NaN"
+        assert_eq!(mpv_start_flag(Some(f64::INFINITY)), None);
+        assert_eq!(mpv_start_flag(Some(1.0)), Some("--start=1".into()));
+        assert_eq!(mpv_start_flag(Some(2850.9)), Some("--start=2850".into())); // floors
+    }
 
     #[test]
     fn spawn_errors_map_to_clear_messages() {
