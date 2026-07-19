@@ -36,6 +36,7 @@ pub struct Settings {
     pub live_wallpaper: String, // animated background: "off" | "waves" (PSP-style ribbon)
     pub ambient: bool, // synthesized ambient background music (subtle, off by default)
     pub ambient_volume: f64, // ambient music volume multiplier (0.0–1.0)
+    pub overscan_pct: f64, // TV safe-area inset per edge, percent of the screen (0–10; 0 = off)
 }
 
 impl Default for Settings {
@@ -67,6 +68,7 @@ impl Default for Settings {
             live_wallpaper: "waves".into(),
             ambient: false,
             ambient_volume: 0.35,
+            overscan_pct: 0.0,
         }
     }
 }
@@ -123,6 +125,7 @@ impl Settings {
             self.live_wallpaper = "waves".into();
         }
         self.ambient_volume = self.ambient_volume.clamp(0.0, 1.0);
+        self.overscan_pct = self.overscan_pct.clamp(0.0, 10.0);
     }
 }
 
@@ -297,6 +300,7 @@ mod tests {
             sound_volume: 5.0,
             grid_columns: 0,
             dashboard_recents: 999,
+            overscan_pct: 99.0,
             ..Default::default()
         };
         s.normalize();
@@ -305,6 +309,7 @@ mod tests {
         assert_eq!(s.sound_volume, 1.0);
         assert_eq!(s.grid_columns, 1);
         assert_eq!(s.dashboard_recents, 50);
+        assert_eq!(s.overscan_pct, 10.0);
     }
 
     #[test]
