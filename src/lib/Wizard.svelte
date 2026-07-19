@@ -45,12 +45,12 @@
 </div>
 
 <style>
-  .wizard { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: radial-gradient(1200px 800px at 50% 30%, #1a2236 0%, #05070b 70%); }
+  .wizard { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: radial-gradient(1200px 800px at 50% 30%, #1a2236 0%, var(--bg) 70%); }
   .wstep { width: min(640px, 90vw); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 32px; }
   .wlogo { font-size: clamp(26px, 3.4vw, 48px); font-weight: 800; letter-spacing: 4px; color: var(--accent); }
   .wstep h2 { margin: 0; font-size: clamp(26px, 3.4vw, 44px); }
   .wlead { margin: 0; color: #aab6c9; font-size: clamp(15px, 1.7vw, 21px); max-width: 34em; line-height: 1.5; }
-  .wfacts { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 8px; color: #cdd7e6; font-size: clamp(14px, 1.6vw, 20px); }
+  .wfacts { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 8px; color: var(--text); font-size: clamp(14px, 1.6vw, 20px); }
   .wfacts b { color: #fff; }
   .wswatches { display: flex; gap: 16px; margin: 8px 0; }
   .wsw { width: 56px; height: 56px; border-radius: 14px; border: 3px solid transparent; box-shadow: 0 6px 20px #0008; }

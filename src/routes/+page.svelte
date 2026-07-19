@@ -19,6 +19,7 @@
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
   import type { Tile } from "$lib/tiles";
   import { SETTING_DEFS, ACCENTS, normalizeNum, type SettingDef, type CycleDef, type NumDef, type TextDef } from "$lib/settings-defs";
+  import { applyTheme } from "$lib/themes/themes";
 
   const CATEGORIES = [
     { id: "dashboard", label: "Home", icon: "home" },
@@ -314,6 +315,16 @@
       : (PRESET[cfg?.settings?.ui_scale ?? "medium"] ?? 1.6),
   );
   let settingsEditing = $state(false);
+  // Theme: stamp data-theme on <html> whenever the setting changes; tokens.css + themes.css
+  // do all the color work (see src/lib/themes/). Runs with the default before cfg loads.
+  $effect(() => applyTheme(cfg?.settings?.theme));
+  // Page background: an explicitly chosen background_color wins; the stock default follows
+  // the theme's --bg token instead, so OLED/Light/CRT/Deck recolor the page without the
+  // user having to clear their background setting.
+  let pageBg = $derived.by(() => {
+    const c = cfg?.settings?.background_color ?? "#05070b";
+    return c === "#05070b" ? "var(--bg)" : c;
+  });
 
   // Background = a base (solid color or a custom image) plus an optional overlay: the
   // focused game's wide hero art, or a dominant-color gradient from the focused app's icon.
@@ -1073,7 +1084,7 @@
   });
 </script>
 
-<main style="--accent:{accent}; --scale:{scaleNum}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{cfg?.settings?.background_color ?? '#05070b'}">
+<main style="--accent:{accent}; --scale:{scaleNum}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{pageBg}">
   {#if baseImageShown}<div class="xbg base has" style="background-image:url({bgImageUrl})"></div>{/if}
   <div class="xbg" class:has={!!overlay} class:wash={overlay?.kind === "wash"}
     style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`

@@ -16,6 +16,7 @@ pub struct Settings {
     pub sort: String, // "alpha" | "recent"
     pub show_runtimes: bool,
     pub accent: String, // hex, e.g. "#4cc2ff"
+    pub theme: String, // UI theme: "omnidark" | "oled" | "light" | "high-contrast" | "crt" | "deck"
     pub steamgriddb_key: String, // optional; fills in missing box art
     pub onboarded: bool, // false -> show the first-run wizard
     pub ui_scale: String, // legacy; size is now the smooth ui_scale_custom multiplier
@@ -45,6 +46,7 @@ impl Default for Settings {
             sort: "alpha".into(),
             show_runtimes: false,
             accent: "#4cc2ff".into(),
+            theme: "omnidark".into(),
             steamgriddb_key: String::new(),
             // Default TRUE so an existing config (missing this field) does NOT re-trigger
             // the wizard; a freshly generated config overrides this to false (see defaults()).
@@ -71,6 +73,11 @@ impl Default for Settings {
     }
 }
 
+/// Valid `settings.theme` ids. Must match the registry in src/lib/themes/themes.ts and the
+/// `[data-theme]` blocks in src/lib/themes/themes.css (enforced by theme_ids_match_frontend).
+/// First entry is the default.
+const THEME_IDS: &[&str] = &["omnidark", "oled", "light", "high-contrast", "crt", "deck"];
+
 /// True for a `#rrggbb` hex color — the only form the UI emits and CSS needs.
 fn is_hex6(s: &str) -> bool {
     let b = s.as_bytes();
@@ -92,6 +99,11 @@ impl Settings {
 
         if !is_hex6(&self.accent) {
             self.accent = "#4cc2ff".into();
+        }
+        // Theme ids mirror src/lib/themes/themes.ts (the CSS defines a [data-theme] block per id);
+        // the theme_ids_match_frontend test keeps the three files honest.
+        if !THEME_IDS.contains(&self.theme.as_str()) {
+            self.theme = "omnidark".into();
         }
         if !is_hex6(&self.background_color) {
             self.background_color = "#05070b".into();
@@ -287,7 +299,52 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Settings, THEME_IDS};
+
+    /// The theme whitelist here, the TS registry, and the CSS blocks describe the same set of
+    /// themes from three files; a partial edit ships a theme that silently resets to the default
+    /// (normalize) or renders unstyled (CSS). Cross-check them so CI catches the drift.
+    #[test]
+    fn theme_ids_match_frontend() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/themes");
+        let ts = std::fs::read_to_string(format!("{root}/themes.ts")).expect("read themes.ts");
+        let css = std::fs::read_to_string(format!("{root}/themes.css")).expect("read themes.css");
+
+        // themes.ts registry: every entry `{ id: "<id>"` must be whitelisted here, and vice versa.
+        let ts_ids: Vec<&str> = ts
+            .match_indices("{ id: \"")
+            .map(|(i, pat)| {
+                let rest = &ts[i + pat.len()..];
+                &rest[..rest.find('"').expect("unterminated id string")]
+            })
+            .collect();
+        assert_eq!(
+            ts_ids, THEME_IDS,
+            "themes.ts THEMES registry and config.rs THEME_IDS must list the same ids in order"
+        );
+        assert!(
+            ts.contains(&format!("DEFAULT_THEME: ThemeId = \"{}\"", THEME_IDS[0])),
+            "themes.ts DEFAULT_THEME must be \"{}\"",
+            THEME_IDS[0]
+        );
+
+        // themes.css: every non-default id needs a `[data-theme="<id>"]` block (the default IS
+        // the tokens.css base values), and no block may reference an unknown id.
+        for id in &THEME_IDS[1..] {
+            assert!(
+                css.contains(&format!("[data-theme=\"{id}\"]")),
+                "themes.css is missing a [data-theme=\"{id}\"] block"
+            );
+        }
+        for (i, pat) in css.match_indices("data-theme=\"") {
+            let rest = &css[i + pat.len()..];
+            let id = &rest[..rest.find('"').expect("unterminated data-theme selector")];
+            assert!(
+                THEME_IDS.contains(&id),
+                "themes.css styles unknown theme id {id:?} — add it to THEME_IDS and themes.ts"
+            );
+        }
+    }
 
     #[test]
     fn normalize_clamps_out_of_range() {
@@ -311,6 +368,7 @@ mod tests {
     fn normalize_sanitizes_bad_strings() {
         let mut s = Settings {
             accent: "red; background:url(http://evil)".into(), // CSS-injection attempt
+            theme: "haxor { evil }".into(),
             background_color: "#zzz".into(),
             search_provider: "javascript:alert(1)".into(), // non-http scheme
             sort: "bogus".into(),
@@ -321,6 +379,7 @@ mod tests {
         };
         s.normalize();
         assert_eq!(s.accent, "#4cc2ff");
+        assert_eq!(s.theme, "omnidark");
         assert_eq!(s.background_color, "#05070b");
         assert_eq!(s.search_provider, ""); // cleared -> UI falls back to DuckDuckGo
         assert_eq!(s.sort, "alpha");
@@ -333,6 +392,7 @@ mod tests {
     fn normalize_keeps_valid_strings() {
         let mut s = Settings {
             accent: "#AABBCC".into(),
+            theme: "high-contrast".into(),
             background_color: "#000000".into(),
             search_provider: "https://searx.example/search?q=".into(),
             sort: "recent".into(),
@@ -341,6 +401,7 @@ mod tests {
         };
         s.normalize();
         assert_eq!(s.accent, "#AABBCC");
+        assert_eq!(s.theme, "high-contrast");
         assert_eq!(s.background_color, "#000000");
         assert_eq!(s.search_provider, "https://searx.example/search?q=");
         assert_eq!(s.sort, "recent");
