@@ -8,6 +8,7 @@ import { listen, type UnlistenFn, type EventCallback } from "@tauri-apps/api/eve
 
 // ---- types (generated — see ./bindings/) ----
 import type { App } from "./bindings/App";
+import type { Appearance } from "./bindings/Appearance";
 import type { Capability } from "./bindings/Capability";
 import type { Config } from "./bindings/Config";
 import type { Game } from "./bindings/Game";
@@ -21,7 +22,7 @@ import type { MediaLibrary } from "./bindings/MediaLibrary";
 import type { MediaSections } from "./bindings/MediaSections";
 import type { Settings } from "./bindings/Settings";
 import type { Tier } from "./bindings/Tier";
-export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
+export type { App, Appearance, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
 
 // ---- command wrappers (typed returns; reject on backend Err — callers decide UX) ----
 export const getCapability = () => invoke<Capability>("get_capability");
@@ -42,6 +43,7 @@ export const launchGame = (appid: string, name: string, id?: string) =>
 export const launchCommand = (exec: string[], name: string, id?: string) =>
   invoke<void>("launch_command", { exec, name, id });
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+export const saveAppearance = (appearance: Appearance) => invoke<void>("save_appearance", { appearance });
 export const saveApps = (apps: App[]) => invoke<void>("save_apps", { apps });
 export const saveFavorites = (favorites: string[]) => invoke<void>("save_favorites", { favorites });
 export const saveRecentApps = (recentApps: string[]) => invoke<void>("save_recent_apps", { recentApps });

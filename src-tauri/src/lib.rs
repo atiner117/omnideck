@@ -65,6 +65,7 @@ pub fn run() {
             commands::get_apps,
             commands::get_config,
             commands::save_settings,
+            commands::save_appearance,
             commands::launch_command,
             commands::grid_art,
             commands::get_catalog,

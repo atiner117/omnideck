@@ -71,6 +71,34 @@ impl Default for Settings {
     }
 }
 
+/// `[appearance]` — presentation options that sit above the per-widget `[settings]` knobs
+/// (library layout now; theme/accent are planned to join it). Additive: an existing
+/// config.toml without the section deserializes to the defaults below.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct Appearance {
+    /// Library presentation: "rail" (XMB cascade, default) | "grid" (large poster grid)
+    /// | "grid-compact" (denser grid) | "list" (rows with details).
+    pub layout: String,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self { layout: "rail".into() }
+    }
+}
+
+impl Appearance {
+    /// Reset an unknown hand-edited layout to the default so the UI's render switch and
+    /// the 2D nav math never see an unexpected value.
+    fn normalize(&mut self) {
+        if !matches!(self.layout.as_str(), "rail" | "grid" | "grid-compact" | "list") {
+            self.layout = "rail".into();
+        }
+    }
+}
+
 /// True for a `#rrggbb` hex color — the only form the UI emits and CSS needs.
 fn is_hex6(s: &str) -> bool {
     let b = s.as_bytes();
@@ -131,6 +159,9 @@ impl Settings {
 #[serde(default)]
 pub struct Config {
     pub settings: Settings,
+    /// `[appearance]` — library layout (and, later, theme). Additive with defaults.
+    #[serde(default)]
+    pub appearance: Appearance,
     /// `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
     #[serde(default)]
@@ -171,6 +202,7 @@ fn defaults() -> Config {
             onboarded: false, // a fresh install runs the onboarding wizard
             ..Default::default()
         },
+        appearance: Default::default(),
         media_server: Default::default(),
         apps: apps::list(),
         favorites: Vec::new(),
@@ -215,6 +247,7 @@ pub fn load_or_create() -> Config {
             }
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
+        cfg.appearance.normalize();
         cfg.media_server.normalize();
         cfg.config_path = path_str;
         return cfg;
@@ -257,6 +290,11 @@ pub fn save_settings(settings: Settings) -> Result<(), String> {
     mutate_and_save(|cfg| cfg.settings = settings)
 }
 
+/// Persist new appearance options (library layout), preserving everything else.
+pub fn save_appearance(appearance: Appearance) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.appearance = appearance)
+}
+
 /// Persist a new apps list (used by the in-app "Add apps" catalog screen).
 pub fn save_apps(new_apps: Vec<apps::App>) -> Result<(), String> {
     mutate_and_save(|cfg| cfg.apps = new_apps)
@@ -287,7 +325,19 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{Appearance, Settings};
+
+    #[test]
+    fn appearance_normalize_resets_unknown_layout() {
+        let mut a = Appearance { layout: "mosaic".into() };
+        a.normalize();
+        assert_eq!(a.layout, "rail");
+        for ok in ["rail", "grid", "grid-compact", "list"] {
+            let mut a = Appearance { layout: ok.into() };
+            a.normalize();
+            assert_eq!(a.layout, ok);
+        }
+    }
 
     #[test]
     fn normalize_clamps_out_of_range() {

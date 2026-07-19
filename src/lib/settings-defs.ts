@@ -10,7 +10,8 @@
 // save. The page applies patches via its `patchSettings` (which mutates the reactive cfg and
 // persists). The one deliberate side effect is the volume-preview blip, kept inline to match
 // the previous behavior exactly.
-import type { Settings } from "./backend";
+import type { Appearance, Settings } from "./backend";
+import { isGridLayout } from "./components/layouts";
 import { blip } from "./sfx";
 
 // ---- option lists ----
@@ -56,8 +57,9 @@ function soundLabel(s: Settings): string {
 type BaseDef = {
   key: string;
   label: string;
-  /** Hide the row when this returns false (rows that only apply to a current selection). */
-  visible?: (s: Settings) => boolean;
+  /** Hide the row when this returns false (rows that only apply to a current selection).
+   *  Appearance is passed too for rows gated on the library layout (grid columns). */
+  visible?: (s: Settings, a?: Appearance) => boolean;
 };
 export type HeaderDef = BaseDef & { type: "header" };
 export type ActionDef = BaseDef & { type: "action" };
@@ -115,6 +117,22 @@ export const SETTING_DEFS: SettingDef[] = [
     get: (s) => s?.ui_scale_custom ?? 1.6,
     set: (v) => ({ ui_scale_custom: v }),
     lo: 0.8, hi: 3.5, step: 0.05,
+  },
+  {
+    // appearance.layout, not a Settings field: the page intercepts this key in
+    // cycleSetting (Enter/A advances the mode) and renders LayoutPicker inline
+    // (mouse picks a mode directly) — same inline-extra pattern as the accent row.
+    key: "layout", label: "Library layout", type: "cycle",
+    value: () => "", // the inline picker shows the current mode
+    cycle: () => ({}),
+  },
+  {
+    key: "gridcols", label: "Grid columns", type: "num",
+    visible: (_s, a) => isGridLayout(a?.layout ?? "rail"),
+    value: (s) => `${s.grid_columns ?? 6}`,
+    get: (s) => s?.grid_columns ?? 6,
+    set: (v) => ({ grid_columns: v }),
+    lo: 3, hi: 12, step: 1, int: true,
   },
   {
     key: "accent", label: "Accent", type: "cycle",

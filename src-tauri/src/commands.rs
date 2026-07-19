@@ -221,6 +221,11 @@ pub fn save_settings(settings: config::Settings) -> Result<(), String> {
     config::save_settings(settings)
 }
 
+#[tauri::command]
+pub fn save_appearance(appearance: config::Appearance) -> Result<(), String> {
+    config::save_appearance(appearance)
+}
+
 // --- Deck switcher (iOS-style app cards) ---
 //
 // The frontend owns the overlay UI + card navigation; these four commands are the window/
