@@ -56,6 +56,10 @@
   .prefs :global(.csearch) { color: #93a0b6; font-size: clamp(12px, 1.2vw, 15px); padding: 4px 2px 6px; }
   .prefs :global(.csearch.active) { color: var(--accent); font-weight: 700; }
   .prefs :global(.phint) { color: #7e8aa0; font-size: clamp(11px, 1.1vw, 13px); margin: 3px 0 0; }
+  .prefs :global(.confirm-btns) { display: flex; gap: 12px; justify-content: flex-end; margin: 14px 0 4px; }
+  .prefs :global(.cbtn) { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
+  .prefs :global(.cbtn:hover) { border-color: var(--accent); }
+  .prefs :global(.cbtn.danger) { background: var(--accent); color: #04121f; border-color: transparent; }
   .prefs :global(.osk) { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; transition: opacity .15s; }
   .prefs :global(.osk.dim) { opacity: 0.35; }
   .prefs :global(.oskkey) { background: #0c1320; border: 2px solid #2c3a5c; color: #dde5f0; border-radius: 8px; padding: 10px 0; font-size: clamp(15px, 1.6vw, 20px); font-weight: 700; cursor: pointer; text-transform: uppercase; }
@@ -64,8 +68,8 @@
   .prefs :global(.oskkey:hover) { border-color: var(--accent); }
   /* Same focus policy as the page: rows/keys already show focus via .focused — no default
      ring, accent ring for keyboard users only. */
-  .prefs :global(.crow:focus), .prefs :global(.oskkey:focus), .prefs :global(.sortbtn:focus) { outline: none; }
-  .prefs :global(.crow:focus-visible), .prefs :global(.oskkey:focus-visible), .prefs :global(.sortbtn:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .prefs :global(.crow:focus), .prefs :global(.oskkey:focus), .prefs :global(.sortbtn:focus), .prefs :global(.cbtn:focus) { outline: none; }
+  .prefs :global(.crow:focus-visible), .prefs :global(.oskkey:focus-visible), .prefs :global(.sortbtn:focus-visible), .prefs :global(.cbtn:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .prefs-close { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 9px; background: #1b2540; border: 1px solid #2c3a5c; color: #9fb0c8; cursor: pointer; font-size: 15px; line-height: 1; }
   .prefs-close:hover { border-color: var(--accent); color: #fff; }
   /* Same focus policy as the page: no default ring (the accent border/hover shows state for
