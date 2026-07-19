@@ -166,7 +166,15 @@ pub fn media_available() -> bool {
 /// Landing sections for the media library modal (Continue Watching / Latest / libraries).
 #[tauri::command]
 pub async fn media_sections() -> Result<crate::media_server::MediaSections, String> {
-    crate::media_server::server().ok_or("no media server configured")?.sections().await
+    let srv = crate::media_server::server().ok_or("no media server configured")?;
+    let sections = srv.sections().await?;
+    // Warm the rail art in the background (bounded workers, artwork_cache::prefetch):
+    // fresh entries cost a stat(), so repeat calls are ~free; on a cold cache this is
+    // what turns the rail's poster pop-in into disk hits.
+    srv.prefetch_posters(
+        sections.resume.iter().chain(sections.latest.iter()).map(|i| i.id.clone()),
+    );
+    Ok(sections)
 }
 
 /// Children of a library / series / season — every drill-down level is the same call.
@@ -179,6 +187,22 @@ pub async fn media_browse(parent: String) -> Result<Vec<crate::media_server::Med
 #[tauri::command]
 pub async fn media_poster(id: String) -> Option<String> {
     let path = crate::media_server::server()?.poster(&id).await?;
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// Disk-cached local file for an arbitrary artwork URL (backdrops, episode thumbs — any
+/// image the media server exposes beyond the primary poster media_poster covers). The URL
+/// must sit under the configured server's base: this command authenticates the fetch with
+/// the server token, so an unrestricted URL would be an open proxy that sprays the token
+/// at whatever host a compromised webview names (artwork_cache::url_within_base).
+#[tauri::command]
+pub async fn get_artwork(url: String) -> Option<String> {
+    let srv = crate::media_server::server()?;
+    if !crate::artwork_cache::url_within_base(&url, srv.base()) {
+        tracing::warn!("get_artwork: refusing URL outside the configured media server");
+        return None;
+    }
+    let path = crate::artwork_cache::get(&url, Some(("X-Emby-Token", srv.token()))).await?;
     Some(path.to_string_lossy().into_owned())
 }
 
