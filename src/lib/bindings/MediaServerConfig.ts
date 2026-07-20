@@ -8,6 +8,25 @@ export type MediaServerConfig = { kind: string, url: string, token: string, pref
  * Extra mpv flags for direct-play, e.g. `["--include=~/.config/jellyfin-mpv-shim/mpv.conf"]`
  * to reuse an existing profile set (VapourSynth interpolation/denoise, keybinds).
  * When set, OmniDeck stops passing its own `--hwdec` so the config's choice rules
- * (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it).
+ * (VapourSynth filters need `hwdec=auto-copy`; a CLI `--hwdec` would override it),
+ * and the auto-generated profile set below is not used.
  */
-mpv_args: Array<string>, };
+mpv_args: Array<string>, 
+/**
+ * Use OmniDeck's generated display-aware profile set (media_profiles.rs) when
+ * `mpv_args` is empty and mpv has VapourSynth. Default true; false = bare launch.
+ */
+auto_profiles: boolean, 
+/**
+ * Force mpv's audio output samplerate (Hz) in the generated profile set — e.g. 96000 for
+ * a fixed-rate DAC or LDAC headphones. 0 (default) leaves mpv's native rate (bit-perfect;
+ * forcing a rate resamples everything, so only set it when your gear wants a fixed rate).
+ */
+audio_samplerate: number, 
+/**
+ * Display refresh rate (Hz) to bake into the generated profiles and pass as
+ * `--display-fps-override`, for when OmniDeck can't detect it — i.e. daily use *outside*
+ * the gamescope session, where the RandR probe is unavailable and the profiles would
+ * otherwise fall back to 60. 0 (default) = auto-detect from the session's RandR mode.
+ */
+display_fps: number, };

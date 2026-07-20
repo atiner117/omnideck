@@ -6,7 +6,10 @@
 use crate::apps;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -220,16 +223,67 @@ pub fn load_or_create() -> Config {
         return cfg;
     }
 
-    // First run: write a default config the user can edit.
+    // First run: write a default config the user can edit (atomically — a crash mid-write
+    // must not leave a truncated TOML the load path then refuses to overwrite).
     let mut cfg = defaults();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     if let Ok(text) = toml::to_string_pretty(&cfg) {
-        let _ = fs::write(&path, text);
+        let _ = write_atomic(&path, text.as_bytes());
     }
     cfg.config_path = path_str;
     cfg
+}
+
+/// Serializes the whole load→mutate→write sequence. Settings, favorites, apps, and recents
+/// are separate IPC calls that each reload-and-rewrite the ENTIRE file; without this, two
+/// concurrent saves could both read the same old state and the later completion would drop
+/// the other's change. Also covers the first-run/default write path via `mutate_and_save`.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
+/// Per-process counter so concurrent atomic writes get distinct temp names.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Write `bytes` to `path` atomically: fully write a unique temp sibling, fsync it, then
+/// rename over the destination (rename is atomic within a filesystem). A crash, power loss,
+/// I/O error, or full disk during the write leaves the PREVIOUS file intact rather than a
+/// half-written one — which matters here because the load path deliberately refuses to
+/// overwrite an unparseable config, so one truncated write would otherwise wedge all future
+/// saves until the user repaired the file by hand.
+///
+/// Rename-replace has two sharp edges the plain `fs::write` it replaced didn't, both
+/// handled here: a symlinked destination is resolved first (write through to the TARGET —
+/// renaming over the link would sever a dotfiles-managed config), and the destination's
+/// permissions are copied onto the temp before the swap (a chmod-600 config holding the
+/// media-server token must not come back as umask 0644 after every auto-save).
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dest = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let parent = dest
+        .parent()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let stem = dest.file_name().and_then(|n| n.to_str()).unwrap_or("config");
+    let tmp = parent.join(format!(
+        ".{stem}.tmp-{}-{}",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Scope the file so it's closed before the rename.
+    let write = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all() // contents durable before we swap it in
+    })();
+    if let Err(e) = write {
+        let _ = fs::remove_file(&tmp); // don't leave the partial temp behind
+        return Err(e);
+    }
+    if let Ok(meta) = fs::metadata(&dest) {
+        let _ = fs::set_permissions(&tmp, meta.permissions());
+    }
+    fs::rename(&tmp, &dest)?;
+    // Best-effort: fsync the directory so the rename itself survives power loss.
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 /// Shared save path: reload the on-disk config, apply `mutate`, write it back. Refuses to
@@ -238,6 +292,9 @@ pub fn load_or_create() -> Config {
 /// defaults, exactly the clobber the load path promises not to do. Internal IPC-only fields
 /// (`config_path`, `config_error`) are stripped before serializing.
 fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
+    // Hold the lock across the whole read-modify-write so concurrent saves serialize instead
+    // of clobbering each other. Poison-tolerant: a panic in another saver must not wedge saves.
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = config_path().ok_or("no config path")?;
     let mut cfg = load_or_create();
     if let Some(err) = cfg.config_error.take() {
@@ -245,11 +302,8 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
     }
     mutate(&mut cfg);
     cfg.config_path = String::new(); // never written to disk
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, text).map_err(|e| e.to_string())
+    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
@@ -287,7 +341,32 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{write_atomic, Settings};
+
+    #[test]
+    fn write_atomic_creates_overwrites_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join(format!("omnideck-cfgtest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+
+        // Fresh write (dir doesn't exist yet — write_atomic must create it).
+        write_atomic(&path, b"first").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+
+        // Overwrite with different-length content: no truncation artifacts, full replace.
+        write_atomic(&path, b"second-and-longer").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second-and-longer");
+
+        // The temp sibling was renamed away, not left behind — only config.toml remains.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, vec!["config.toml".to_string()], "stray temp file left: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn normalize_clamps_out_of_range() {

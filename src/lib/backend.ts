@@ -15,13 +15,14 @@ import type { GamepadEvent } from "./bindings/GamepadEvent";
 import type { Gpu } from "./bindings/Gpu";
 import type { Library } from "./bindings/Library";
 import type { LibrarySummary } from "./bindings/LibrarySummary";
+import type { LiveApp } from "./bindings/LiveApp";
 import type { MediaInfo } from "./bindings/MediaInfo";
 import type { MediaItem } from "./bindings/MediaItem";
 import type { MediaLibrary } from "./bindings/MediaLibrary";
 import type { MediaSections } from "./bindings/MediaSections";
 import type { Settings } from "./bindings/Settings";
 import type { Tier } from "./bindings/Tier";
-export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
+export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, LiveApp, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
 
 // ---- command wrappers (typed returns; reject on backend Err — callers decide UX) ----
 export const getCapability = () => invoke<Capability>("get_capability");
@@ -30,6 +31,8 @@ export const getConfig = () => invoke<Config>("get_config");
 export const getApps = () => invoke<App[]>("get_apps");
 export const getCatalog = () => invoke<App[]>("get_catalog");
 export const getArt = (path: string) => invoke<string | null>("get_art", { path });
+/** Downscaled, cached copy of the custom wallpaper; resolves to an on-disk path for an omnideck:// URL (null → caller falls back to getArt). */
+export const bgImage = (path: string) => invoke<string | null>("bg_image", { path });
 export const gridArt = (appid: string) => invoke<string | null>("grid_art", { appid });
 export const appIcon = (url: string) => invoke<string | null>("app_icon", { url });
 export const mediaNowPlaying = () => invoke<MediaInfo | null>("media_now_playing");
@@ -46,10 +49,24 @@ export const saveRecentApps = (recentApps: string[]) => invoke<void>("save_recen
 export const gameProperties = (appid: string) => invoke<void>("game_properties", { appid });
 export const powerAction = (action: string) => invoke<void>("power_action", { action });
 export const closeCurrentApp = () => invoke<boolean>("close_current_app");
-/** Hide/show the launched app without closing it (session app switcher). */
-export const switchApp = () => invoke<boolean>("switch_app");
+/** Bring a launched app forward without closing it. With a launch id, shows THAT app's
+ *  group (deck-card semantics); without one, the legacy global toggle. */
+export const switchApp = (id?: string) => invoke<boolean>("switch_app", { id: id ?? null });
 export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
+
+// ---- deck switcher (iOS-style app cards — switcher.rs / watchdog.rs) ----
+// LiveApp is generated (./bindings/LiveApp) and re-exported above — no hand-written twin.
+/** Open the deck: hides all apps so the overlay shows, returns the live-app cards. */
+export const deckOpen = () => invoke<LiveApp[]>("deck_open");
+/** Re-fetch the live-app cards without changing window state. */
+export const deckList = () => invoke<LiveApp[]>("deck_list");
+/** Bring one app group to the front (a card was chosen). */
+export const deckShow = (group: number) => invoke<void>("deck_show", { group });
+/** Close one app group (a card's close / Select). */
+export const deckClose = (group: number) => invoke<void>("deck_close", { group });
+/** Deck dismissed without picking a card — restore what deck_open hid (re-show + thaw). */
+export const deckCancel = () => invoke<boolean>("deck_cancel");
 
 // ---- media server (Jellyfin browse/play — media_server.rs) ----
 export const mediaAvailable = () => invoke<boolean>("media_available");
@@ -57,7 +74,9 @@ export const mediaSections = () => invoke<MediaSections>("media_sections");
 export const mediaBrowse = (parent: string) => invoke<MediaItem[]>("media_browse", { parent });
 /** Fetch+cache an item's poster; resolves to the on-disk path for an omnideck:// URL. */
 export const mediaPoster = (id: string) => invoke<string | null>("media_poster", { id });
-export const mediaPlay = (id: string, name: string) => invoke<void>("media_play", { id, name });
+/** Starts playback; resolves to the per-LAUNCH exit key — use it as the Now Playing card id
+ *  so a replay of the same item can't share (and later clear) another instance's card. */
+export const mediaPlay = (id: string, name: string) => invoke<string>("media_play", { id, name });
 
 // ---- events ----
 /** A launched app/game exited — payload is the launch id (the tile id) we passed at launch. */
@@ -67,3 +86,5 @@ export const onGamepad = (cb: EventCallback<GamepadEvent>): Promise<UnlistenFn> 
 /** MPRIS state changed (track/status/player) — pushed by the backend watcher, no polling. */
 export const onMediaChanged = (cb: EventCallback<MediaInfo | null>): Promise<UnlistenFn> =>
   listen<MediaInfo | null>("media-changed", cb);
+/** Guide button tapped (or Ctrl+Alt+Home) — the frontend toggles the deck switcher. */
+export const onGuideTap = (cb: EventCallback<null>): Promise<UnlistenFn> => listen<null>("guide-tap", cb);

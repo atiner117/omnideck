@@ -19,8 +19,9 @@
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use zbus::zvariant::OwnedValue;
 
@@ -43,10 +44,19 @@ struct PlayerState {
 }
 
 static STATE: OnceLock<Mutex<HashMap<String, PlayerState>>> = OnceLock::new();
-static CONN: OnceLock<zbus::Connection> = OnceLock::new();
+/// The live session-bus connection, swapped on every (re)connect and set back to `None` while
+/// disconnected so `control()` reports "temporarily unavailable" instead of acting on a dead
+/// handle. (Was a `OnceLock` — unreplaceable, so a single dropped bus wedged Now Playing for
+/// the life of the process.)
+static CONN: Mutex<Option<zbus::Connection>> = Mutex::new(None);
 
 fn state() -> &'static Mutex<HashMap<String, PlayerState>> {
     STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A clone of the current session-bus connection, or None while (re)connecting.
+fn current_conn() -> Option<zbus::Connection> {
+    crate::sync::lock_or_recover(&CONN, "mpris.conn").clone()
 }
 
 const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
@@ -121,25 +131,48 @@ fn emit_current(app: &tauri::AppHandle) {
 
 /// Control the tracked player. Errs when no session bus / no player — the UI toasts it.
 pub async fn control(action: &str) -> Result<(), String> {
-    let conn = CONN.get().ok_or("no D-Bus session bus (MPRIS unavailable)")?;
+    // ONE list owns both validation and dispatch: parse the verb up front (fail fast,
+    // before any D-Bus work), then match the enum exhaustively below. Keeping two string
+    // lists in sync was a footgun — a verb added to the guard but not the dispatch would
+    // silently fall into the catch-all and fire the wrong control.
+    enum Verb {
+        PlayPause,
+        Next,
+        Previous,
+    }
+    let verb = match action {
+        "play-pause" => Verb::PlayPause,
+        "next" => Verb::Next,
+        "previous" => Verb::Previous,
+        _ => return Err(format!("unknown media action: {action}")),
+    };
+    let conn = current_conn().ok_or("media controls temporarily unavailable (reconnecting to D-Bus)")?;
     let name = crate::sync::lock_or_recover(state(), "mpris.players")
         .iter()
         .max_by_key(|(_, p)| (p.status == "Playing", p.last_change))
         .map(|(name, _)| name.clone())
         .ok_or("no media player is running")?;
-    let player = PlayerProxy::builder(conn)
+    let player = PlayerProxy::builder(&conn)
         .destination(name)
         .map_err(|e| e.to_string())?
         .build()
         .await
         .map_err(|e| e.to_string())?;
-    match action {
-        "play-pause" => player.play_pause().await,
-        "next" => player.next().await,
-        "previous" => player.previous().await,
-        _ => return Err(format!("unknown media action: {action}")),
+    let call = async {
+        match verb {
+            Verb::PlayPause => player.play_pause().await,
+            Verb::Next => player.next().await,
+            Verb::Previous => player.previous().await,
+        }
+    };
+    // Bounded: zbus sets NO method timeout by default, and a deck-frozen (SIGSTOPped)
+    // paused player keeps its bus connection open but never replies — without this, every
+    // transport press pended forever (dead button, no toast) and then all fired at once
+    // when the app was thawed.
+    match tokio::time::timeout(Duration::from_secs(2), call).await {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(_) => Err("player did not respond (it may be frozen while hidden)".into()),
     }
-    .map_err(|e| e.to_string())
 }
 
 /// Fetch a player's full state once (on appear / on a Metadata-invalidated signal).
@@ -200,50 +233,85 @@ pub async fn report() -> String {
     s
 }
 
-/// Long-running watcher; spawned once at app setup. Exits (with a log line) only if the
-/// session bus is unreachable — in that environment `playerctl` wouldn't have worked either.
-pub async fn watch(app: tauri::AppHandle) {
-    let conn = match zbus::Connection::session().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("mpris: no session bus ({e}) — Now Playing disabled");
-            return;
-        }
-    };
-    let _ = CONN.set(conn.clone());
-    let dbus = match zbus::fdo::DBusProxy::new(&conn).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("mpris: DBus proxy failed ({e}) — Now Playing disabled");
-            return;
-        }
-    };
+/// Bumped at the start of every `run_session`. A lingering owner-change task from a previous
+/// session checks this before touching shared state so it can't write into a newer session.
+static SESSION_GEN: AtomicU64 = AtomicU64::new(0);
 
-    // Signal streams FIRST, snapshot second, so a player appearing in between isn't missed.
-    let mut owner_changes = match dbus.receive_name_owner_changed().await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("mpris: NameOwnerChanged subscribe failed ({e})");
-            return;
+/// Long-running Now Playing watcher, spawned once at app setup. A supervisor loop: connect,
+/// subscribe, snapshot, and stream player changes until the connection dies — then clear the
+/// now-stale state, push `None` so the card can't linger, and reconnect with bounded backoff.
+/// An always-on living-room launcher outlives dbus-daemon / player / user-session restarts, so
+/// the old "subscribe once, exit on stream end" left a frozen Now Playing card forever.
+pub async fn watch(app: tauri::AppHandle) {
+    let mut backoff = Duration::ZERO;
+    let mut logged_down = false;
+    loop {
+        if !backoff.is_zero() {
+            tokio::time::sleep(backoff).await;
         }
-    };
+        match run_session(&app).await {
+            // Clean stream end (e.g. dbus-daemon restart): reconnect promptly, no error noise.
+            Ok(()) => {
+                if logged_down {
+                    tracing::info!("mpris: session bus back — Now Playing reconnected");
+                }
+                backoff = Duration::from_secs(1);
+                logged_down = false;
+            }
+            Err(e) => {
+                // Log the FIRST failure of a down period only, so a persistently-absent bus
+                // (headless/CI) doesn't flood the session log every backoff tick.
+                if !logged_down {
+                    tracing::warn!("mpris: session-bus watcher down ({e}) — retrying with backoff");
+                    logged_down = true;
+                }
+                backoff = match backoff {
+                    Duration::ZERO => Duration::from_secs(1),
+                    d if d < Duration::from_secs(5) => Duration::from_secs(5),
+                    _ => Duration::from_secs(15), // cap
+                };
+            }
+        }
+        // The session is over: any straggler task from it must stop touching state NOW,
+        // not when the next session happens to start — the gap is the whole backoff window.
+        SESSION_GEN.fetch_add(1, Ordering::SeqCst);
+        // Connection is gone: drop it (control() now reports "temporarily unavailable"), clear
+        // cached players, and push `None` so no stale card survives the gap.
+        *crate::sync::lock_or_recover(&CONN, "mpris.conn") = None;
+        let had_players = {
+            let mut players = crate::sync::lock_or_recover(state(), "mpris.players");
+            let had = !players.is_empty();
+            players.clear();
+            had
+        };
+        // Emit only when a card could actually be showing: on a host with no session bus at
+        // all, an unconditional emit here pushed a null `media-changed` into the webview
+        // every backoff tick (15 s) for the life of the process.
+        if had_players {
+            emit_current(&app);
+        }
+    }
+}
+
+/// One connect→subscribe→snapshot→stream cycle. Returns `Ok(())` when the property stream ends
+/// (connection closed), or `Err` if any setup step fails — either way the supervisor clears
+/// state and reconnects.
+async fn run_session(app: &tauri::AppHandle) -> zbus::Result<()> {
+    let my_gen = SESSION_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let conn = zbus::Connection::session().await?;
+    *crate::sync::lock_or_recover(&CONN, "mpris.conn") = Some(conn.clone());
+    let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+
+    // Subscribe to BOTH signal streams before the initial snapshot, so a player that appears in
+    // the gap is caught by the stream rather than missed.
+    let mut owner_changes = dbus.receive_name_owner_changed().await?;
     let props_rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .interface("org.freedesktop.DBus.Properties")
-        .and_then(|b| b.member("PropertiesChanged"))
-        .and_then(|b| b.path(MPRIS_PATH))
-        .map(|b| b.build());
-    let props_stream = match props_rule {
-        Ok(rule) => zbus::MessageStream::for_match_rule(rule, &conn, None).await,
-        Err(e) => Err(e),
-    };
-    let mut props_stream = match props_stream {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("mpris: PropertiesChanged subscribe failed ({e})");
-            return;
-        }
-    };
+        .interface("org.freedesktop.DBus.Properties")?
+        .member("PropertiesChanged")?
+        .path(MPRIS_PATH)?
+        .build();
+    let mut props_stream = zbus::MessageStream::for_match_rule(props_rule, &conn, None).await?;
 
     // Initial snapshot of already-running players.
     if let Ok(names) = dbus.list_names().await {
@@ -262,13 +330,18 @@ pub async fn watch(app: tauri::AppHandle) {
             }
         }
     }
-    emit_current(&app);
+    emit_current(app);
 
-    // Player appear/disappear.
+    // Player appear/disappear, in a child task that ends on its own when the connection closes
+    // (its stream yields None). The generation check stops a task that outlives its session
+    // (e.g. a slow fetch racing a reconnect) from writing into the next session's state.
     let conn_a = conn.clone();
     let app_a = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(sig) = owner_changes.next().await {
+            if SESSION_GEN.load(Ordering::SeqCst) != my_gen {
+                break; // superseded by a newer session
+            }
             let Ok(args) = sig.args() else { continue };
             let name = args.name().to_string();
             if !name.starts_with(MPRIS_PREFIX) {
@@ -276,14 +349,12 @@ pub async fn watch(app: tauri::AppHandle) {
             }
             match args.new_owner().as_ref() {
                 Some(owner) => {
-                    // appeared (or changed owner): fetch initial state
                     let owner = owner.to_string();
                     if let Some(p) = fetch_player(&conn_a, &name, owner).await {
                         crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
                     }
                 }
                 None => {
-                    // player closed (possibly mid-song): drop it so the card clears
                     crate::sync::lock_or_recover(state(), "mpris.players").remove(&name);
                 }
             }
@@ -291,7 +362,8 @@ pub async fn watch(app: tauri::AppHandle) {
         }
     });
 
-    // Property changes from any player, matched back via the sender's unique name.
+    // Property changes from any player, matched back via the sender's unique name. This loop
+    // ending means the property stream (and thus the connection) died → return to reconnect.
     while let Some(msg) = props_stream.next().await {
         let Ok(msg) = msg else { continue };
         let Some(sender) = msg.header().sender().map(|s| s.to_string()) else { continue };
@@ -324,14 +396,13 @@ pub async fn watch(app: tauri::AppHandle) {
             }
         }
         if let Some(name) = refetch {
-            let owner = sender.clone();
-            if let Some(p) = fetch_player(&conn, &name, owner).await {
+            if let Some(p) = fetch_player(&conn, &name, sender.clone()).await {
                 crate::sync::lock_or_recover(state(), "mpris.players").insert(name, p);
             }
         }
-        emit_current(&app);
+        emit_current(app);
     }
-    tracing::warn!("mpris: PropertiesChanged stream ended — Now Playing updates stopped");
+    Ok(())
 }
 
 #[cfg(test)]

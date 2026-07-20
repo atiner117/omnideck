@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "$lib/backend";
-  import type { App, Game, Config, Capability, MediaInfo, Settings } from "$lib/backend";
+  import type { App, Game, Config, Capability, MediaInfo, Settings, LiveApp } from "$lib/backend";
+  import { clamp, railWindow } from "$lib/nav";
+  import { mintLaunchId, baseId } from "$lib/launchId";
+  import { cardActions, type NpAction } from "$lib/npActions";
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
   import Wizard from "$lib/Wizard.svelte";
@@ -133,6 +136,32 @@
     return out.slice(0, 3);
   });
 
+  // Now Playing transport overlay: the bottom-right card stack is pointer/navpad-clickable, but
+  // a controller on the dashboard had no way to reach its prev/play-pause/next/switch/close
+  // controls (the global pad router never focused them). This overlay surfaces the primary
+  // card's actions as a D-pad/A-navigable row. It's dashboard-contextual (opened by L1 or the
+  // `N` key when something's playing), never a global chord — while a launched app is in front
+  // the pad drives the app, not this, so common buttons aren't consumed there.
+  let npOpen = $state(false);
+  let npFocus = $state(0);
+  const npActions = $derived.by<NpAction[]>(() => {
+    const c = nowCards[0];
+    if (!c) return [];
+    // The same builder the corner card stack renders (NowPlaying.svelte) — one control
+    // set, two surfaces. `after` closes the overlay on the terminal actions.
+    return cardActions(c, {
+      inSession,
+      onerror: reportError,
+      ondismiss: (id) => (nowList = nowList.filter((x) => x.id !== id)),
+      after: () => (npOpen = false),
+    });
+  });
+  function openNowPlaying() { if (nowCards.length) { npFocus = 0; npOpen = true; } }
+  function npMove(d: number) { if (npActions.length) npFocus = clamp(npFocus + d, 0, npActions.length - 1); }
+  function npActivate() { npActions[npFocus]?.run(); }
+  // If the underlying card set empties (media stopped, app closed) while open, dismiss the overlay.
+  $effect(() => { if (npOpen && npActions.length === 0) npOpen = false; else if (npOpen) npFocus = clamp(npFocus, 0, Math.max(0, npActions.length - 1)); });
+
   let allGames = $state<Game[]>([]);
   let favorites = $state<string[]>([]);
   let recentApps = $state<string[]>([]); // app ids, most-recent-first
@@ -152,6 +181,16 @@
     toastErr = ctx;
     clearTimeout(toastErrTimer);
     toastErrTimer = setTimeout(() => (toastErr = ""), 5000);
+  }
+
+  // Durable boot failures (config/library/capability/catalog), keyed by subsystem. Unlike the
+  // 5s action toast above, these persist until the subsystem loads — a couch user shouldn't
+  // miss "library error" in a toast that's gone before they look up. Retry re-runs the failed
+  // loaders (see loadCapability/loadCatalog/loadConfigAndLibrary).
+  let bootErrors = $state<Record<string, string>>({});
+  function setBootError(key: string, msg: string | null) {
+    if (msg) bootErrors = { ...bootErrors, [key]: msg };
+    else if (key in bootErrors) { const next = { ...bootErrors }; delete next[key]; bootErrors = next; }
   }
 
   let art = $state<Record<string, string>>({});
@@ -325,8 +364,9 @@
   // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
   // same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
-  let winLo = $derived(Math.max(0, focus - WIN_ABOVE));
-  let winItems = $derived(items.slice(winLo, focus + WIN_BELOW));
+  let winRange = $derived(railWindow(items.length, focus, WIN_ABOVE, WIN_BELOW));
+  let winLo = $derived(winRange.lo);
+  let winItems = $derived(items.slice(winRange.lo, winRange.hi));
   let scaleNum = $derived(
     cfg?.settings?.ui_scale === "custom"
       ? (cfg?.settings?.ui_scale_custom ?? 1.6)
@@ -377,7 +417,6 @@
   }
 
   function tileName(t: Tile) { return t.kind === "app" ? t.app.name : t.game.name; }
-  function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
   let lastNav = 0;
   function navGate() { const n = performance.now(); if (n - lastNav < 100) return false; lastNav = n; return true; }
 
@@ -545,6 +584,59 @@
   let mediaStack = $state<{ title: string; rows: MediaRow[] }[]>([]);
   let mediaFocus = $state(0);
   let mediaPosters = $state<Record<string, string>>({});
+
+  // Deck switcher (iOS-style app cards): Guide tap opens it (backend hides the apps so this
+  // overlay is what shows); pick a card to bring that app forward, Select to close it.
+  let deckOpen = $state(false);
+  let deckApps = $state<LiveApp[]>([]);
+  let deckFocus = $state(0);
+  // An app's launcher icon/emoji for its card, matched by launch id then name (games show 🎮).
+  function deckIcon(a: LiveApp): string {
+    // Launch ids are `tileId#seq` ($lib/launchId) — match the tile id, then fall back to name.
+    const tileId = a.id ? baseId(a.id) : undefined;
+    const app = apps.find((x) => x.id === tileId) ?? apps.find((x) => x.name === a.name);
+    return app?.icon ?? "🎮";
+  }
+  async function openDeck() {
+    try { deckApps = await api.deckOpen(); } catch (e) { deckApps = []; console.debug("[omnideck] deck open failed", e); }
+    if (deckApps.length === 0) return; // nothing running — don't show an empty deck
+    deckFocus = 0;
+    deckOpen = true;
+  }
+  // Dismiss = put back what opening the deck took away: deck_open hid (and possibly froze)
+  // the foreground app, so a tap-tap round trip must land back in it, not strand it hidden.
+  function closeDeck() {
+    deckOpen = false;
+    api.deckCancel().catch((e) => console.debug("[omnideck] deck cancel failed", e));
+  }
+  function deckMove(d: number) { if (deckApps.length) deckFocus = clamp(deckFocus + d, 0, deckApps.length - 1); }
+  // Focus the selected card so a real-session keyboard reaches the deck (and for a11y) and it
+  // scrolls into view. The gamepad path doesn't need this (events arrive via gilrs regardless).
+  $effect(() => {
+    if (!deckOpen) return;
+    const i = deckFocus;
+    queueMicrotask(() => (document.querySelector(`[data-deck="${i}"]`) as HTMLElement | null)?.focus());
+  });
+  async function deckSelect() {
+    const a = deckApps[deckFocus];
+    deckOpen = false;
+    if (a) await api.deckShow(a.group).catch((e) => reportError("Couldn't open app", e));
+  }
+  async function deckKill() {
+    const a = deckApps[deckFocus];
+    if (!a) return;
+    try {
+      await api.deckClose(a.group);
+    } catch (e) {
+      // Keep the card: the app is still running, and silently dropping it claimed a close
+      // that didn't happen (reopening the deck resurrected the "closed" card).
+      reportError("Couldn't close app", e);
+      return;
+    }
+    deckApps = deckApps.filter((x) => x.group !== a.group);
+    if (deckApps.length === 0) { deckOpen = false; return; }
+    deckFocus = clamp(deckFocus, 0, deckApps.length - 1);
+  }
   const mediaView = $derived(mediaStack[mediaStack.length - 1]);
   function mediaRow(i: MediaItem, group?: string): MediaRow {
     const browse = ["Series", "Season", "Folder", "BoxSet", "CollectionFolder"].includes(i.kind);
@@ -589,9 +681,11 @@
     } else {
       mediaOpen = false;
       status = `▶ ${r.name}…`;
-      const key = `media-${r.id}`;
+      // The backend mints the per-LAUNCH key (media-<id>#<seq>) — keying the card on the
+      // item id let a replay of the same item share a key, and the first instance's exit
+      // then cleared the card of the one still playing.
       api.mediaPlay(r.id, r.name)
-        .then(() => { nowList = [{ id: key, kind: "app", name: r.name, category: "video" }, ...nowList.filter((e) => e.id !== key)].slice(0, 3); })
+        .then((key) => { nowList = [{ id: key, kind: "app", name: r.name, category: "video" }, ...nowList.filter((e) => e.id !== key)].slice(0, 3); })
         .catch((e) => reportError("Playback failed", e));
       later(() => (status = ""), 3500);
     }
@@ -622,7 +716,10 @@
   async function launchTile(t: Tile) {
     if (t.kind === "app" && t.app.id === "media-library") { openMedia(); return; }
     const name = t.kind === "game" ? t.game.name : t.app.name;
-    const id = t.id; // tile id doubles as the launch / now-playing correlation key
+    // A UNIQUE per-launch id (not the tile id) — see $lib/launchId for the format contract.
+    // The backend passes this straight back as the exit key; the tile id stays the
+    // favorites/recents key.
+    const id = mintLaunchId(t.id);
     try {
       const category = t.kind === "game" ? "games" : catOf(t.app);
       if (t.kind === "game") { status = `▶ Launching ${name}…`; await api.launchGame(t.game.appid, name, id); }
@@ -824,10 +921,13 @@
   // Single source of truth: is any modal/overlay open? Gates base navigation and stops
   // hold-repeat the instant a modal opens (replaces a 7-term list that had to be kept in sync).
   const anyModal = $derived(
-    wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
+    npOpen || deckOpen || wizardActive || catalogOpen || searchOpen || powerOpen || !!confirmAct || formOpen || infoOpen || helpOpen || mediaOpen,
   );
 
   function onKey(e: KeyboardEvent) {
+    // F5 retries a failed boot from anywhere (the panel's keyboard twin) — cheap and global,
+    // independent of the XMB nav state.
+    if (e.key === "F5" && Object.keys(bootErrors).length) { e.preventDefault(); retryBoot(); return; }
     // A real <input>/<select> is focused (settings number field, custom-launcher form):
     // let it handle typing/arrows natively; only Enter/Escape blur out of it.
     if (isTyping()) {
@@ -843,6 +943,24 @@
     // Allow hold-to-repeat for arrows (throttled by navGate); ignore auto-repeat for
     // action keys so holding Enter can't launch a dozen times.
     if (e.repeat && !arrow) return;
+    if (deckOpen) {
+      // Deck switcher, keyboard twin of the gamepad gate: arrows pick, Enter opens,
+      // Delete/Backspace closes the card, Escape dismisses.
+      if (e.key === "ArrowLeft" && navGate()) deckMove(-1);
+      else if (e.key === "ArrowRight" && navGate()) deckMove(1);
+      else if (e.key === "Enter") deckSelect();
+      else if (e.key === "Delete" || e.key === "Backspace") deckKill();
+      else if (e.key === "Escape") closeDeck();
+      return;
+    }
+    if (npOpen) {
+      // Now Playing transport: arrows move across the actions, Enter activates, Esc closes.
+      if (e.key === "ArrowLeft" && navGate()) npMove(-1);
+      else if (e.key === "ArrowRight" && navGate()) npMove(1);
+      else if (e.key === "Enter") npActivate();
+      else if (e.key === "Escape") npOpen = false;
+      return;
+    }
     if (wizardActive) {
       if (e.key === "Enter") wizardNext();
       else if (e.key === "Escape") wizardPrev();
@@ -904,6 +1022,7 @@
     if (e.key === "h" || e.key === "H") { goHome(); return; }
     if (e.key === "f" || e.key === "F") { favCurrent(); return; }
     if (e.key === "i" || e.key === "I") { showInfo(); return; }
+    if ((e.key === "n" || e.key === "N") && nowCards.length) { openNowPlaying(); return; }
     if (e.key === "Escape") { settingsEditing = false; return; }
     if (e.key === "ArrowLeft" && navGate()) horiz(-1);
     else if (e.key === "ArrowRight" && navGate()) horiz(1);
@@ -912,26 +1031,56 @@
     else if (e.key === "Enter") activate();
   }
 
+  // Boot-time subsystem loaders — named so the boot-error panel's Retry can re-run just the
+  // ones that failed. Each clears its bootError on success and records it on failure.
+  async function loadCapability() {
+    try { cap = await api.getCapability(); setBootError("capability", null); }
+    catch (e) { setBootError("capability", `Capability probe failed: ${e}`); }
+  }
+  async function loadCatalog() {
+    try { catalog = await api.getCatalog(); setBootError("catalog", null); }
+    catch (e) { setBootError("catalog", `Couldn't load the app catalog: ${e}`); }
+  }
+  async function loadConfigAndLibrary() {
+    try {
+      const c = await api.getConfig();
+      cfg = c;
+      accent = c.settings?.accent ?? "#b14cff";
+      favorites = c.favorites ?? [];
+      recentApps = c.recent_apps ?? [];
+      if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
+      status = ""; // config loaded — clear the "Loading…" toast; the dashboard can render now
+      // A parse error isn't a hard load failure (we fell back to defaults) but the user should
+      // still see it and be able to fix + retry — surface it in the durable panel, not a toast.
+      setBootError("config", c.config_error ?? null);
+    } catch (e) {
+      status = "";
+      setBootError("config", `Couldn't load settings: ${e}`);
+      return; // no cfg — don't load the library into a half-initialized state
+    }
+    // Art loads lazily per windowed row (see the winItems $effect), not per game here.
+    try {
+      const lib = await api.getLibrary();
+      allGames = lib.games ?? [];
+      setBootError("library", null);
+    } catch (e) {
+      setBootError("library", `Library error: ${e}`);
+    }
+  }
+  /** Re-run the boot loaders that are currently in an error state (the panel's Retry). */
+  function retryBoot() {
+    if (bootErrors.capability) loadCapability();
+    if (bootErrors.catalog) loadCatalog();
+    if (bootErrors.config || bootErrors.library) loadConfigAndLibrary();
+  }
+
   onMount(() => {
     window.addEventListener("keydown", onKey);
-    api.getCapability().then((c) => (cap = c)).catch((e) => reportError("Capability probe failed", e));
-    api.mediaAvailable().then((v) => (mediaAvail = v)).catch(() => {}); // adds the Media Library tile
+    loadCapability();
+    api.mediaAvailable().then((v) => (mediaAvail = v)).catch(() => {}); // optional; missing = no tile
     api.inGamescopeSession().then((v) => (inSession = v)).catch((e) => console.debug("[omnideck] inGamescopeSession probe failed", e));
-    api.getCatalog().then((c) => (catalog = c)).catch((e) => reportError("Couldn't load app catalog", e));
-    api.getConfig()
-      .then((c) => {
-        cfg = c;
-        accent = c.settings?.accent ?? "#b14cff";
-        favorites = c.favorites ?? [];
-        recentApps = c.recent_apps ?? [];
-        if (c.config_error) reportError(c.config_error, null); // config.toml didn't parse — warn, don't silently revert
-        if (c.settings && c.settings.onboarded === false) { wizardActive = true; wizardStep = 0; }
-      })
-      .catch((e) => { status = `Couldn't load settings: ${e}`; }) // don't silently brick on "Loading…"
-      .finally(() => {
-        // art loads lazily per windowed row (see the winItems $effect), not per game here
-        api.getLibrary().then((lib) => { allGames = lib.games ?? []; if (cfg) status = ""; }).catch((e) => (status = `library error: ${e}`));
-      });
+    loadCatalog();
+    loadConfigAndLibrary();
 
     // Per-frame sampling catches brief dips a 500ms average smooths away; we only commit the
     // numbers to reactive state once per 500ms window so the tracker adds no per-frame cost.
@@ -962,7 +1111,14 @@
     const off: Array<() => void> = [];
     // We add to nowList when we launch (we know game vs app there); the backend tells us when
     // the process/game exits — correlate by the launch id (the tile id), not the display name.
-    api.onAppExited((e) => { const id = String(e.payload ?? ""); nowList = nowList.filter((x) => x.id !== id); }).then((u) => off.push(u));
+    api.onAppExited((e) => {
+      const id = String(e.payload ?? "");
+      nowList = nowList.filter((x) => x.id !== id);
+      // Keep the deck honest if an app dies while it's open (e.g. we just closed one).
+      if (deckOpen) api.deckList().then((a) => { deckApps = a; if (a.length === 0) deckOpen = false; else deckFocus = clamp(deckFocus, 0, a.length - 1); }).catch(() => {});
+    }).then((u) => off.push(u));
+    // Guide tap (gamepad) or Ctrl+Alt+Home → toggle the deck switcher.
+    api.onGuideTap(() => { if (deckOpen) closeDeck(); else openDeck(); }).then((u) => off.push(u));
     // MPRIS Now Playing is event-driven (backend zbus watcher). One initial fetch covers the
     // window between mount and the listener attaching; after that, `media-changed` pushes
     // every track/status change in ms (works for native players + browser PWAs).
@@ -972,6 +1128,23 @@
     api.onGamepad((e) => {
       const p = e.payload;
       if (p.kind === "button_pressed") {
+        if (deckOpen) {
+          // Card deck: L/R picks a card, A/X opens it, Select closes it, B/Guide dismisses.
+          if (p.code === "DPadLeft") holdStart(p.code, () => deckMove(-1));
+          else if (p.code === "DPadRight") holdStart(p.code, () => deckMove(1));
+          else if (p.code === "South" || p.code === "West") deckSelect();
+          else if (p.code === "Select") deckKill();
+          else if (p.code === "East" || p.code === "Start") closeDeck();
+          return;
+        }
+        if (npOpen) {
+          // Now Playing transport: L/R across the actions, A activates, B closes.
+          if (p.code === "DPadLeft") holdStart(p.code, () => npMove(-1));
+          else if (p.code === "DPadRight") holdStart(p.code, () => npMove(1));
+          else if (p.code === "South") npActivate();
+          else if (p.code === "East" || p.code === "Start") npOpen = false;
+          return;
+        }
         if (wizardActive) {
           if (p.code === "South") wizardNext(); else if (p.code === "East") wizardPrev();
           else if (p.code === "DPadLeft" && wizardStep === 1) wizardAccent(-1);
@@ -1027,6 +1200,7 @@
         if (p.code === "Start") { goHome(); return; }
         if (p.code === "West") { favCurrent(); return; }
         if (p.code === "RightTrigger") { showInfo(); return; }
+        if (p.code === "LeftTrigger" && nowCards.length) { openNowPlaying(); return; } // L1 → Now Playing transport
         if (p.code === "East") { settingsEditing = false; return; }
         if (p.code === "DPadLeft") holdStart(p.code, () => horiz(-1));
         else if (p.code === "DPadRight") holdStart(p.code, () => horiz(1));
@@ -1046,6 +1220,12 @@
         const dir = p.code === "LeftStickY" ? -raw : raw;
         const code = `${p.code}:${dir}`;
         if (dir === 0) { if (heldCode.startsWith(p.code)) holdStop(); return; }
+        if (deckOpen) {
+          // Deck: horizontal stick moves the card selection; vertical does nothing.
+          if (p.code === "LeftStickX" && heldCode !== code) holdStart(code, () => deckMove(dir));
+          else if (p.code === "LeftStickY") holdStop();
+          return;
+        }
         if (p.code === "LeftStickY") {
           // In the list modals the stick drives the row selection (the D-pad keeps its
           // modal-specific job, e.g. the OSK in search). Other overlays swallow the stick.
@@ -1085,7 +1265,12 @@
     const path = cfg?.settings?.background_image;
     if (cfg?.settings?.background_default === "image" && path) {
       const seq = ++bgSeq; // drop a stale resolve if the path changed before this one returned
-      api.getArt(path).then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; }).catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
+      // Prefer the downscaled, display-sized cache (served over omnideck://, cheap to decode);
+      // fall back to the full-image data URL if preparation failed (bad/unreadable source).
+      api.bgImage(path)
+        .then((p) => p ? artUrl(p) : api.getArt(path))
+        .then((d) => { if (seq === bgSeq) bgImageUrl = d ?? ""; })
+        .catch((e) => { if (seq === bgSeq) bgImageUrl = ""; console.debug("[omnideck] bg image load failed", e); });
     } else { bgImageUrl = ""; }
   });
   // Ambient pad follows its settings; idempotent, so this is safe to run on every change.
@@ -1243,6 +1428,50 @@
     />
   {/if}
 
+  {#if deckOpen}
+    <!-- Deck switcher: iOS-style row of running-app cards. Guide/B dismisses, A opens the
+         focused card, Select closes it. Pointer/click works too (mouse or navpad pointer). -->
+    <div class="deck-scrim" role="button" tabindex="-1" aria-label="Close app switcher"
+         onclick={closeDeck} onkeydown={(e) => { if (e.key === "Escape") closeDeck(); }}></div>
+    <section class="deck" aria-label="App switcher">
+      <div class="deck-row">
+        {#each deckApps as a, i (a.group)}
+          <div class="deck-card" class:sel={i === deckFocus}>
+            <button class="deck-open" title="Open {a.name}" data-deck={i}
+              onclick={() => { deckFocus = i; deckSelect(); }} onmouseenter={() => (deckFocus = i)}>
+              <span class="deck-icon">{deckIcon(a)}</span>
+              <span class="deck-name">{a.name}</span>
+            </button>
+            <button class="deck-x" title="Close {a.name}" aria-label="Close {a.name}"
+              onclick={(e) => { e.stopPropagation(); deckFocus = i; deckKill(); }}>✕</button>
+          </div>
+        {/each}
+      </div>
+      <p class="deck-hint">A open · Select ✕ close · B back</p>
+    </section>
+  {/if}
+
+  {#if npOpen}
+    <!-- Now Playing transport: controller/keyboard-reachable twin of the corner card's controls
+         (L1 or N opens it on the dashboard). Pointer/click works too. -->
+    <div class="np-scrim" role="button" tabindex="-1" aria-label="Close Now Playing"
+         onclick={() => (npOpen = false)} onkeydown={(e) => { if (e.key === "Escape") npOpen = false; }}></div>
+    <section class="np-transport" aria-label="Now Playing controls">
+      {#if nowCards[0]}
+        <div class="np-t-title">
+          {nowCards[0].media?.title ?? nowCards[0].name}{#if nowCards[0].media?.artist}<span class="np-t-sub"> — {nowCards[0].media.artist}</span>{/if}
+        </div>
+      {/if}
+      <div class="np-t-row">
+        {#each npActions as a, i (a.label)}
+          <button class="np-t-btn" class:sel={i === npFocus} title={a.label} aria-label={a.label}
+            onclick={() => { npFocus = i; a.run(); }} onmouseenter={() => (npFocus = i)}>{a.icon}</button>
+        {/each}
+      </div>
+      <p class="np-t-hint">{npActions[npFocus]?.label ?? ""} · A activate · B close</p>
+    </section>
+  {/if}
+
   {#if infoOpen && infoTile}
     <Modal labelledby="dlg-info" backdropLabel="Close info" closeLabel="Close info" onclose={() => (infoOpen = false)}>
       {#if infoTile.kind === "game"}
@@ -1333,6 +1562,19 @@
   {#if status}<div class="toast">{status}</div>{/if}
   {#if toastErr}<div class="toast err" role="alert" aria-live="assertive">⚠ {toastErr}</div>{/if}
 
+  <!-- Durable boot-failure panel: persists (unlike the 5s toast) until the subsystem loads,
+       with a Retry that re-runs just the failed loaders. Pointer/keyboard-focusable now; F5
+       also retries. (Controller-button retry can piggyback on the Now Playing focus work.) -->
+  {#if Object.keys(bootErrors).length}
+    <div class="boot-errors" role="alert" aria-live="assertive">
+      <div class="boot-errors-hd">⚠ OmniDeck had trouble starting</div>
+      <ul>
+        {#each Object.entries(bootErrors) as [key, msg] (key)}<li>{msg}</li>{/each}
+      </ul>
+      <button class="boot-retry" onclick={retryBoot}>Retry (F5)</button>
+    </div>
+  {/if}
+
   <footer>
     <span class="fdiag"><button class="fpsbtn" title="frame rate (current · avg · low · high) — click to reset lo/hi" onclick={resetFpsStats}>fps {fps} · avg {fpsAvg} · lo {fpsLo > 999 ? "—" : fpsLo} · hi {fpsHi}</button> · {cap?.tier ?? "?"}</span>
     <span class="fhints"><b>Enter/✕</b> select · <b>Esc/◯</b> back · <button class="fhelp" onclick={() => { holdStop(); helpOpen = true; }}><b>?</b> help</button></span>
@@ -1340,8 +1582,23 @@
 </main>
 
 <style>
+  /* Design tokens — the surface/text/border vocabulary shared across every component.
+     Change a shade once here; components reference var(--…). Defined on :root so the values
+     cascade to every component (fixed/position-independent ones included). The dynamic
+     --accent / --scale / --bg-* are set on <main> instead (they depend on user settings). */
+  :global(:root) {
+    --surface-deep: #05070b;  /* deepest background / scrim base */
+    --surface: #1b2540;       /* control / button surface */
+    --surface-card: #0c1320;  /* raised card surface */
+    --border: #2c3a5c;        /* default hairline border */
+    --text-muted: #9fb0c8;    /* secondary text */
+    --text-soft: #cdd7e6;     /* soft light text */
+    --text-label: #6b7790;    /* uppercase captions / labels */
+    --text-dim: #7e8aa0;      /* dim state text */
+    --danger: #c0392b;        /* error / destructive */
+  }
   :global(html), :global(body) { margin: 0; height: 100%; }
-  :global(body) { background: #05070b; overflow: hidden; }
+  :global(body) { background: var(--surface-deep); overflow: hidden; }
 
   main {
     position: relative; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column;
@@ -1367,8 +1624,8 @@
   header { display: flex; align-items: center; justify-content: space-between; padding: 1.8vh 2.4vw 1vh; }
   .brand { font-size: clamp(20px, 2.4vw, 36px); font-weight: 800; letter-spacing: 3px; color: var(--accent); }
   .meta { display: flex; gap: 10px; align-items: center; }
-  .clock { color: #cdd7e6; font-weight: 700; font-variant-numeric: tabular-nums; font-size: calc(clamp(13px, 1.5vw, 19px) * var(--scale)); margin-right: 4px; }
-  .badge { background: #121a2b99; border: 1px solid #25324d; border-radius: 999px; padding: 5px 14px; color: #9fb0c8; font-size: clamp(11px, 1.2vw, 14px); }
+  .clock { color: var(--text-soft); font-weight: 700; font-variant-numeric: tabular-nums; font-size: calc(clamp(13px, 1.5vw, 19px) * var(--scale)); margin-right: 4px; }
+  .badge { background: #121a2b99; border: 1px solid #25324d; border-radius: 999px; padding: 5px 14px; color: var(--text-muted); font-size: clamp(11px, 1.2vw, 14px); }
   .gear { cursor: pointer; font-size: 1.05em; line-height: 1; }
 
   .xmb { flex: 1; position: relative; min-height: 0; }
@@ -1395,7 +1652,7 @@
      label aligned with row names via an invisible thumb-width spacer. */
   .xthumb.hollow { background: none; box-shadow: none; }
   .xitem.xshead { opacity: 1; cursor: default; align-items: flex-end; padding-bottom: 6px; }
-  .xsheadlbl { color: #6b7790; font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
+  .xsheadlbl { color: var(--text-label); font-size: clamp(11px, 1.1vw, 13px); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
   .xthumb img { width: 100%; height: 100%; object-fit: cover; }
   .xthumb img.appicon { object-fit: contain; padding: 18%; box-sizing: border-box; }
   .xthumb .xemoji { font-size: calc(1.5rem * var(--scale)); }
@@ -1405,8 +1662,8 @@
   .xname .xsub { color: var(--accent); font-weight: 700; font-size: .8em; }
   .xfav { font-size: .8em; }
   .swatch { width: 30px; height: 18px; border-radius: 5px; display: inline-block; border: 1px solid #ffffff44; }
-  .numedit { width: 5em; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
-  .textedit { width: 18em; max-width: 40vw; background: #0c1320; border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
+  .numedit { width: 5em; background: var(--surface-card); border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; font-weight: 700; }
+  .textedit { width: 18em; max-width: 40vw; background: var(--surface-card); border: 1px solid var(--accent); color: #fff; border-radius: 7px; padding: 2px 8px; font-size: .8em; }
   /* Suppress the default focus ring on elements that already show focus another way (inputs'
      accent border, the in-app .focused highlight used by controller/mouse nav)... */
   .numedit:focus, .textedit:focus, .cbtn:focus,
@@ -1420,8 +1677,21 @@
   .xempty { position: absolute; top: calc(16% + 7rem * var(--scale)); left: 30vw; right: 4vw; color: #8a96ab; font-size: clamp(15px, 1.8vw, 22px); }
   .xempty b { color: var(--accent); }
 
-  .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
-  .toast.err { background: #c0392b; color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
+  /* z-index 70: toasts are transient alerts and must clear every overlay — the deck (40/41),
+     the Now Playing transport scrim (44/45), and the boot-error panel (60). At the old
+     stacking (2) a media-control error fired behind the open transport's scrim. */
+  .toast { position: fixed; bottom: 7vh; left: 50%; transform: translateX(-50%); z-index: 70; background: var(--accent); color: #04121f; font-weight: 700; padding: 12px 28px; border-radius: 999px; box-shadow: 0 10px 40px color-mix(in srgb, var(--accent) 38%, transparent); font-size: clamp(14px, 1.6vw, 20px); }
+  .toast.err { background: var(--danger); color: #fff; bottom: calc(7vh + 58px); box-shadow: 0 10px 40px #c0392b66; }
+
+  /* Durable boot-failure panel (persists until retried, unlike the toasts above). */
+  .boot-errors { position: fixed; top: 5vh; left: 50%; transform: translateX(-50%); z-index: 60;
+    max-width: min(680px, 90vw); background: #1a0e0e; border: 2px solid var(--danger); border-radius: 16px;
+    padding: 18px 24px; color: #f4e9e9; box-shadow: 0 18px 60px #00000088; }
+  .boot-errors-hd { font-weight: 800; font-size: clamp(15px, 1.7vw, 21px); margin-bottom: 8px; }
+  .boot-errors ul { margin: 0 0 14px; padding-left: 20px; font-size: clamp(13px, 1.4vw, 17px); line-height: 1.5; }
+  .boot-retry { background: var(--danger); color: #fff; border: 0; border-radius: 999px; cursor: pointer;
+    font: inherit; font-weight: 700; padding: 9px 22px; }
+  .boot-retry:hover, .boot-retry:focus-visible { background: #d84a3b; outline: 2px solid #fff; }
 
   /* Now Playing card styles live in $lib/NowPlaying.svelte */
   /* Modal shell (.prefs*, backdrop, close) AND the shared modal-content vocabulary
@@ -1432,15 +1702,15 @@
   .cwheel::-webkit-color-swatch { border: none; border-radius: 4px; }
 
   .infogrid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 6px 0 8px; }
-  .infogrid dt { color: #7e8aa0; font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
+  .infogrid dt { color: var(--text-dim); font-size: clamp(12px, 1.2vw, 14px); font-weight: 700; }
   .infogrid dd { margin: 0; color: #dde5f0; font-size: clamp(12px, 1.3vw, 15px); word-break: break-word; }
   .confirm-btns { display: flex; gap: 12px; justify-content: flex-end; margin: 14px 0 4px; }
-  .cbtn { background: #1b2540; border: 1px solid #2c3a5c; color: #cdd7e6; border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
+  .cbtn { background: var(--surface); border: 1px solid var(--border); color: var(--text-soft); border-radius: 10px; padding: 9px 22px; cursor: pointer; font-size: clamp(13px, 1.4vw, 16px); font-weight: 700; }
   .cbtn:hover { border-color: var(--accent); }
   .cbtn.danger { background: var(--accent); color: #04121f; border-color: transparent; }
   .frow { display: flex; align-items: center; gap: 14px; margin: 8px 0; }
-  .frow label { width: 96px; flex: 0 0 auto; color: #9fb0c8; font-weight: 600; font-size: clamp(13px, 1.3vw, 15px); }
-  .frow input, .frow select { flex: 1; background: #0c1320; border: 1px solid #2c3a5c; color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
+  .frow label { width: 96px; flex: 0 0 auto; color: var(--text-muted); font-weight: 600; font-size: clamp(13px, 1.3vw, 15px); }
+  .frow input, .frow select { flex: 1; background: var(--surface-card); border: 1px solid var(--border); color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
   .frow input:focus, .frow select:focus { outline: none; border-color: var(--accent); }
 
   /* wizard styles live in $lib/Wizard.svelte; .wlead stays — the confirm modal uses it too */
@@ -1457,9 +1727,52 @@
   .fpsbtn { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; font-variant-numeric: tabular-nums; }
   .fpsbtn:hover { color: var(--accent); }
 
+  /* --- Deck switcher (iOS-style app cards) --- */
+  .deck-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(3,5,11,0.72); border: 0; }
+  .deck { position: fixed; inset: 0; z-index: 41; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 24px; pointer-events: none; }
+  .deck-row { display: flex; gap: 22px; padding: 0 6vw; max-width: 100vw; overflow-x: auto;
+    align-items: center; pointer-events: auto; scrollbar-width: none; }
+  .deck-row::-webkit-scrollbar { display: none; }
+  .deck-card { position: relative; flex: 0 0 auto; }
+  .deck-open { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; width: calc(240px * var(--scale)); height: calc(150px * var(--scale));
+    border-radius: 18px; border: 2px solid rgba(255,255,255,0.08);
+    background: linear-gradient(160deg, #141a26, #0c1119); color: #e7ecf6; cursor: pointer;
+    transition: transform .16s cubic-bezier(.2,.7,.2,1), border-color .16s, box-shadow .16s; }
+  .deck-card.sel .deck-open { transform: translateY(-14px) scale(1.06); border-color: var(--accent);
+    box-shadow: 0 18px 50px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .deck-icon { font-size: calc(46px * var(--scale)); line-height: 1; }
+  .deck-name { font-size: calc(17px * var(--scale)); font-weight: 600; max-width: 90%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deck-x { position: absolute; top: -12px; right: -12px; width: 34px; height: 34px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.14); background: var(--surface-deep); color: #c2cbdb; cursor: pointer;
+    font-size: 15px; opacity: 0; transition: opacity .16s; }
+  .deck-card.sel .deck-x { opacity: 1; }
+  .deck-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale));
+    letter-spacing: .02em; }
+
+  /* --- Now Playing transport overlay (controller-reachable media/app controls) --- */
+  .np-scrim { position: fixed; inset: 0; z-index: 44; background: rgba(3,5,11,0.72); border: 0; }
+  .np-transport { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px; pointer-events: none; }
+  .np-t-title { pointer-events: none; color: #fff; font-weight: 700; max-width: 80vw; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(22px * var(--scale)); }
+  .np-t-sub { color: var(--text-muted); font-weight: 500; }
+  .np-t-row { display: flex; gap: 18px; pointer-events: auto; }
+  .np-t-btn { display: flex; align-items: center; justify-content: center;
+    width: calc(72px * var(--scale)); height: calc(72px * var(--scale)); border-radius: 18px;
+    border: 2px solid rgba(255,255,255,0.10); background: linear-gradient(160deg, #141a26, #0c1119);
+    color: #e7ecf6; cursor: pointer; font-size: calc(28px * var(--scale));
+    transition: transform .16s cubic-bezier(.2,.7,.2,1), border-color .16s, box-shadow .16s; }
+  .np-t-btn.sel { transform: translateY(-8px) scale(1.08); border-color: var(--accent);
+    box-shadow: 0 16px 44px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .np-t-hint { pointer-events: none; color: #8a94a6; font-size: calc(14px * var(--scale)); letter-spacing: .02em; }
+  @media (prefers-reduced-motion: reduce) { .np-t-btn { transition: none !important; } }
+
   /* Respect reduced-motion: stop the looping Now-Playing spinner/EQ and the XMB slide/scale
      transitions for vestibular-sensitive users (the UI stays fully functional, just static). */
   @media (prefers-reduced-motion: reduce) {
-    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon { transition: none !important; }
+    .xcats, .xitems, .xbg, .xitem, .xcat .xcicon, .deck-open { transition: none !important; }
   }
 </style>

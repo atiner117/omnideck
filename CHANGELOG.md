@@ -7,11 +7,95 @@ All notable changes to OmniDeck are documented here. Format follows
 ## [Unreleased] — 0.2.0
 
 ### Added
+- **Playback controls are per-dimension toggles** (`omnideck-toggles.lua`, shipped in the
+  generated profile set): one key per dimension instead of a preset profile per
+  combination — F4 cycles interpolation (off/smooth/ultra), F5 upscaling quality, F6
+  tone smoothing (deband), F3 denoise (composes with interpolation), F2 stretch-to-fill,
+  F1 reset, F9 status; every toggle answers on the OSD. The combo-profiles
+  (`interpolate-basic-stretched` et al) are gone — four dimensions would have needed 24
+  of them. Also fixes the **ultra seek-desync** (couch find: skipping around while
+  optical-flow interpolation is active desynced audio *without* the A-V counter
+  noticing): the script drops and re-applies the filter around every seek, verified over
+  IPC (ultra stays 82.54 fps across seeks).
+- **Deck switcher — iOS-style app cards** (`switcher.rs`/`watchdog.rs` + `+page.svelte`):
+  a Guide tap (or Ctrl+Alt+Home) now opens a row of cards, one per running app — pick one
+  to bring it forward, **Select** (or the card's ✕) to close it, **B/Guide** to dismiss.
+  Replaces the old blind "toggle to the most-recent app". The backend hides every app when
+  the deck opens (so its overlay shows) and maps just the chosen one; Guide-**hold** still
+  closes everything. Verified end-to-end in the nested harness (`pad-deck`/`pad-pick`).
+- **Custom wallpaper is downscaled once, not decoded huge every launch** (`background.rs`):
+  a big photo (the couch-test host's was 4000x3000 / 3.9 MB) was loaded as a base64
+  `data:` URL — a ~5 MB DOM string plus a 12 MP main-thread decode — which stalled the
+  dashboard to 12-18 fps at startup. It's now resized to display size once, cached under
+  `~/.cache/omnideck/bg/`, and served over `omnideck://` (measured 4 MB → 761 KB,
+  2560x1920). Falls back to the old full-image path if a source can't be prepared.
+  `omnideck bgprep <path>` reports the result.
+
+### Changed
+- **Controller click is A/cross, not R2** (navpad): the right stick is the primary pointer,
+  so A now left-clicks where it is (what the user expects). Enter moved to X, play/pause to
+  Y. R2/L2 still click too (for hold/drag).
+- **Hidden apps only stay running while audibly playing** — the switcher's silence check now
+  matches an audio stream to its launch app by process *ancestry*, not exact group, so an
+  Electron app's `setsid`'d audio child is found; Feishin no longer gets frozen mid-song.
+- **Browsers in-session get `--force-device-scale-factor=1`** so a Chromium PWA fills the
+  panel instead of rendering into a corner/half (Xwayland HiDPI auto-scale — the
+  couch-test "PWA on the left half").
+- **`OMNIDECK_WEBKIT_DMABUF=1` escape hatch** (gpu.rs): keeps WebKitGTK's zero-copy dmabuf
+  renderer ON on NVIDIA instead of the blank-screen workaround that also caps smoothness
+  (~78 fps). Opt-in per driver — the fast path to a truly 165 Hz dashboard where a newer
+  driver renders it correctly.
+
+### Added
+- **navpad — the controller drives launched apps** (`navpad.rs`): a virtual
+  keyboard/mouse over `/dev/uinput`, active only while a launched app's window is in
+  front (the switcher's visibility ground truth). Dpad/left stick → arrow-key pulses
+  with 400 ms/90 ms console repeat, A → Enter, B → Esc, X → Space, right stick → mouse
+  pointer (squared response), R2/L2 → left/right mouse button (hold = drag/long-press),
+  L1/R1 → scroll wheel. Kernel-level delivery, so it works for any client — Chromium,
+  Firefox, mpv, Qt — with zero per-app integration. Everything held is auto-released if
+  the app vanishes mid-press. Requires membership in the `input` group; without it the
+  bridge logs once and stays off.
+- **Silent hidden apps are frozen**: the switcher still keeps hidden apps *running* when
+  they're audibly playing (background music stays a feature — checked via the PipeWire
+  pulse shim, uncorked streams matched to the launch process group), but silent hidden
+  groups get SIGSTOP and are SIGCONTed on re-show; `return_home` CONTs before TERM so
+  Guide-hold close works on frozen apps. Root cause of the 2026-07-09 couch finding:
+  a hidden software-rendering PWA kept drawing ~300 W behind the dashboard.
+- **Browsers pinned to Xwayland in-session** (`--ozone-platform=x11` for
+  Chromium-family): gamescope exports a Wayland socket, and a browser that picks it
+  escapes every piece of session machinery (switcher unmap/map, `_NET_WM_PID`
+  ownership, navpad focus). Firefox is already pinned via inherited `GDK_BACKEND=x11`.
+- **Auto-tuned mpv playback profiles** (`media_profiles.rs`): with a VapourSynth-enabled
+  mpv, direct-play now auto-generates and `--include=`s a display-aware profile set under
+  `~/.config/omnideck/mpv-profiles/` — GPU upscale/tone-map/deband (`high-quality` +
+  `vo=gpu-next`) with F-key–switchable motion interpolation (F4 basic targets the panel's
+  full refresh rate; F6 ultra targets display/2 above 100 Hz AND a per-CPU pixel-rate
+  budget of `threads × 12 Mpx/s` — both empirically anchored: full-rate optical flow
+  desyncs on a 14700K at 1080p→165, and a 4K source→60 measured 13.5 of 16 cores on a
+  7800X3D with easy synthetic motion, so ultra lowers or declines over-budget targets
+  instead of drifting; `packaging/bench-profiles.sh` reproduces the measurements on any
+  host). The session's real mode (RandR ground truth, e.g. 2560x1440@165)
+  is baked into the scripts, because mpv injects `display_fps=0` at filter init and does
+  not forward `--display-fps-override` into VapourSynth — this is what un-sticks
+  interpolation from the 60 fps fallback on high-refresh panels. Rendered files keep a
+  `# omnideck-generated` header; strip it and OmniDeck never rewrites that file. Opt out
+  with `[media_server] auto_profiles = false` (or set `mpv_args`, which always wins).
+  `omnideck mpvprofiles` renders + reports the set; `packaging/test-profiles.sh`
+  validates each filter's output rate headlessly. media_play additionally passes
+  `--display-fps-override` from the session mode so mpv's `display-resample` pacing is
+  deterministic too. Two `[media_server]` knobs tune the generated set: `display_fps`
+  (Hz) bakes an explicit panel rate for daily use *outside* the session — where the RandR
+  probe is unavailable and the profiles would otherwise fall back to 60 — and is also
+  passed as `--display-fps-override`; `audio_samplerate` (Hz) forces mpv's output rate
+  (e.g. `96000` for a fixed-rate DAC / LDAC), left native (bit-perfect) when unset. Both
+  default to 0 = off, so nothing changes for configs that don't set them.
 - **Jellyfin media library — "play your own 4K media", delivered** (Appendix B of the
   2026-07 review): a **Media Library** tile in Movies & TV opens an in-app browser —
   Continue Watching (with resume %), Latest, and your libraries, drilling
   series → seasons → episodes — and plays through **mpv with a direct stream**
-  (`--hwdec=auto-safe`, no transcode, no browser), wired into the existing watchdog so
+  (hardware decode, no transcode, no browser — the exact `--hwdec` depends on the profile
+  path above), wired into the existing watchdog so
   Guide-close and Now Playing just work. Posters are fetched lazily, sniffed, cached
   (100 MiB, oldest-evicted) and served over the rooted `omnideck://` protocol. Configure
   via `[media_server]` in config.toml — or don't: an existing **jellyfin-mpv-shim pairing
@@ -40,7 +124,8 @@ All notable changes to OmniDeck are documented here. Format follows
   spacer), so navigation cost is constant regardless of library size, and game art loads
   just ahead of visibility instead of all at once at startup.
 - **Proper CLI** (clap): `omnideck probe | scan | config | catalog | gridart <appid> |
-  media`, plus `--help`/`--version`; unknown flags are rejected instead of ignored.
+  media | mediasrv | mpvprofiles`, plus `--help`/`--version`; unknown flags are rejected
+  instead of ignored.
 - **Generated IPC types** (ts-rs): the TypeScript side of the Rust↔JS contract is generated
   from the Rust structs into `src/lib/bindings/`; CI fails if they drift, so a Rust field
   rename breaks the build instead of silently becoming `undefined` in the frontend.

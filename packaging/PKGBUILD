@@ -3,7 +3,7 @@
 # Bump pkgver + retag a release, then regenerate checksums (updpkgsums) and .SRCINFO
 # (makepkg --printsrcinfo > .SRCINFO) to ship newer work.
 pkgname=omnideck
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="10-foot, controller-first media & game launcher for Linux"
 arch=('x86_64')
@@ -19,7 +19,7 @@ options=('!lto' '!debug')
 depends=('webkit2gtk-4.1' 'hicolor-icon-theme')
 optdepends=('gamescope: 10-foot gamescope session mode (run packaging/install-session.sh)'
             'steam: Steam library scanning + launching'
-            'playerctl: live song/show titles in Now Playing (MPRIS)'
+            'mpv: direct-play for the Jellyfin media library (4K hardware decode)'
             'xorg-xprop: STEAM_GAME atom handling inside the gamescope session'
             'cage: media-kiosk tier on hosts without a usable GPU')
 makedepends=('rust' 'cargo' 'bun-bin' 'pkgconf')

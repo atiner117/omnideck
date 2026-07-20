@@ -17,13 +17,24 @@ Requirements: `webkit2gtk-4.1`, Rust 1.80+, Node 20+ or Bun. On Arch:
 
 ```
 src/routes/+page.svelte   # the UI (grid, nav, prefs, add-apps) — Svelte 5 runes
+src/lib/                  # UI components + helpers (backend.ts = typed IPC, nav.ts, …)
 src-tauri/src/
-  lib.rs          # Tauri commands, gamepad (gilrs) thread, GPU re-exec, CLI flags
+  lib.rs          # app wiring: registers Tauri commands + spawns the setup tasks (~100 lines)
+  commands.rs     # the #[tauri::command] handlers the frontend calls
+  cli.rs          # headless subcommands (clap): probe|scan|config|catalog|media|…
   capability.rs   # GPU/tier detection (gamescope session | cage kiosk | window)
+  gpu.rs          # NVIDIA/WebKit env + the #[cfg(unix)] GPU re-exec; RandR display mode
   library.rs      # Steam VDF/ACF library scan + local art resolution
   apps.rs         # app/media tile catalog (detected native/flatpak + browser entries)
-  config.rs       # ~/.config/omnideck/config.toml load/save
-  steamgriddb.rs  # optional box-art fetch
+  config.rs       # ~/.config/omnideck/config.toml atomic load/save
+  asset.rs        # the rooted omnideck:// image protocol (art/posters/wallpaper cache)
+  gamepad.rs      # gilrs input thread; navpad.rs = pad → uinput keyboard/mouse bridge
+  switcher.rs / watchdog.rs   # session app switcher/deck + launch tracking & close
+  hotkey.rs       # global X chords in the gamescope session (Ctrl+Alt+Home/End)
+  media_server.rs # Jellyfin browse/play; media_profiles.rs = generated mpv/VapourSynth set
+  mpris.rs        # event-driven Now Playing (zbus) with a reconnect supervisor
+  background.rs   # custom-wallpaper downscale cache; steamgriddb.rs = optional box-art
+  http.rs         # shared reqwest client + SSRF blocklist; logging.rs / sync.rs = infra
 ```
 
 Handy headless commands for debugging (no window opens):
@@ -40,7 +51,9 @@ omnideck --help    # all subcommands; --version for the version
 
 ## Code style
 
-- Rust: `cargo fmt` and `cargo clippy` clean before submitting.
+- Rust: `cargo clippy` clean before submitting. The tree is hand-formatted in a compact
+  style (not `cargo fmt` output) and CI does not run rustfmt — match the surrounding code
+  rather than reformatting whole files, which would bury real changes in style churn.
 - Keep platform-specific code isolated (see `capability.rs`, the `#[cfg(unix)]` GPU
   re-exec) so a future Windows/macOS target stays cheap.
 - Prefer detection over hardcoding (e.g. catalog apps only appear if installed).

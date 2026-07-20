@@ -88,10 +88,10 @@ fn run(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         // Only our grabbed chords are delivered here; the keycode says which one.
         let Event::KeyPress(e) = grabs.conn.wait_for_event()? else { continue };
         if grabs.home_keycodes.contains(&e.detail) {
-            match crate::switcher::toggle() {
-                Some(what) => tracing::info!("hotkey: Ctrl+Alt+Home — app {what}"),
-                None => tracing::info!("hotkey: Ctrl+Alt+Home — no app to switch to"),
-            }
+            // Parity with the gamepad Guide tap: open/close the deck switcher (the frontend
+            // owns the overlay and calls deck_open, which hides apps so it shows).
+            tracing::info!("hotkey: Ctrl+Alt+Home — toggle deck");
+            let _ = app.emit("guide-tap", ());
         } else if grabs.end_keycodes.contains(&e.detail) {
             let closed = crate::watchdog::return_home();
             tracing::info!("hotkey: Ctrl+Alt+End — {}", if closed { "closed the current app" } else { "no app to close" });

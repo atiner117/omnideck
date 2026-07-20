@@ -29,6 +29,13 @@ enum CliCommand {
     Media,
     /// Probe the configured media server (sections + first library's items)
     Mediasrv,
+    /// Render + report the auto-generated mpv profile set (VapourSynth interpolation)
+    Mpvprofiles,
+    /// Downscale a wallpaper into the display-sized cache and report the result
+    Bgprep {
+        /// Path to the source image
+        path: String,
+    },
 }
 
 /// Parse argv and run a headless subcommand if one was given. Returns true when a subcommand
@@ -72,6 +79,22 @@ pub fn handle() -> bool {
         }
         CliCommand::Media => {
             print!("{}", tauri::async_runtime::block_on(crate::mpris::report()));
+        }
+        CliCommand::Mpvprofiles => {
+            print!("{}", crate::media_profiles::report());
+        }
+        CliCommand::Bgprep { path } => {
+            let src = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            match crate::background::prepared(&path, None) {
+                Some(out) => {
+                    let dst = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+                    println!(
+                        "bgprep OK: {} ({} KiB) -> {} ({} KiB)",
+                        path, src / 1024, out.display(), dst / 1024
+                    );
+                }
+                None => println!("bgprep FAILED for {path} (unreadable or undecodable)"),
+            }
         }
         CliCommand::Mediasrv => {
             let Some(srv) = crate::media_server::server() else {

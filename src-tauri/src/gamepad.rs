@@ -51,6 +51,18 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
     const GUIDE_HOLD_CLOSE: std::time::Duration = std::time::Duration::from_millis(800);
     let mut guide_down: Option<std::time::Instant> = None; // Some = held, hold not yet fired
 
+    // Virtual keyboard/mouse bridge: while a launched app is in front, the pad drives IT
+    // (arrows/Enter/Esc, pointer on the right stick — see navpad.rs). None when /dev/uinput
+    // isn't writable; everything else works without it. Only built where it can ever fire —
+    // on a plain desktop the activation gate never passes, so constructing it just left a
+    // phantom kernel input device registered for the whole run.
+    let mut navpad = if crate::switcher::session_ok() {
+        crate::navpad::NavPad::new()
+    } else {
+        tracing::info!("navpad: not in a gamescope session — virtual input bridge not created");
+        None
+    };
+
     loop {
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
@@ -62,13 +74,24 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                 gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
                     // None here means the hold already fired (or a stray release) — ignore.
                     if guide_down.take().is_some() {
-                        if let Some(what) = crate::switcher::toggle() {
-                            tracing::info!("guide: app {what}");
-                        } // nothing launched — ignore quietly
+                        // Short press opens/closes the deck switcher (iOS-style app cards);
+                        // the frontend owns the overlay and calls deck_open (which hides the
+                        // apps so the overlay shows). Guide HOLD still closes-all below.
+                        tracing::info!("guide: tap — toggle deck");
+                        let _ = handle.emit("guide-tap", ());
                     }
                     continue; // swallow; never forward Guide as a UI event
                 }
                 _ => {}
+            }
+            // App in front → the pad drives the app through the uinput bridge, and the
+            // event is CONSUMED. The hidden dashboard's handler has no app-in-front gate,
+            // so forwarding the same press also activated tiles / toggled favorites /
+            // opened modals behind the app the user was driving. Guide never reaches here.
+            if let Some(np) = navpad.as_mut() {
+                if np.handle(&event) {
+                    continue;
+                }
             }
             // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
             if let gilrs::EventType::AxisChanged(a, v, _) = &event {
@@ -121,6 +144,11 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                 tracing::info!("guide (hold): closed the current app");
                 let _ = handle.emit("app-closed", ());
             }
+        }
+        // Bridge housekeeping each tick: arrow auto-repeat, right-stick pointer motion,
+        // and releasing anything held if the app vanished mid-press.
+        if let Some(np) = navpad.as_mut() {
+            np.tick();
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
     }

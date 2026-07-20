@@ -60,6 +60,9 @@ jobs:
       - name: Svelte type-check
         run: bun run check
 
+      - name: Frontend unit tests
+        run: bun run test
+
       - name: Frontend build
         run: bun run build
 
@@ -77,6 +80,10 @@ jobs:
         working-directory: src-tauri
         run: |
           TS_RS_EXPORT_DIR="$PWD/../src/lib/bindings" cargo test --release export_bindings
+          # -N (intent-to-add) so a brand-new generated binding that was never committed shows
+          # up in `git diff` too — a plain diff ignores untracked files, so a MISSING binding
+          # (e.g. a freshly `ts(export)`-ed struct) would otherwise pass as a false green.
+          git add --intent-to-add ../src/lib/bindings
           git diff --exit-code ../src/lib/bindings \
             || { echo "::error::src/lib/bindings is stale — run: cd src-tauri && TS_RS_EXPORT_DIR=\$PWD/../src/lib/bindings cargo test export_bindings"; exit 1; }
 
@@ -104,7 +111,7 @@ jobs:
         run: cargo audit
 
   version-sync:
-    name: version sync (Cargo.toml == tauri.conf.json == PKGBUILD)
+    name: version sync (all five version sources agree)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +120,11 @@ jobs:
           cargo_v=$(grep -m1 '^version' src-tauri/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
           tauri_v=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"(.*)".*/\1/')
           pkg_v=$(grep -m1 '^pkgver=' packaging/PKGBUILD | cut -d= -f2)
-          echo "Cargo.toml=$cargo_v  tauri.conf.json=$tauri_v  PKGBUILD=$pkg_v"
-          if [ "$cargo_v" != "$tauri_v" ] || [ "$cargo_v" != "$pkg_v" ]; then
-            echo "::error::version strings disagree — bump all three together"; exit 1
+          json_v=$(grep -m1 '"version"' package.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"(.*)".*/\1/')
+          # The omnideck crate's own entry in Cargo.lock (the line right after its name).
+          lock_v=$(grep -A1 '^name = "omnideck"$' src-tauri/Cargo.lock | grep -m1 '^version' | sed -E 's/.*"(.*)".*/\1/')
+          echo "Cargo.toml=$cargo_v  tauri.conf.json=$tauri_v  PKGBUILD=$pkg_v  package.json=$json_v  Cargo.lock=$lock_v"
+          if [ "$cargo_v" != "$tauri_v" ] || [ "$cargo_v" != "$pkg_v" ] \
+             || [ "$cargo_v" != "$json_v" ] || [ "$cargo_v" != "$lock_v" ]; then
+            echo "::error::version strings disagree — bump all five together (see RELEASING.md §1)"; exit 1
           fi

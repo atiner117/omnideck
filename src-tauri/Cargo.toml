@@ -1,6 +1,6 @@
 [package]
 name = "omnideck"
-version = "0.1.0"
+version = "0.2.0"
 description = "A 10-foot, controller-first media & game launcher for Linux."
 authors = ["OmniDeck contributors"]
 license = "GPL-3.0-or-later"
@@ -28,6 +28,9 @@ gilrs = "0.11"
 keyvalues-serde = "0.2"
 # M4 UI: serve local art to the webview as data URLs
 base64 = "0.22"
+# background.rs: downscale a big custom wallpaper to display size once (a 12 MP photo as a
+# base64 data URL was the dashboard's startup stall). jpeg+png decoders only — no default codecs.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # config: hand-editable ~/.config/omnideck/config.toml
 toml = "0.8"
 # SteamGridDB: fetch missing box art over HTTPS
@@ -37,6 +40,10 @@ clap = { version = "4", features = ["derive"] }
 # event-driven MPRIS Now Playing (replaces the 4 s `playerctl` fork+exec poll)
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
+# backoff sleep in the MPRIS reconnect supervisor (already in-tree via reqwest/zbus; the
+# runtime itself is tauri's tokio). `time` for sleeps/timeouts, `macros` for the join!
+# that runs the media-section fetches concurrently.
+tokio = { version = "1", default-features = false, features = ["time", "macros"] }
 # global Ctrl+Alt+Home grab inside the gamescope session (keyboard path back to OmniDeck
 # while a launched app holds focus — the keyboard twin of the gamepad Guide button)
 x11rb = { version = "0.13", features = ["randr"] }
@@ -45,10 +52,11 @@ x11rb = { version = "0.13", features = ["randr"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# navpad.rs: virtual keyboard/mouse over /dev/uinput so the controller can navigate
+# launched PWAs/browsers console-style; also examples/virtual-pad.rs (uinput gamepad
+# injector for the nested-session harness — gilrs sees it as a real evdev pad)
+evdev = "0.12"
 
 [dev-dependencies]
 ts-rs = "12.0.1"
-# examples/virtual-pad.rs — uinput gamepad injector for the nested-session harness
-# (packaging/test-session.sh); gilrs in the app sees it as a real evdev pad
-evdev = "0.12"
 

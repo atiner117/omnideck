@@ -11,6 +11,7 @@
 //   apps, capability, config, http, icons, library, steamgriddb — domain modules
 mod apps;
 mod asset;
+mod background;
 mod capability;
 mod cli;
 mod commands;
@@ -22,8 +23,11 @@ mod http;
 mod icons;
 mod library;
 mod logging;
+mod media_profiles;
 mod media_server;
 mod mpris;
+mod navpad;
+mod proc;
 mod session;
 mod steamgriddb;
 mod switcher;
@@ -81,7 +85,13 @@ pub fn run() {
             commands::media_sections,
             commands::media_browse,
             commands::media_poster,
-            commands::media_play
+            commands::media_play,
+            commands::bg_image,
+            commands::deck_open,
+            commands::deck_list,
+            commands::deck_show,
+            commands::deck_close,
+            commands::deck_cancel
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -107,6 +117,14 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application")
+        .run(|_app, event| {
+            // However the process ends (Quit button, window close, session teardown):
+            // switcher-frozen app groups must not outlive us — SIGTERM can't wake a
+            // SIGSTOPped process, so exiting without a CONT strands them stopped forever.
+            if let tauri::RunEvent::Exit = event {
+                switcher::resume_stopped_groups();
+            }
+        })
 }
