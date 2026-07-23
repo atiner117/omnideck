@@ -26,6 +26,8 @@ vite.config.ts.timestamp-*
 /GLM-REVIEW.md
 /NOTES.md
 /NOTES-*.md
+# maintainer-local agent instructions (tailnet-only infra; auto-loaded by Claude Code)
+/CLAUDE.local.md
 
 # ts-rs default export dir (every `cargo test` writes it; canonical copy: /src/lib/bindings)
 /src-tauri/bindings/
