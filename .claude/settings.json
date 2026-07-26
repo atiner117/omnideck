@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(date:*)",
+      "Bash(git fetch:*)",
+      "Bash(git switch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git branch:*)",
+      "Bash(git show-ref:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git commit:*)",
+      "Bash(git -c credential.helper='!gh auth git-credential' push https://github.com/atiner117/omnideck.git:*)",
+      "Bash(bun run check:*)",
+      "Bash(bun run build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr edit:*)"
+    ]
+  }
+}
