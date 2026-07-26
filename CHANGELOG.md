@@ -4,7 +4,82 @@ All notable changes to OmniDeck are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).
 
-## [Unreleased] — 0.2.0
+## [0.2.0] — 2026-07-27
+
+### Added
+- **Durable boot-error panel**: if capability/catalog/config-and-library loading fails at
+  startup, a persistent `role="alert"` panel now lists exactly which subsystem(s) failed
+  and offers **Retry** (or `F5`) — replacing a 5 s toast that was gone before a couch user
+  looked up, and media-load failures that used to be swallowed entirely. Retry re-runs only
+  the failed loaders; `config.toml` parse errors move into the same durable panel instead
+  of a fleeting toast.
+- **Controller-reachable Now Playing transport**: a D-pad/A-navigable overlay (`L1` or `N`,
+  only while something's playing) surfaces prev/play-pause/next, Switch, and Close/Dismiss
+  for the primary Now Playing card — previously those buttons only responded to a pointer
+  or Tab, so a controller on the dashboard couldn't touch media transport at all.
+- **A vitest unit-test net for pure frontend logic** (`bun run test`): the first slice
+  pulled out of the 1,589-line main page — `clamp` (33 call sites) and the O(window)
+  rail-virtualization math — is now covered by tests, the prerequisite for safely
+  decomposing that file further.
+
+### Changed
+- **Config saves and the deck/media/background commands run off the UI thread**: a shared
+  `blocking()` helper carries their fsyncs/blocking work on the async runtime's blocking
+  pool instead of the main thread. Media-library sections now fetch concurrently
+  (`tokio::join!`, ~4 serial LAN round-trips → ~1). The hardware capability probe is
+  memoized (it scanned `/dev/dri`/PCI/Vulkan ICDs/`PATH` on every `media_play`/launch/boot
+  call; now once per process).
+- The ts-rs binding-drift check now also catches newly-*added* generated files, not just
+  changed ones — closes the gap that let a binding ship uncommitted while CI stayed green.
+- Frontend styling now resolves through a small `surface`/`text`/`border` CSS
+  custom-property token system instead of raw hex repeated across components (34
+  references, 5 components) — a pure refactor; rendering is byte-identical today.
+- The app window/title now says "OmniDeck" (was the SvelteKit starter default), with dark
+  `color-scheme`/`theme-color` so shell chrome matches the UI.
+
+### Fixed
+- **`config.toml` writes are now atomic and serialized**: a crash/power-loss/full-disk
+  mid-write could leave a truncated file — and because the loader deliberately refuses to
+  overwrite an unparseable config, one interrupted write used to wedge *all* future saves
+  (UI stuck on defaults) until hand-fixed. Writes now go to a temp sibling, `fsync`, then
+  rename over the destination, with a process-wide lock serializing every load→mutate→save.
+- **The Now Playing (MPRIS) watcher supervises and reconnects**: it used to connect once
+  and never recover, so a `dbus-daemon`/player/session restart left a frozen Now Playing
+  card and dead media controls forever. It's now a supervisor loop with bounded backoff
+  (1s→5s→15s) that clears the card on disconnect and reconnects automatically.
+- **Jellyfin client reliability**: a `/Users/Me` response missing an `Id` used to cache
+  `None` for the process lifetime, wedging all media until restart — the user-id cache now
+  only ever stores a success. Transient network errors get one retry instead of turning a
+  section into a spurious empty row; Continue Watching/Latest failures are logged instead
+  of looking identical to an empty library.
+- **navpad backs off and disables itself** after 20 consecutive `/dev/uinput` write
+  failures instead of logging a warning on every ~8 ms gamepad tick and flooding the
+  session log; a later success logs recovery and resets the counter.
+- **Now Playing cards get a unique id per launch**: relaunching an app or game while an
+  earlier instance was still exiting used to give both the same identity, so the older
+  process's exit event cleared the newer card too.
+- **Two `omnideck-toggles.lua` bugs**: the status OSD ignored its caller's requested
+  duration (always 1.6 s instead of the intended 3 s), and toggling interpolation during
+  the seek self-heal window could double-append the filter label.
+- **Deck-switcher ordering bugs** (found in an xhigh-effort review of the full diff):
+  `deck_cancel()` now connects to X *before* consuming the restore snapshot (a failed
+  connect no longer strands the foreground app unmapped); `show_group()` now maps windows
+  *before* thawing them (a total map failure now leaves the group frozen and recoverable
+  instead of running invisibly); `switch_app` with a stale launch id is now a no-op instead
+  of falling back to the surface-every-hidden-app toggle; closing a group now forgets its
+  stale `STOPPED` bookkeeping entry.
+- **Every interactive shell-out is bounded** (`proc.rs`, new): the `pactl` audibility probe
+  and first-play mpv capability probe now run under a timeout with concurrent stdout
+  draining (no `>64 KiB` pipe deadlock) and are reaped on every kill path (no zombie
+  processes left behind).
+- **MPRIS `control()` parses the verb into an enum once** instead of a `_ => previous()`
+  catch-all that could silently map a future/unrecognized verb to Previous.
+
+### Security
+- **Jellyfin media/parent ids are validated at the IPC boundary** (`browse()`, `poster()`,
+  `media_play()`): alphanumeric + hyphen, bounded — rejecting `../`, `&`, `/` injection from
+  an arbitrary frontend-supplied string before it's interpolated into a URL path or query.
+- `anyhow` bumped 1.0.102 → 1.0.103 (RUSTSEC unsoundness advisory).
 
 ### Added
 - **Playback controls are per-dimension toggles** (`omnideck-toggles.lua`, shipped in the
@@ -111,8 +186,8 @@ All notable changes to OmniDeck are documented here. Format follows
   committed `.SRCINFO`, and a `packaging.yml` workflow that lints (`namcap`), checks
   `.SRCINFO` sync, and builds the package in a clean Arch container.
 - **Supply-chain CI**: `cargo-deny` (advisories / licenses / bans / sources, `deny.toml`)
-  and `cargo-audit` (RustSec) jobs; a version-sync job keeps `Cargo.toml`,
-  `tauri.conf.json`, and `PKGBUILD` agreeing.
+  and `cargo-audit` (RustSec) jobs; a version-sync job keeps all five version sources
+  agreeing (`Cargo.toml`, `tauri.conf.json`, `PKGBUILD`, `package.json`, `Cargo.lock`).
 - **`omnideck://` asset protocol**: Steam library art and SteamGridDB capsules are served
   as plain URLs from one canonicalize-and-allowlist chokepoint instead of base64 `data:`
   URLs pinned in webview state — a large-memory win on big libraries.
