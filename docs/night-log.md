@@ -20,6 +20,25 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-07-26 03:45 — Merge-triage of the 30 open fable drafts vs post-rewrite main
+- **Vision tie:** priority 1 (frontend-split / media-server tracks) — the tracks are blocked not
+  by missing code but by 30 unreviewable drafts stranded behind the 2026-07-19 history rewrite;
+  this unblocks them. New features tonight would only have deepened the conflict pile.
+- **Branch / PR:** `loop/night-20260726` — https://github.com/atiner117/omnideck/pull/52
+- **Changed:** new `docs/PR-TRIAGE-2026-07-26.md`. Deterministic git analysis (merge-base, tree
+  ids, file-level overlap; `git merge-tree` was sandbox-blocked, so overlap is honestly labeled a
+  conflict *superset*): all drafts root at pre-rewrite `c7c5067`, but the duplicated trunk is
+  tree-identical (`369ed3b^{tree}` == `4b9389b^{tree}`), so each PR = 1–4 cherry-pickable commits.
+  Six drafts superseded by #48 (close: #20, #22, #40, #38, #39 + mpris/tokens lanes and all of
+  `loop/night-20260711`); eight zero-overlap clean picks (#33 #34 #35 #36 #29 #37 + pairs); a
+  sequenced +page.svelte wave; two PR-less prerequisite lanes flagged (fable-audio backend for
+  #35, fable-settings SettingDef table for #44/#46).
+- **Verify:** docs-only — no build gates apply (bun/cargo untouched).
+- **Outcome:** shipped to draft PR #52.
+- **Next candidate:** if Andrew agrees with the triage, the loop can grind Waves 1–2 one
+  cherry-pick per iteration (start: #33 doctor, then #34 logs — both zero-overlap `cli.rs`
+  picks, full Verify gate each). Otherwise: `fable-audio` backend + #35 modal as one pick.
+
 ## 2026-07-13 07:15 — Phone-as-remote: authed LAN HTTP remote (parking lot)
 - **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 parking lot (phone-as-remote); VISION
   couch-first control — the phone already in your hand becomes a second remote.
