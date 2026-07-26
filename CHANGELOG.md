@@ -18,70 +18,9 @@ All notable changes to OmniDeck are documented here. Format follows
   for the primary Now Playing card — previously those buttons only responded to a pointer
   or Tab, so a controller on the dashboard couldn't touch media transport at all.
 - **A vitest unit-test net for pure frontend logic** (`bun run test`): the first slice
-  pulled out of the 1,589-line main page — `clamp` (33 call sites) and the O(window)
+  pulled out of the main page — the shared `clamp` helper and the O(window)
   rail-virtualization math — is now covered by tests, the prerequisite for safely
   decomposing that file further.
-
-### Changed
-- **Config saves and the deck/media/background commands run off the UI thread**: a shared
-  `blocking()` helper carries their fsyncs/blocking work on the async runtime's blocking
-  pool instead of the main thread. Media-library sections now fetch concurrently
-  (`tokio::join!`, ~4 serial LAN round-trips → ~1). The hardware capability probe is
-  memoized (it scanned `/dev/dri`/PCI/Vulkan ICDs/`PATH` on every `media_play`/launch/boot
-  call; now once per process).
-- The ts-rs binding-drift check now also catches newly-*added* generated files, not just
-  changed ones — closes the gap that let a binding ship uncommitted while CI stayed green.
-- Frontend styling now resolves through a small `surface`/`text`/`border` CSS
-  custom-property token system instead of raw hex repeated across components (34
-  references, 5 components) — a pure refactor; rendering is byte-identical today.
-- The app window/title now says "OmniDeck" (was the SvelteKit starter default), with dark
-  `color-scheme`/`theme-color` so shell chrome matches the UI.
-
-### Fixed
-- **`config.toml` writes are now atomic and serialized**: a crash/power-loss/full-disk
-  mid-write could leave a truncated file — and because the loader deliberately refuses to
-  overwrite an unparseable config, one interrupted write used to wedge *all* future saves
-  (UI stuck on defaults) until hand-fixed. Writes now go to a temp sibling, `fsync`, then
-  rename over the destination, with a process-wide lock serializing every load→mutate→save.
-- **The Now Playing (MPRIS) watcher supervises and reconnects**: it used to connect once
-  and never recover, so a `dbus-daemon`/player/session restart left a frozen Now Playing
-  card and dead media controls forever. It's now a supervisor loop with bounded backoff
-  (1s→5s→15s) that clears the card on disconnect and reconnects automatically.
-- **Jellyfin client reliability**: a `/Users/Me` response missing an `Id` used to cache
-  `None` for the process lifetime, wedging all media until restart — the user-id cache now
-  only ever stores a success. Transient network errors get one retry instead of turning a
-  section into a spurious empty row; Continue Watching/Latest failures are logged instead
-  of looking identical to an empty library.
-- **navpad backs off and disables itself** after 20 consecutive `/dev/uinput` write
-  failures instead of logging a warning on every ~8 ms gamepad tick and flooding the
-  session log; a later success logs recovery and resets the counter.
-- **Now Playing cards get a unique id per launch**: relaunching an app or game while an
-  earlier instance was still exiting used to give both the same identity, so the older
-  process's exit event cleared the newer card too.
-- **Two `omnideck-toggles.lua` bugs**: the status OSD ignored its caller's requested
-  duration (always 1.6 s instead of the intended 3 s), and toggling interpolation during
-  the seek self-heal window could double-append the filter label.
-- **Deck-switcher ordering bugs** (found in an xhigh-effort review of the full diff):
-  `deck_cancel()` now connects to X *before* consuming the restore snapshot (a failed
-  connect no longer strands the foreground app unmapped); `show_group()` now maps windows
-  *before* thawing them (a total map failure now leaves the group frozen and recoverable
-  instead of running invisibly); `switch_app` with a stale launch id is now a no-op instead
-  of falling back to the surface-every-hidden-app toggle; closing a group now forgets its
-  stale `STOPPED` bookkeeping entry.
-- **Every interactive shell-out is bounded** (`proc.rs`, new): the `pactl` audibility probe
-  and first-play mpv capability probe now run under a timeout with concurrent stdout
-  draining (no `>64 KiB` pipe deadlock) and are reaped on every kill path (no zombie
-  processes left behind).
-- **MPRIS `control()` parses the verb into an enum once** instead of a `_ => previous()`
-  catch-all that could silently map a future/unrecognized verb to Previous.
-
-### Security
-- **Jellyfin media/parent ids are validated at the IPC boundary** (`browse()`, `poster()`,
-  `media_play()`): alphanumeric + hyphen, bounded — rejecting `../`, `&`, `/` injection from
-  an arbitrary frontend-supplied string before it's interpolated into a URL path or query.
-- `anyhow` bumped 1.0.102 → 1.0.103 (RUSTSEC unsoundness advisory).
-
-### Added
 - **Playback controls are per-dimension toggles** (`omnideck-toggles.lua`, shipped in the
   generated profile set): one key per dimension instead of a preset profile per
   combination — F4 cycles interpolation (off/smooth/ultra), F5 upscaling quality, F6
@@ -105,23 +44,6 @@ All notable changes to OmniDeck are documented here. Format follows
   `~/.cache/omnideck/bg/`, and served over `omnideck://` (measured 4 MB → 761 KB,
   2560x1920). Falls back to the old full-image path if a source can't be prepared.
   `omnideck bgprep <path>` reports the result.
-
-### Changed
-- **Controller click is A/cross, not R2** (navpad): the right stick is the primary pointer,
-  so A now left-clicks where it is (what the user expects). Enter moved to X, play/pause to
-  Y. R2/L2 still click too (for hold/drag).
-- **Hidden apps only stay running while audibly playing** — the switcher's silence check now
-  matches an audio stream to its launch app by process *ancestry*, not exact group, so an
-  Electron app's `setsid`'d audio child is found; Feishin no longer gets frozen mid-song.
-- **Browsers in-session get `--force-device-scale-factor=1`** so a Chromium PWA fills the
-  panel instead of rendering into a corner/half (Xwayland HiDPI auto-scale — the
-  couch-test "PWA on the left half").
-- **`OMNIDECK_WEBKIT_DMABUF=1` escape hatch** (gpu.rs): keeps WebKitGTK's zero-copy dmabuf
-  renderer ON on NVIDIA instead of the blank-screen workaround that also caps smoothness
-  (~78 fps). Opt-in per driver — the fast path to a truly 165 Hz dashboard where a newer
-  driver renders it correctly.
-
-### Added
 - **navpad — the controller drives launched apps** (`navpad.rs`): a virtual
   keyboard/mouse over `/dev/uinput`, active only while a launched app's window is in
   front (the switcher's visibility ground truth). Dpad/left stick → arrow-key pulses
@@ -255,6 +177,32 @@ All notable changes to OmniDeck are documented here. Format follows
   real Steam launch/return, suspend, SDDM login (see `M2-SESSION-TEST.md` §0.5).
 
 ### Changed
+- **Config saves and the deck/media/background commands run off the UI thread**: a shared
+  `blocking()` helper carries their fsyncs/blocking work on the async runtime's blocking
+  pool instead of the main thread. Media-library sections now fetch concurrently
+  (`tokio::join!`, ~4 serial LAN round-trips → ~1). The hardware capability probe is
+  memoized (it scanned `/dev/dri`/PCI/Vulkan ICDs/`PATH` on every `media_play`/launch/boot
+  call; now once per process).
+- The ts-rs binding-drift check now also catches newly-*added* generated files, not just
+  changed ones — closes the gap that let a binding ship uncommitted while CI stayed green.
+- Frontend styling now resolves through a small `surface`/`text`/`border` CSS
+  custom-property token system instead of raw hex repeated across components (34
+  references, 5 components) — a pure refactor; rendering is byte-identical today.
+- The app window/title now says "OmniDeck" (was the SvelteKit starter default), with dark
+  `color-scheme`/`theme-color` so shell chrome matches the UI.
+- **Controller click is A/cross, not R2** (navpad): the right stick is the primary pointer,
+  so A now left-clicks where it is (what the user expects). Enter moved to X, play/pause to
+  Y. R2/L2 still click too (for hold/drag).
+- **Hidden apps only stay running while audibly playing** — the switcher's silence check now
+  matches an audio stream to its launch app by process *ancestry*, not exact group, so an
+  Electron app's `setsid`'d audio child is found; Feishin no longer gets frozen mid-song.
+- **Browsers in-session get `--force-device-scale-factor=1`** so a Chromium PWA fills the
+  panel instead of rendering into a corner/half (Xwayland HiDPI auto-scale — the
+  couch-test "PWA on the left half").
+- **`OMNIDECK_WEBKIT_DMABUF=1` escape hatch** (gpu.rs): keeps WebKitGTK's zero-copy dmabuf
+  renderer ON on NVIDIA instead of the blank-screen workaround that also caps smoothness
+  (~78 fps). Opt-in per driver — the fast path to a truly 165 Hz dashboard where a newer
+  driver renders it correctly.
 - **PSP-clean chrome pass**: the footer hint wall is gone — diagnostics left, three hints
   right, and the full keyboard/controller reference lives in a **Help overlay** (`?` /
   `F1`, footer button; the wizard mentions it). **Settings** is grouped into sections
@@ -280,35 +228,43 @@ All notable changes to OmniDeck are documented here. Format follows
 - Custom launchers de-duplicate their ids with a numeric suffix instead of silently
   overwriting a same-named entry; empty/symbol-only names are rejected.
 
-### Security
-- **DNS-rebinding closed in the SSRF guard** (2026-07 audit): the blocklist now also
-  resolves hostnames and re-checks every returned address (IPv6 ranges included), at the
-  fetch entry points and on every redirect hop — a public-looking domain that resolves to
-  `127.0.0.1`/`10.x` no longer walks past the literal-IP check. Groundwork for the
-  planned LAN media-server integration.
-- **`get_art` (custom background) is content-gated** (2026-07 audit): canonicalized,
-  regular-files-only, and magic-byte sniffed against the claimed image type — a
-  crafted/imported config can no longer feed a non-image through the background loader.
-  Deliberately NOT path-rooted: backgrounds legitimately live on photo mounts, and the
-  surface is display-only (no exfil channel under the CSP).
-- `quick-xml` RUSTSEC-2026-0194/0195 (DoS, via `plist`/`tauri-utils`): documented ignores
-  in the audit gates — the parser never sees untrusted XML in a Linux launcher, and no
-  fixed release exists on our tree yet (drop the ignores when `plist` adopts quick-xml 0.41).
-- Tauri capabilities scoped to exactly what the frontend uses (dropped `core:default` and
-  the unused `opener` plugin + its dependency tree).
-- Config values are sanitized on load: accent/background colors must be `#rrggbb` (they
-  flow into CSS), `search_provider` must be http(s) (it flows into a browser launch),
-  enums reset to safe defaults.
-- SSRF guards on icon/art fetching: private/loopback/link-local IPs are refused —
-  including `inet_aton` short/hex forms (`127.1`, `0x7f.0.0.1`) — and every **redirect
-  hop** is re-checked, so a public host can't 302 into the internal network.
-  SteamGridDB image URLs must be https.
-- Byte-capped downloads everywhere (content-length can lie); image responses are
-  magic-byte sniffed.
-- `quinn-proto` bumped past RUSTSEC-2026-0185 (remote memory exhaustion, 7.5 high) —
-  caught by the new supply-chain gate on its first CI run.
-
 ### Fixed
+- **`config.toml` writes are now atomic and serialized**: a crash/power-loss/full-disk
+  mid-write could leave a truncated file — and because the loader deliberately refuses to
+  overwrite an unparseable config, one interrupted write used to wedge *all* future saves
+  (UI stuck on defaults) until hand-fixed. Writes now go to a temp sibling, `fsync`, then
+  rename over the destination, with a process-wide lock serializing every load→mutate→save.
+- **The Now Playing (MPRIS) watcher supervises and reconnects**: it used to connect once
+  and never recover, so a `dbus-daemon`/player/session restart left a frozen Now Playing
+  card and dead media controls forever. It's now a supervisor loop with bounded backoff
+  (1s→5s→15s) that clears the card on disconnect and reconnects automatically.
+- **Jellyfin client reliability**: a `/Users/Me` response missing an `Id` used to cache
+  `None` for the process lifetime, wedging all media until restart — the user-id cache now
+  only ever stores a success. Transient network errors get one retry instead of turning a
+  section into a spurious empty row; Continue Watching/Latest failures are logged instead
+  of looking identical to an empty library.
+- **navpad backs off and disables itself** after 20 consecutive `/dev/uinput` write
+  failures instead of logging a warning on every ~8 ms gamepad tick and flooding the
+  session log; a later success logs recovery and resets the counter.
+- **Now Playing cards get a unique id per launch**: relaunching an app or game while an
+  earlier instance was still exiting used to give both the same identity, so the older
+  process's exit event cleared the newer card too.
+- **Two `omnideck-toggles.lua` bugs**: the status OSD ignored its caller's requested
+  duration (always 1.6 s instead of the intended 3 s), and toggling interpolation during
+  the seek self-heal window could double-append the filter label.
+- **Deck-switcher ordering bugs** (found in an xhigh-effort review of the full diff):
+  `deck_cancel()` now connects to X *before* consuming the restore snapshot (a failed
+  connect no longer strands the foreground app unmapped); `show_group()` now maps windows
+  *before* thawing them (a total map failure now leaves the group frozen and recoverable
+  instead of running invisibly); `switch_app` with a stale launch id is now a no-op instead
+  of falling back to the surface-every-hidden-app toggle; closing a group now forgets its
+  stale `STOPPED` bookkeeping entry.
+- **Every interactive shell-out is bounded** (`proc.rs`, new): the `pactl` audibility probe
+  and first-play mpv capability probe now run under a timeout with concurrent stdout
+  draining (no `>64 KiB` pipe deadlock) and are reaped on every kill path (no zombie
+  processes left behind).
+- **MPRIS `control()` parses the verb into an enum once** instead of a `_ => previous()`
+  catch-all that could silently map a future/unrecognized verb to Previous.
 - **Guide-hold / Ctrl+Alt+End now closes EVERY running launched app** (2026-07 audit):
   it only signalled the most-recently-launched one, so with app B stacked over a
   still-running app A, "close" left A holding the screen. Deliberate semantics: close is
@@ -357,6 +313,38 @@ All notable changes to OmniDeck are documented here. Format follows
   refetch loop.
 - Various leaked timers cancelled on unmount; stale async resolves (background image,
   search-engine favicon) are dropped by sequence guards.
+
+### Security
+- **Jellyfin media/parent ids are validated at the IPC boundary** (`browse()`, `poster()`,
+  `media_play()`): alphanumeric + hyphen, bounded — rejecting `../`, `&`, `/` injection from
+  an arbitrary frontend-supplied string before it's interpolated into a URL path or query.
+- `anyhow` bumped 1.0.102 → 1.0.103 (RUSTSEC unsoundness advisory).
+- **DNS-rebinding closed in the SSRF guard** (2026-07 audit): the blocklist now also
+  resolves hostnames and re-checks every returned address (IPv6 ranges included), at the
+  fetch entry points and on every redirect hop — a public-looking domain that resolves to
+  `127.0.0.1`/`10.x` no longer walks past the literal-IP check. Groundwork for the
+  planned LAN media-server integration.
+- **`get_art` (custom background) is content-gated** (2026-07 audit): canonicalized,
+  regular-files-only, and magic-byte sniffed against the claimed image type — a
+  crafted/imported config can no longer feed a non-image through the background loader.
+  Deliberately NOT path-rooted: backgrounds legitimately live on photo mounts, and the
+  surface is display-only (no exfil channel under the CSP).
+- `quick-xml` RUSTSEC-2026-0194/0195 (DoS, via `plist`/`tauri-utils`): documented ignores
+  in the audit gates — the parser never sees untrusted XML in a Linux launcher, and no
+  fixed release exists on our tree yet (drop the ignores when `plist` adopts quick-xml 0.41).
+- Tauri capabilities scoped to exactly what the frontend uses (dropped `core:default` and
+  the unused `opener` plugin + its dependency tree).
+- Config values are sanitized on load: accent/background colors must be `#rrggbb` (they
+  flow into CSS), `search_provider` must be http(s) (it flows into a browser launch),
+  enums reset to safe defaults.
+- SSRF guards on icon/art fetching: private/loopback/link-local IPs are refused —
+  including `inet_aton` short/hex forms (`127.1`, `0x7f.0.0.1`) — and every **redirect
+  hop** is re-checked, so a public host can't 302 into the internal network.
+  SteamGridDB image URLs must be https.
+- Byte-capped downloads everywhere (content-length can lie); image responses are
+  magic-byte sniffed.
+- `quinn-proto` bumped past RUSTSEC-2026-0185 (remote memory exhaustion, 7.5 high) —
+  caught by the new supply-chain gate on its first CI run.
 
 ## [0.1.0] — first tagged release
 Initial public snapshot: XMB-style controller-first launcher, Steam library scan +
