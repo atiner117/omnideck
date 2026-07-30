@@ -118,6 +118,16 @@ fn best_info(players: &HashMap<String, PlayerState>) -> Option<MediaInfo> {
     })
 }
 
+/// True while any MPRIS player reports `Playing` — the screensaver idle detector
+/// (gamepad.rs) uses this to suppress `idle` during playback (roadmap: the dim/blank must
+/// never trigger mid-movie). Unlike `now_playing()` this counts a title-less player too:
+/// something is audibly/visibly playing even without metadata.
+pub fn any_playing() -> bool {
+    crate::sync::lock_or_recover(state(), "mpris.players")
+        .values()
+        .any(|p| p.status == "Playing")
+}
+
 /// Snapshot for the `media_now_playing` command (frontend's initial fetch).
 pub fn now_playing() -> Option<MediaInfo> {
     let players = crate::sync::lock_or_recover(state(), "mpris.players");

@@ -20,6 +20,32 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-07-30 18:56 — Wave 1 pick 6 (FINAL): screensaver pair — idle backend + OLED overlay
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 complete; roadmap #1 (OLED screensaver) —
+  the "useless without #18's idle events" pair lands as one unit.
+- **Branch / PR:** `pick/saver` — https://github.com/atiner117/omnideck/pull/59
+- **Changed:** three picks onto main `c6ab9ef`: `d65988d` (idle/active events from the
+  gamepad thread, [screensaver] config table, mpris-playing counts as activity),
+  `3ab7311` (notify_activity command — DOM input resets the clock), `5fdd860`
+  (ScreensaverOverlay.svelte + NEW src/routes/+layout.svelte, layout-mounted, three
+  stages dim/art/blank, reduced-motion aware, defensive self-timer). TWO conflicts,
+  both the familiar tail kind: config.rs test imports (write_atomic vs ScreensaverConfig
+  — merged), lib.rs invoke_handler (deck_cancel vs notify_activity — kept both).
+  Bindings REGENERATED and verified in sync (17 export tests incl.
+  export_bindings_screensaverconfig; git status on bindings clean).
+- **Verify:** bun run check (pass, 344 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (47 pass — 3 new screensaver tests — 1 ignored) · omnideck config loads/normalizes with
+  the table absent. needs-hardware: dim/art/blank staging + wake feel on the OLED.
+- **Outcome:** shipped to draft PR #59 (supersedes #18 AND #29 — close both when it
+  lands). WAVE 1 COMPLETE: #54 #55 #56 #57 #58 #59 — six drafts on post-rewrite main
+  superseding eight stranded originals (#33 #34 #36 #37 #15 #35 #18 #29).
+- **Next candidate:** Andrew's review/merge pass on the six. After merges: close the
+  eight superseded drafts + the #48-superseded close-list from the triage (#20 #22 #38
+  #39 #40 + #9 #11 #16). Then Wave 2/3: the sequenced +page.svelte wave (#26 #28 #30
+  #32 …) — those need the triage's ordering and fresh conflict checks against whatever
+  merged first.
+
 ## 2026-07-30 13:25 — Wave 1 pick 5: audio backend + AudioOutputModal (first paired pick)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1, roadmap #3 (audio output switching) — the
   triage's "dead UI without the backend" pair lands as one reviewable unit.
