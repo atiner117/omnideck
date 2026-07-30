@@ -2,6 +2,7 @@
 // on NVIDIA): gilrs reads evdev on a dedicated std thread (gilrs is !Send, so it cannot live
 // in a tokio task) and forwards typed events to the webview via Tauri events.
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
 
 #[derive(Clone, Serialize)]
@@ -12,6 +13,20 @@ struct GamepadEvent {
     value: f32,
     gamepad: String,
     name: String,
+}
+
+/// Set by `notify_activity`, consumed (swap-to-false) once per gamepad-loop tick. Lets
+/// non-pad input reset the screensaver idle clock without the loop owning any other
+/// input device.
+static EXTERNAL_ACTIVITY: AtomicBool = AtomicBool::new(false);
+
+/// Non-pad user activity (keyboard/mouse in the webview): the frontend calls this —
+/// throttled — from its DOM keydown/pointermove handlers so desktop-mode use without a
+/// pad doesn't trip the screensaver. See the idle-detection comment in `gamepad_loop`
+/// for what this does and doesn't cover.
+#[tauri::command]
+pub fn notify_activity() {
+    EXTERNAL_ACTIVITY.store(true, Ordering::Relaxed);
 }
 
 pub fn gamepad_loop(handle: tauri::AppHandle) {
@@ -63,15 +78,39 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         None
     };
 
+    // Screensaver idle detection ([screensaver] in config.rs, roadmap Appendix C #1): a
+    // single "idle" event after `idle_dim_secs` without user input, "active" on the next
+    // input. The frontend owns the staged dim → Ken-Burns → blank presentation (and the
+    // `enabled` gate) — the backend only reports the transition.
+    //
+    // What counts as input: pad events past the AXIS_EPS filter, plus anything reported
+    // via `notify_activity` (the webview's own DOM keydown/pointermove — covers desktop-
+    // mode keyboard/mouse use, since the webview has focus in exactly that case).
+    // KNOWN LIMITATION: keyboard/mouse input that goes to a LAUNCHED app (which holds
+    // focus, so neither the pad bridge nor the webview sees it) does not reset the clock —
+    // the backend owns no keyboard/mouse device. The frontend overlay (#29) compensates
+    // locally: it suppresses/resets on its own input events and while an app session is
+    // in front.
+    // The threshold is read once at thread start (this thread outlives config edits; a
+    // changed idle_dim_secs applies on restart, same as other backend-side config).
+    let idle_after =
+        std::time::Duration::from_secs(crate::config::load_or_create().screensaver.idle_dim_secs);
+    let mut last_input = std::time::Instant::now();
+    let mut idle = false;
+
     loop {
+        // Any button/axis event this tick (post-epsilon) counts as screensaver activity.
+        let mut saw_input = false;
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
             let name = gilrs.gamepad(id).name().to_string();
             match &event {
                 gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) => {
                     guide_down = Some(std::time::Instant::now());
+                    saw_input = true; // swallowed below, but it's still user activity
                     continue; // swallow; acted on at threshold (close) or release (switch)
                 }
                 gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
+                    saw_input = true;
                     // None here means the hold already fired (or a stray release) — ignore.
                     if guide_down.take().is_some() {
                         // Short press opens/closes the deck switcher (iOS-style app cards);
@@ -100,6 +139,17 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     continue;
                 }
                 last_axis.insert(key, *v);
+            }
+            // Real user input (buttons, above-epsilon axis motion) resets the idle clock;
+            // Connected/Disconnected/other are not someone touching the pad.
+            if matches!(
+                &event,
+                gilrs::EventType::ButtonPressed(..)
+                    | gilrs::EventType::ButtonReleased(..)
+                    | gilrs::EventType::ButtonChanged(..)
+                    | gilrs::EventType::AxisChanged(..)
+            ) {
+                saw_input = true;
             }
             let (kind, code, value) = match event {
                 gilrs::EventType::ButtonPressed(b, _) => {
@@ -149,6 +199,32 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         // and releasing anything held if the app vanished mid-press.
         if let Some(np) = navpad.as_mut() {
             np.tick();
+        }
+        // Screensaver transitions, checked after the drain so a wake-up press already in
+        // the queue wins over an idle expiry in the same tick. Non-pad activity (webview
+        // keyboard/mouse via notify_activity) counts the same as pad input.
+        if EXTERNAL_ACTIVITY.swap(false, Ordering::Relaxed) {
+            saw_input = true;
+        }
+        if saw_input {
+            last_input = std::time::Instant::now();
+            if idle {
+                idle = false;
+                tracing::info!("screensaver: input — active");
+                let _ = handle.emit("active", ());
+            }
+        } else if !idle && last_input.elapsed() >= idle_after {
+            if crate::mpris::any_playing() {
+                // Playback counts as activity (the dim/blank must never trigger mid-movie):
+                // restart the countdown so "idle" fires idle_after AFTER playback stops.
+                // (MPRIS only — a launched game without a media player is not covered here;
+                // the frontend can additionally suppress while an app session is in front.)
+                last_input = std::time::Instant::now();
+            } else {
+                idle = true;
+                tracing::info!("screensaver: no pad input for {idle_after:?} — idle");
+                let _ = handle.emit("idle", ());
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
     }

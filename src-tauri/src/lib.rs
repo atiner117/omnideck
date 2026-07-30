@@ -11,6 +11,7 @@
 //   apps, capability, config, http, icons, library, steamgriddb — domain modules
 mod apps;
 mod asset;
+mod audio;
 mod background;
 mod capability;
 mod cli;
@@ -91,7 +92,10 @@ pub fn run() {
             commands::deck_list,
             commands::deck_show,
             commands::deck_close,
-            commands::deck_cancel
+            commands::deck_cancel,
+            audio::audio_outputs,
+            audio::audio_set_output,
+            gamepad::notify_activity
         ])
         .setup(|app| {
             let handle = app.handle().clone();
