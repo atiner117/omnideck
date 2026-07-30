@@ -85,7 +85,10 @@ group; watchdog.rs tracks children (and Steam games via Steam's registry, since
 Now Playing cards. switcher.rs hides/shows launched app windows through X11
 (`_NET_WM_PID`-based grouping) for the deck switcher. Browser tiles go through a `BROWSER`
 token that resolves to the host browser in PWA mode; only http(s) URLs may follow it
-(flag-injection guard).
+(flag-injection guard). Helper shell-outs on paths that must not hang (the deck-flow
+freeze policy's `pactl`, the first-play mpv capability probe) go through proc.rs, which
+drains output concurrently and kills the child at a deadline — never a bare `.output()`
+that can wait forever.
 
 ## Media stack
 
@@ -115,8 +118,10 @@ Panics land there too. The CLI (cli.rs) is the headless debug surface; run
 ## Testing
 
 `cargo test` covers the pure logic (config normalization, URL/arg guards, profile
-policy) and doubles as the bindings generator/drift check. `bun run check` +
-`bun run build` gate the frontend. A few tests marked `#[ignore]` need real hardware
-(an X server, a controller) and are run manually against the target box.
+policy) and doubles as the bindings generator/drift check. On the frontend,
+`bun run check` + `bun run build` gate types and the build, and `bun run test` (vitest)
+unit-tests the pure logic modules (nav.ts, osk.ts, launchId.ts). A few tests marked
+`#[ignore]` need real hardware (an X server, a controller) and are run manually against
+the target box.
 
 [ts-rs]: https://github.com/Aleph-Alpha/ts-rs
