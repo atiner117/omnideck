@@ -20,6 +20,27 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-07-30 12:51 — Wave 1 pick 2: `omnideck logs` cherry-picked onto post-rewrite main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — second zero-overlap pick; completes the
+  support story next to `doctor` (#54): session crashes land in the rotating file, `logs`
+  finally tells the user where.
+- **Branch / PR:** `pick/logs` — https://github.com/atiner117/omnideck/pull/55
+- **Changed:** clean cherry-pick of `802aff6` from draft #34 onto main `c6ab9ef`:
+  `src-tauri/src/cli.rs` +60 (new `Logs { -n, --path }` subcommand), `src-tauri/src/logging.rs`
+  +18/−6 (state-dir derivation extracted into shared `logging::state_dir()`; `init()` behavior
+  unchanged). Zero conflicts — parallel to #54 off the same trunk, merges in either order.
+- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · bun run test (13 pass) ·
+  cargo clippy --release -D warnings (pass) · cargo test --release (44 pass, 1 ignored; exit
+  status checked directly per the pick-1 caution) · live smoke: `omnideck logs` listed this
+  host's 6 rotated files + tailed the newest; `logs --path` printed the newest path.
+- **Outcome:** shipped to draft PR #55 (supersedes #34 — close #34 when #55 lands). Same
+  night-log prepend-conflict caveat as pick 1: #52/#54/#55 all add entries at the top of this
+  file; keep all, newest on top.
+- **Next candidate:** Wave 1 pick 3 per triage: #36 PinModal (`3c61d5b`, new
+  `PinModal.svelte`, pairs with #19's backend) or #37 archdoc (`e1d2b17` — but re-check
+  ARCHITECTURE.md claims against post-#48 main before shipping). The #35 audio modal needs
+  the #15 backend picked together — bigger bite, save for its own iteration.
+
 ## 2026-07-30 11:55 — Wave 1 pick 1: `omnideck doctor` cherry-picked onto post-rewrite main
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 (Andrew approved the triage 2026-07-30) — start
   draining the stranded drafts with the zero-overlap picks; release-prep QoL (one-command
