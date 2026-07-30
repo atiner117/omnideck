@@ -43,6 +43,71 @@ Entry template:
   then #18 idle backend + #29 screensaver overlay. After those, Wave 2 / the sequenced
   +page.svelte wave.
 
+## 2026-07-30 12:58 — Wave 1 pick 3: PinModal component cherry-picked onto post-rewrite main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — third zero-overlap pick; roadmap #2
+  (parental controls), frontend half. Standalone by design: no bindings dependency, ships
+  independent of #19's PIN backend.
+- **Branch / PR:** `pick/pinui` — https://github.com/atiner117/omnideck/pull/56
+- **Changed:** clean cherry-pick of `3c61d5b` from draft #36 onto main `c6ab9ef`: one new
+  file `src/lib/PinModal.svelte` (+150). Purely presentational (CatalogModal/Wizard
+  pattern), exports PIN_ROWS/PIN_FLAT/PIN_COLS/PIN_MAX for the page router; only import is
+  the existing `Modal.svelte`. Not mounted anywhere until the +page wave — by design.
+- **Verify:** bun run check (pass, 342 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (44 pass, 1 ignored; exit status checked directly). No visual smoke possible solo (not
+  mounted); svelte-check/build compile the component.
+- **Outcome:** shipped to draft PR #56 (supersedes #36 — close #36 when #56 lands). Wave 1
+  now 3 drafts in flight: #54 doctor, #55 logs, #56 pinui — all independent, any merge order.
+  Same night-log prepend-conflict caveat as picks 1–2.
+- **Next candidate:** per triage, the remaining Wave 1 solos: #37 archdoc (`e1d2b17` — but
+  re-check ARCHITECTURE.md claims against post-#48 main first, CONTRIBUTING.md may conflict
+  with `bed913c`) or the paired picks (#15 audio backend + #35 modal as one iteration;
+  #18 idle backend + #29 saver overlay as another).
+
+## 2026-07-30 12:51 — Wave 1 pick 2: `omnideck logs` cherry-picked onto post-rewrite main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — second zero-overlap pick; completes the
+  support story next to `doctor` (#54): session crashes land in the rotating file, `logs`
+  finally tells the user where.
+- **Branch / PR:** `pick/logs` — https://github.com/atiner117/omnideck/pull/55
+- **Changed:** clean cherry-pick of `802aff6` from draft #34 onto main `c6ab9ef`:
+  `src-tauri/src/cli.rs` +60 (new `Logs { -n, --path }` subcommand), `src-tauri/src/logging.rs`
+  +18/−6 (state-dir derivation extracted into shared `logging::state_dir()`; `init()` behavior
+  unchanged). Zero conflicts — parallel to #54 off the same trunk, merges in either order.
+- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · bun run test (13 pass) ·
+  cargo clippy --release -D warnings (pass) · cargo test --release (44 pass, 1 ignored; exit
+  status checked directly per the pick-1 caution) · live smoke: `omnideck logs` listed this
+  host's 6 rotated files + tailed the newest; `logs --path` printed the newest path.
+- **Outcome:** shipped to draft PR #55 (supersedes #34 — close #34 when #55 lands). Same
+  night-log prepend-conflict caveat as pick 1: #52/#54/#55 all add entries at the top of this
+  file; keep all, newest on top.
+- **Next candidate:** Wave 1 pick 3 per triage: #36 PinModal (`3c61d5b`, new
+  `PinModal.svelte`, pairs with #19's backend) or #37 archdoc (`e1d2b17` — but re-check
+  ARCHITECTURE.md claims against post-#48 main before shipping). The #35 audio modal needs
+  the #15 backend picked together — bigger bite, save for its own iteration.
+
+## 2026-07-30 11:55 — Wave 1 pick 1: `omnideck doctor` cherry-picked onto post-rewrite main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 (Andrew approved the triage 2026-07-30) — start
+  draining the stranded drafts with the zero-overlap picks; release-prep QoL (one-command
+  support bundle for public issues).
+- **Branch / PR:** `pick/doctor` — https://github.com/atiner117/omnideck/pull/54
+- **Changed:** clean cherry-pick of `fc0a7b3` from draft #33 onto main `c6ab9ef`:
+  `src-tauri/src/cli.rs` +92, new `Doctor` subcommand. Zero conflicts, as the triage predicted;
+  all 9 internal APIs the pick calls were re-checked against post-rewrite main — none drifted
+  (`gpu::DisplayMode` is still the `(w, h, hz)` tuple alias).
+- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · bun run test (13 pass) ·
+  cargo clippy --release -D warnings (pass) · cargo test --release (44 pass, 1 ignored) · live
+  smoke `cargo run --release -- doctor` (real bundle: v0.2.0, GamescopeSession tier, 14 tiles,
+  44 games, mpv+VapourSynth found, no secret values printed). Caution for future iterations:
+  the first cargo-test attempt SIGABRT'd compiling deps under parallel-build memory pressure
+  and a `| tail` pipe masked the failure as "OK" — always check cargo's own exit status, not
+  the pipe's.
+- **Outcome:** shipped to draft PR #54 (supersedes #33 — close #33 when #54 lands). Note: this
+  entry and PR #52's triage entries will both sit at the top of this file — expect a trivial
+  prepend conflict when the second one merges; keep both, newest on top.
+- **Next candidate:** Wave 1 pick 2: #34 `omnideck logs` (`802aff6`, cli.rs + logging.rs) —
+  triage says it picks cleanly before/after doctor; cli.rs now differs from #34's base, so
+  expect a trivial context-line conflict at worst.
+
 ## 2026-07-13 07:15 — Phone-as-remote: authed LAN HTTP remote (parking lot)
 - **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 parking lot (phone-as-remote); VISION
   couch-first control — the phone already in your hand becomes a second remote.
