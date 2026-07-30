@@ -36,6 +36,156 @@ enum CliCommand {
         /// Path to the source image
         path: String,
     },
+    /// Show the rotating log files and tail the newest one (session crashes land here —
+    /// stderr is buried in the display manager's log)
+    Logs {
+        /// How many lines from the end of the newest log to print
+        #[arg(short = 'n', long, default_value_t = 50)]
+        lines: usize,
+        /// Print only the newest log file's path (for `tail -f $(omnideck logs --path)`)
+        #[arg(long)]
+        path: bool,
+    },
+    /// One-shot support bundle: version, session, GPU/capability, config health,
+    /// library/playback/controller status — paste this into a bug report
+    Doctor,
+}
+
+/// The `omnideck.<date>.log` files in the state dir, oldest → newest. The date-stamped
+/// names sort chronologically, so a plain name sort is a time sort.
+fn log_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut logs: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("omnideck.") && n.ends_with(".log"))
+        })
+        .collect();
+    logs.sort();
+    logs
+}
+
+fn logs(lines: usize, path_only: bool) {
+    let Some(dir) = crate::logging::state_dir() else {
+        println!("logs: no state dir ($XDG_STATE_HOME and $HOME both unset)");
+        return;
+    };
+    let files = log_files(&dir);
+    let Some(newest) = files.last() else {
+        println!("logs: no log files in {} (has OmniDeck run on this account?)", dir.display());
+        return;
+    };
+    if path_only {
+        println!("{}", newest.display());
+        return;
+    }
+    println!("log dir: {}", dir.display());
+    for f in &files {
+        let size = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+        println!("  {:>7} KiB  {}", size / 1024, f.display());
+    }
+    match std::fs::read_to_string(newest) {
+        Ok(text) => {
+            let all: Vec<&str> = text.lines().collect();
+            let start = all.len().saturating_sub(lines);
+            println!("\n--- last {} of {} line(s): {} ---", all.len() - start, all.len(), newest.display());
+            for l in &all[start..] {
+                println!("{l}");
+            }
+        }
+        Err(e) => println!("logs: couldn't read {}: {e}", newest.display()),
+    }
+}
+
+/// The `doctor` support bundle. Offline on purpose (no update check, no media-server
+/// round-trips — `omnideck mediasrv` covers those): a bug reporter shouldn't need working
+/// networking to produce the bundle. Secrets never print — the config section reports
+/// key/token PRESENCE, not values.
+fn doctor() {
+    println!("OmniDeck doctor — v{}", env!("CARGO_PKG_VERSION"));
+    println!();
+
+    // Session: the single biggest behavior fork in the app (fullscreen, hotkeys, navpad).
+    println!("[session]");
+    println!("  gamescope session: {}", crate::session::in_session());
+    println!("  DISPLAY:           {}", std::env::var("DISPLAY").unwrap_or_else(|_| "(unset)".into()));
+    println!("  XDG_SESSION_TYPE:  {}", std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "(unset)".into()));
+    match crate::gpu::session_display_mode() {
+        Some((w, h, hz)) => println!("  display mode:      {w}x{h} @ {hz:.1} Hz"),
+        None => println!("  display mode:      unknown (RandR probe only works in-session)"),
+    }
+    println!();
+
+    println!("[capability]");
+    print!("{}", crate::capability::report(&crate::capability::probe()));
+    println!();
+
+    // Config health: path + parse state + a few load-bearing facts. Presence-only for
+    // credentials — a doctor bundle gets pasted into public issues.
+    let cfg = crate::config::load_or_create();
+    println!("[config]");
+    println!("  path:         {}", cfg.config_path);
+    match &cfg.config_error {
+        Some(e) => println!("  state:        BROKEN — {e}"),
+        None => println!("  state:        ok"),
+    }
+    println!("  apps:         {} tile(s)", cfg.apps.len());
+    println!("  favorites:    {}", cfg.favorites.len());
+    println!("  steamgriddb:  {}", if cfg.settings.steamgriddb_key.is_empty() { "no key" } else { "key set" });
+    println!(
+        "  media server: {}",
+        if crate::media_server::server().is_some() {
+            "configured (config or adopted shim pairing)"
+        } else {
+            "not configured"
+        }
+    );
+    println!();
+
+    println!("[library]");
+    println!("  steam games: {}", crate::library::scan().games.len());
+    println!();
+
+    // Playback stack: mpv presence decides direct-play; VapourSynth decides interpolation.
+    println!("[playback]");
+    println!(
+        "  mpv:                 {}",
+        if crate::apps::has_bin("mpv") { "found" } else { "MISSING — media tiles fall back to jellyfinmediaplayer" }
+    );
+    println!(
+        "  jellyfinmediaplayer: {}",
+        if crate::apps::has_bin("jellyfinmediaplayer") { "found" } else { "not installed" }
+    );
+    println!(
+        "  mpv VapourSynth:     {}",
+        if crate::media_profiles::vapoursynth_available() {
+            "yes (auto-profiles eligible)"
+        } else {
+            "no (bare launch; install a VapourSynth-enabled mpv for interpolation)"
+        }
+    );
+    println!();
+
+    // Controllers, through the same gilrs path the app uses (evdev, no window needed).
+    println!("[controllers]");
+    match gilrs::Gilrs::new() {
+        Ok(g) => {
+            let pads: Vec<String> = g.gamepads().map(|(_, p)| p.name().to_string()).collect();
+            if pads.is_empty() {
+                println!("  none detected (check /dev/input permissions — user in `input` group?)");
+            } else {
+                for p in &pads {
+                    println!("  · {p}");
+                }
+            }
+        }
+        Err(e) => println!("  gilrs init FAILED: {e}"),
+    }
+    println!();
+    println!("(network probes are separate on purpose: `omnideck mediasrv` tests the media server)");
 }
 
 /// Parse argv and run a headless subcommand if one was given. Returns true when a subcommand
@@ -96,6 +246,8 @@ pub fn handle() -> bool {
                 None => println!("bgprep FAILED for {path} (unreadable or undecodable)"),
             }
         }
+        CliCommand::Logs { lines, path } => logs(lines, path),
+        CliCommand::Doctor => doctor(),
         CliCommand::Mediasrv => {
             let Some(srv) = crate::media_server::server() else {
                 println!("no media server configured (config [media_server] or shim pairing)");
