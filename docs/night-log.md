@@ -20,6 +20,29 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-07-30 13:13 — Wave 1 pick 4: ARCHITECTURE.md cherry-picked + claims re-verified
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — the flagged-careful pick ("re-check
+  ARCHITECTURE.md claims post-#48"); deep-review #26's public half — the repo finally
+  ships a committed architecture doc.
+- **Branch / PR:** `pick/archdoc` — https://github.com/atiner117/omnideck/pull/57
+- **Changed:** cherry-pick of `e1d2b17` from draft #37 onto main `c6ab9ef`
+  (docs/ARCHITECTURE.md new +126, CONTRIBUTING.md link — auto-merged cleanly with
+  `bed913c`'s refresh, read post-merge) + follow-up commit `617e4f5` fixing the two claims
+  that drifted: launch section now covers proc.rs (P0 bounded shell-outs, deadline+kill),
+  testing section now covers vitest (nav/osk/launchId). Verified-unchanged claims were
+  spot-checked in code, not assumed: _NET_WM_PID grouping, argv-only spawns,
+  guide tap/hold in-thread, event-driven MPRIS, max_log_files(7), backend.ts sole
+  invoke() caller (npActions.ts routes through it).
+- **Verify:** docs-only diff (CONTRIBUTING +4, ARCHITECTURE +127, no code) — gates run
+  anyway: bun run check (pass, 0 errors) · bun run build (pass) · bun run test (pass) ·
+  cargo clippy --release -D warnings (pass) · cargo test --release (pass).
+- **Outcome:** shipped to draft PR #57 (supersedes #37 — close #37 when #57 lands).
+  Wave 1 solos now ALL in flight: #54 doctor, #55 logs, #56 pinui, #57 archdoc.
+- **Next candidate:** Wave 1's remaining items are the paired picks — #15 audio backend +
+  #35 AudioOutputModal as one iteration (triage: modal is dead UI without the backend),
+  then #18 idle backend + #29 screensaver overlay. After those, Wave 2 / the sequenced
+  +page.svelte wave.
+
 ## 2026-07-30 12:58 — Wave 1 pick 3: PinModal component cherry-picked onto post-rewrite main
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — third zero-overlap pick; roadmap #2
   (parental controls), frontend half. Standalone by design: no bindings dependency, ships

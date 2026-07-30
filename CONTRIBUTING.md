@@ -15,6 +15,10 @@ Requirements: `webkit2gtk-4.1`, Rust 1.80+, Node 20+ or Bun. On Arch:
 
 ## Project layout
 
+The 10,000-foot map — how the pieces fit, the IPC/bindings contract, the input paths, the
+session-vs-desktop fork — lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The short
+version:
+
 ```
 src/routes/+page.svelte   # the UI (grid, nav, prefs, add-apps) — Svelte 5 runes
 src/lib/                  # UI components + helpers (backend.ts = typed IPC, nav.ts, …)
