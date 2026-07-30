@@ -20,6 +20,29 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-07-30 13:25 — Wave 1 pick 5: audio backend + AudioOutputModal (first paired pick)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1, roadmap #3 (audio output switching) — the
+  triage's "dead UI without the backend" pair lands as one reviewable unit.
+- **Branch / PR:** `pick/audio` — https://github.com/atiner117/omnideck/pull/58
+- **Changed:** three picks onto main `c6ab9ef`: `5690127` (new audio.rs — pactl sink
+  enumeration, JSON + short fallback, audio_outputs/audio_set_output commands), `ef8e27f`
+  (3s deadline-kill on every pactl call, spawn_blocking off the IPC thread), `eec94cb`
+  (new AudioOutputModal.svelte, standalone, local AudioSink TS type). ONE conflict:
+  lib.rs invoke_handler tail (main's deck_cancel vs audio's two commands) — kept all three.
+  Deliberate: audio.rs keeps its own run_with_timeout instead of proc.rs's
+  output_with_timeout (proc.rs nulls stderr; audio needs it for error messages) —
+  flagged in the PR as a candidate proc.rs follow-up, not silently unified.
+- **Verify:** bun run check (pass, 342 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (51 pass — 7 new audio:: tests incl. injection-id rejection + real timeout-kill —
+  1 ignored) · host sanity: pactl get-default-sink answers (PipeWire). In-session sink
+  switch still needs the couch box.
+- **Outcome:** shipped to draft PR #58 (supersedes #15 AND #35 — close both when it
+  lands). Wave 1: 5 of 6 done (#54 #55 #56 #57 #58).
+- **Next candidate:** the last Wave 1 pair: #18 screensaver idle backend + #29 overlay
+  component on one pick/saver branch. #29 touches +layout.svelte per the triage —
+  expect the first frontend-file conflict potential; check what #48/fa6fe2c did there.
+
 ## 2026-07-30 13:13 — Wave 1 pick 4: ARCHITECTURE.md cherry-picked + claims re-verified
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — the flagged-careful pick ("re-check
   ARCHITECTURE.md claims post-#48"); deep-review #26's public half — the repo finally
