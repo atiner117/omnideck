@@ -20,6 +20,27 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-07-30 12:58 — Wave 1 pick 3: PinModal component cherry-picked onto post-rewrite main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — third zero-overlap pick; roadmap #2
+  (parental controls), frontend half. Standalone by design: no bindings dependency, ships
+  independent of #19's PIN backend.
+- **Branch / PR:** `pick/pinui` — https://github.com/atiner117/omnideck/pull/56
+- **Changed:** clean cherry-pick of `3c61d5b` from draft #36 onto main `c6ab9ef`: one new
+  file `src/lib/PinModal.svelte` (+150). Purely presentational (CatalogModal/Wizard
+  pattern), exports PIN_ROWS/PIN_FLAT/PIN_COLS/PIN_MAX for the page router; only import is
+  the existing `Modal.svelte`. Not mounted anywhere until the +page wave — by design.
+- **Verify:** bun run check (pass, 342 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (44 pass, 1 ignored; exit status checked directly). No visual smoke possible solo (not
+  mounted); svelte-check/build compile the component.
+- **Outcome:** shipped to draft PR #56 (supersedes #36 — close #36 when #56 lands). Wave 1
+  now 3 drafts in flight: #54 doctor, #55 logs, #56 pinui — all independent, any merge order.
+  Same night-log prepend-conflict caveat as picks 1–2.
+- **Next candidate:** per triage, the remaining Wave 1 solos: #37 archdoc (`e1d2b17` — but
+  re-check ARCHITECTURE.md claims against post-#48 main first, CONTRIBUTING.md may conflict
+  with `bed913c`) or the paired picks (#15 audio backend + #35 modal as one iteration;
+  #18 idle backend + #29 saver overlay as another).
+
 ## 2026-07-30 12:51 — Wave 1 pick 2: `omnideck logs` cherry-picked onto post-rewrite main
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 — second zero-overlap pick; completes the
   support story next to `doctor` (#54): session crashes land in the rotating file, `logs`
