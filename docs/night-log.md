@@ -20,6 +20,29 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-01 18:31 — Wave 2 pick 2: [launch_overrides] per-tile env + args
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2; roadmap parking-lot "per-game launch
+  options", scoped to the launch_command spawn path (Steam titles keep Steam's own
+  Launch Options — documented). Context: #61 (PIN backend) merged + #19 closed this
+  session, at Andrew's direction, after all four CI checks went green.
+- **Branch / PR:** `pick/overrides` — https://github.com/atiner117/omnideck/pull/62
+- **Changed:** one pick, `6d63db2` from draft #31, onto main `d3b1fb9`:
+  [launch_overrides."<tile-id>"] table (env map + extra args), applied in
+  launch_command BEFORE the BROWSER token so browser tiles keep the URL-only argv
+  guard; normalize() drops env entries Command::env can't represent (empty/=/NUL
+  keys, NUL values). Hand-editable only; empty map serializes to nothing. THREE
+  config.rs conflicts (defaults list, normalize block, tests module vs #59+#61
+  additions) — all both-appended, kept everything. Bindings regenerated: 18 export
+  tests (new LaunchOverride.ts), zero drift.
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) ·
+  bun run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (63 pass — incl. NUL/'=' injection-shape drops — 1 ignored) · omnideck
+  config smoke (pass). No new deps.
+- **Outcome:** shipped to draft PR #62 (supersedes #31 — close #31 when #62 lands).
+- **Next candidate:** #14 argv PATH-resolve (small) or #21 backup (needs the same
+  "adapt to 981a977" treatment as the PIN pick — reuse write_atomic, don't duplicate).
+  The +page wave (#17 first) is the bigger prize once the small picks drain.
+
 ## 2026-08-01 18:23 — Wave 2 pick 1: PIN backend (argon2) cherry-picked onto post-Wave-1 main
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2; roadmap #2 backend half — pairs with the
   already-landed PinModal (#56). Context: Wave 1 (#54–#59) was merged 2026-07-30 at
