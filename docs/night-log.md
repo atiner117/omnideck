@@ -20,6 +20,24 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-01 18:40 — Wave 2 pick 3: launcher spawn-error mapping (argv lane)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, #6 backend (launcher robustness).
+  Context: #62 merged + #31 closed this session at Andrew's direction.
+- **Branch / PR:** `pick/argv` — https://github.com/atiner117/omnideck/pull/63
+- **Changed:** both picks from draft #14 onto main `914ac9e`: `88d8ce7` (PATH-resolve
+  pre-flight) then `3411922` (the refinement that REMOVES the pre-flight for a
+  spawn_error() helper mapping raw OS errors to actionable messages at the spawn site
+  — race-free, net −71/+33). ONE conflict: the spawn() line vs #62's override-env
+  block — kept the override block, applied spawn_error on the same spawn.
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (64 pass — new spawn_errors_map_to_clear_messages — 1 ignored).
+  Rust-only, no bindings, no new deps.
+- **Outcome:** shipped to draft PR #63 (supersedes #14 — close #14 when #63 lands).
+- **Next candidate:** #21 backup (adapt to 981a977: reuse write_atomic) or #27
+  [input] config (gamepad.rs was P0-hardened — re-read the merge per triage). After
+  the small picks: the +page wave, #17 SettingDef first.
+
 ## 2026-08-01 18:31 — Wave 2 pick 2: [launch_overrides] per-tile env + args
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2; roadmap parking-lot "per-game launch
   options", scoped to the launch_command spawn path (Steam titles keep Steam's own
