@@ -105,7 +105,7 @@ pub fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, i
     std::process::Command::new("steam")
         .arg(format!("steam://rungameid/{appid}"))
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| spawn_error("steam", &e))?;
     let label = name.unwrap_or_else(|| format!("game {appid}"));
     let _ = app.emit("app-launched", label.clone());
     watchdog::watch_steam_game(app, appid, label, id);
@@ -326,6 +326,21 @@ pub async fn deck_close(group: u32) -> Result<(), String> {
     if ok { Ok(()) } else { Err("could not close that app".into()) }
 }
 
+/// Map a spawn failure to a message the UI can toast. Custom-launcher input arrives as a
+/// raw argv vector, so a typo'd binary otherwise surfaces as an opaque "No such file or
+/// directory". Mapping the error at the spawn (instead of pre-flighting PATH ourselves)
+/// can never disagree with execvp's real resolution — permission bits, ACLs, and the
+/// unset-PATH default search all stay the kernel's/libc's call.
+fn spawn_error(cmd: &str, e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            format!("command not found: {cmd} (not an executable on PATH)")
+        }
+        std::io::ErrorKind::PermissionDenied => format!("cannot run {cmd}: permission denied"),
+        _ => format!("failed to launch {cmd}: {e}"),
+    }
+}
+
 /// True if `arg` is safe to pass to a browser after the BROWSER token: an http(s) URL, or
 /// our `--app=<http(s) URL>` PWA form. Rejects flags so a crafted `search_provider` or a
 /// hand-edited config can't inject e.g. Chromium's `--renderer-cmd-prefix` (arbitrary exec).
@@ -421,7 +436,7 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
             command.env(k, v);
         }
     }
-    let child = command.spawn().map_err(|e| e.to_string())?;
+    let child = command.spawn().map_err(|e| spawn_error(cmd, &e))?;
     watchdog::watch_child(app, child, name.unwrap_or_else(|| cmd.clone()), id);
     Ok(())
 }
@@ -453,7 +468,7 @@ pub fn game_properties(appid: String) -> Result<(), String> {
         .arg(format!("steam://gameproperties/{appid}"))
         .spawn()
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| spawn_error("steam", &e))
 }
 
 /// Current media snapshot from the MPRIS watcher's state (no I/O). The frontend calls this
@@ -522,7 +537,29 @@ pub async fn app_icon(url: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_browser_arg;
+    use super::{is_safe_browser_arg, spawn_error};
+
+    #[test]
+    fn spawn_errors_map_to_clear_messages() {
+        // Drive real spawns so the io::Error kinds are the ones execvp actually produces.
+        let cmd = "omnideck-test-no-such-binary";
+        let e = std::process::Command::new(cmd).spawn().unwrap_err();
+        assert_eq!(
+            spawn_error(cmd, &e),
+            format!("command not found: {cmd} (not an executable on PATH)")
+        );
+
+        // A file that exists but isn't executable -> permission denied, not "not found".
+        let plain = std::env::temp_dir()
+            .join(format!("omnideck-test-notexec-{}", std::process::id()));
+        std::fs::write(&plain, "data").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let cmd = plain.to_string_lossy();
+        let e = std::process::Command::new(plain.as_os_str()).spawn().unwrap_err();
+        assert_eq!(spawn_error(&cmd, &e), format!("cannot run {cmd}: permission denied"));
+        let _ = std::fs::remove_file(&plain);
+    }
 
     #[test]
     fn rejects_unsafe_browser_args() {
