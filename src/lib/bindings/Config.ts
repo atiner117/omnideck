@@ -32,4 +32,10 @@ config_path?: string,
  * Set when config.toml exists but couldn't be parsed/read, so the UI can warn the user
  * ("syntax error — using defaults") instead of silently reverting. Never written to disk.
  */
-config_error?: string | null, };
+config_error?: string | null, 
+/**
+ * Whether a parental PIN is set. IPC-only (set by `get_config`, never written to disk):
+ * the webview needs presence, not the hash — `settings.pin_hash` is masked over IPC
+ * like `media_server.token`, since a 4–6 digit PIN is offline-crackable from its hash.
+ */
+has_pin?: boolean | null, };
