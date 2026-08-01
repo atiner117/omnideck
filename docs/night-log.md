@@ -20,6 +20,30 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-01 18:23 — Wave 2 pick 1: PIN backend (argon2) cherry-picked onto post-Wave-1 main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2; roadmap #2 backend half — pairs with the
+  already-landed PinModal (#56). Context: Wave 1 (#54–#59) was merged 2026-07-30 at
+  Andrew's direction and the triage close-list executed (16 drafts closed, 41→25 open).
+- **Branch / PR:** `pick/pin` — https://github.com/atiner117/omnideck/pull/61
+- **Changed:** two picks from draft #19 onto main `705d96b`: `ea5def6` (new pin.rs —
+  argon2id PHC hashes, fresh salt, set_pin/verify_pin on the blocking pool; threat model
+  = deterrence, documented) + `b429c0c` (locked_categories writes PIN-gated via
+  set_locked_categories; pin_hash masked over IPC behind has_pin, cleared pre-save).
+  Conflicts: lib.rs appended-tail (kept all) + config.rs save path — kept
+  `has_pin = None`, DROPPED the pick's create_dir_all as redundant with main's
+  write_atomic (the triage's "adapt to 981a977" note, applied). New dep: argon2.
+  Bindings regenerated, 17 export tests, zero drift.
+- **Verify:** bun run check (pass, 346 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (60 pass — 6 new pin:: tests — 1 ignored) · cargo audit (pass) · cargo deny NOT
+  runnable locally (not installed) — CI's cargo-deny job is the gate for the new dep.
+- **Outcome:** shipped to draft PR #61 (supersedes #19 — close #19 when #61 lands).
+  Also this session: #52 (triage doc, status updated) and #53 (loop inventory guard)
+  merged at Andrew's direction.
+- **Next candidate:** Wave 2 small picks: #31 [launch_overrides] (`6d63db2`, serde adds)
+  or #14 argv PATH-resolve — both small. #21 backup needs the same "adapt to 981a977"
+  treatment as this pick. Then the +page wave, #17 SettingDef first.
+
 ## 2026-07-30 18:56 — Wave 1 pick 6 (FINAL): screensaver pair — idle backend + OLED overlay
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 complete; roadmap #1 (OLED screensaver) —
   the "useless without #18's idle events" pair lands as one unit.
