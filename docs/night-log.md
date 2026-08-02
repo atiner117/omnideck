@@ -20,6 +20,30 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 12:48 — Lane pick 1: fable-media — re-resolve, mpv token header, config_version
+- **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; media-server track reliability.
+  Context: #69 merged + #47 closed this session at Andrew's direction — Wave 2 fully
+  landed.
+- **Branch / PR:** `pick/media` — https://github.com/atiner117/omnideck/pull/70
+- **Changed:** all three #10 commits onto main `2f9aa52` + one fix. Hunk-check first:
+  API-header auth already on main (7cdd45f) but the mpv-stream api_key param wasn't;
+  server() still OnceLock; config_version zero hits — all three live. `158cfc2`
+  (RwLock re-resolve cache, Arc<JellyfinServer>, invalidate() after config saves;
+  KEPT 7cdd45f's valid_id; EXTENDED: restore_from invalidates too — #64 postdates the
+  pick), `ba5b856` (mpv stream auth via X-Emby-Token header — token out of URL-shaped
+  surfaces), `f7ef503` (CONFIG_VERSION=1, serialized first, migration hook). Fix: the
+  manual Config Default predated Waves 1-2 — completed with the accumulated fields
+  (caught by the export suite at compile).
+- **Verify:** bun run check (pass, 353 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — 1 ignored) · **live mediasrv smoke against the real Jellyfin**:
+  12 resume + 16 latest browsed through the new RwLock path · 23 export tests,
+  bindings in sync. No new deps.
+- **Outcome:** shipped to draft PR #70 (supersedes #10 — close #10 when #70 lands).
+- **Next candidate:** #12 backend polish (#20 pooled X11 conn, #23 VapourSynth
+  re-probe — hunk-check both halves) or #13 frontend polish / #24 quotesplit (+page
+  edges — may belong with the +page wave). Then #17 SettingDef starts Wave 3 proper.
+
 ## 2026-08-02 12:36 — Wave 2 FINAL pick: phone-as-remote (authed LAN HTTP)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2 complete; VISION couch-first control —
   the phone becomes a second remote. Context: #68 merged + #45 closed this session at
