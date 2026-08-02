@@ -281,10 +281,13 @@ pub fn handle() -> bool {
                                     let p = tauri::async_runtime::block_on(srv.poster(&first.id));
                                     println!("poster({}) -> {:?}", first.name, p);
                                     // One byte of the direct stream proves the play path
-                                    // without printing the tokened URL or downloading a movie.
+                                    // without downloading a movie. stream_url() carries no
+                                    // credential — auth is the X-Emby-Token header, same as
+                                    // the mpv launch path (commands::media_play).
                                     let status = tauri::async_runtime::block_on(async {
                                         crate::http::client()
                                             .get(srv.stream_url(&first.id))
+                                            .header("X-Emby-Token", srv.token())
                                             .header("Range", "bytes=0-0")
                                             .send()
                                             .await

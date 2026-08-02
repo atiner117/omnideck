@@ -11,14 +11,16 @@
 //      user already paired the shim, OmniDeck adopts the same server + token, zero setup.
 //
 // Secrets: the token lives in config.toml (same plaintext, single-user posture as
-// steamgriddb_key), is sent as an `X-Emby-Token` header (not in URLs) for API calls, and is
-// NEVER logged or echoed to the webview (get_config blanks it; posters go through the
-// rooted omnideck:// protocol so the frontend never sees an authenticated URL). The one
-// exception is the mpv stream URL (api_key query param) — visible in the local process
-// list, accepted for v1 like the rest of the single-user threat model.
+// steamgriddb_key), is sent as an `X-Emby-Token` header (not in URLs) for API calls — the
+// mpv stream included, via `--http-header-fields` — and is NEVER logged or echoed to the
+// webview (get_config blanks it; posters go through the rooted omnideck:// protocol so the
+// frontend never sees an authenticated URL). Keeping the token out of the URL keeps it out
+// of URL-shaped surfaces (mpv's log/OSD/IPC, watch-later state, HTTP access logs); the mpv
+// argv itself is still visible in the local process list, accepted for v1 like the rest of
+// the single-user threat model.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -129,23 +131,42 @@ pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// The resolved server for this run (config first, then shim pairing), or None.
-pub fn server() -> Option<&'static JellyfinServer> {
-    static SERVER: OnceLock<Option<JellyfinServer>> = OnceLock::new();
-    SERVER
-        .get_or_init(|| {
-            let ms = crate::config::load_or_create().media_server;
-            if ms.kind == "jellyfin" && !ms.url.is_empty() && !ms.token.is_empty() {
-                return Some(JellyfinServer {
-                    base: ms.url.trim_end_matches('/').to_string(),
-                    token: ms.token,
-                    user_id: OnceLock::new(),
-                    preknown_user: None,
-                });
-            }
-            shim_pairing()
-        })
-        .as_ref()
+/// Cached resolution: outer `None` = "not resolved yet / invalidated", inner `None` =
+/// "resolved to unconfigured". A `RwLock` (not `OnceLock`) so `invalidate()` can drop the
+/// cache when config.toml is saved — the frontend probes `media_available` at mount, and a
+/// `OnceLock` would pin that first `None` until restart even after the user configures
+/// Jellyfin in the UI.
+static SERVER: RwLock<Option<Option<Arc<JellyfinServer>>>> = RwLock::new(None);
+
+/// The currently-resolved server (config first, then shim pairing), or None. Re-resolves
+/// lazily after `invalidate()`.
+pub fn server() -> Option<Arc<JellyfinServer>> {
+    if let Some(cached) = SERVER.read().unwrap().clone() {
+        return cached;
+    }
+    // Resolve outside the lock (config + shim file I/O); a racing thread may resolve too —
+    // get_or_insert keeps whichever landed first, both read the same config.
+    let resolved = resolve();
+    SERVER.write().unwrap().get_or_insert(resolved).clone()
+}
+
+/// Drop the cached resolution so the next `server()` call re-reads config.toml / the shim
+/// pairing. Called after every config save (config::mutate_and_save).
+pub fn invalidate() {
+    *SERVER.write().unwrap() = None;
+}
+
+fn resolve() -> Option<Arc<JellyfinServer>> {
+    let ms = crate::config::load_or_create().media_server;
+    if ms.kind == "jellyfin" && !ms.url.is_empty() && !ms.token.is_empty() {
+        return Some(Arc::new(JellyfinServer {
+            base: ms.url.trim_end_matches('/').to_string(),
+            token: ms.token,
+            user_id: OnceLock::new(),
+            preknown_user: None,
+        }));
+    }
+    shim_pairing().map(Arc::new)
 }
 
 /// Adopt jellyfin-mpv-shim's pairing (address + user AccessToken + UserId). The file is a
@@ -292,9 +313,18 @@ impl JellyfinServer {
     }
 
     /// Direct-play URL for mpv. `static=true` asks the server for the untranscoded file —
-    /// the whole point: mpv + hwdec does the 4K work, not a server transcode.
+    /// the whole point: mpv + hwdec does the 4K work, not a server transcode. Carries NO
+    /// credential: callers must authenticate with the `X-Emby-Token` header (see `token()`),
+    /// which keeps the token out of URL-shaped surfaces (module comment).
     pub fn stream_url(&self, id: &str) -> String {
-        format!("{}/Videos/{id}/stream?static=true&api_key={}", self.base, self.token)
+        format!("{}/Videos/{id}/stream?static=true", self.base)
+    }
+
+    /// The raw token, for callers that hand `stream_url()` to an external player and must
+    /// pass the `X-Emby-Token` auth alongside it (mpv `--http-header-fields`, the CLI's
+    /// debug probe). Don't log it, don't put it in a URL.
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     /// Fetch + disk-cache the primary poster; returns the cached path for omnideck://.
