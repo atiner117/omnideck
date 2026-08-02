@@ -20,6 +20,28 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-01 21:02 — Wave 2 pick 6: [input] config — hold threshold + hotkey kill-switch
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #6 (input tuning). Hunk-checked
+  FIRST per the #23 lesson: InputConfig/guide_hold_ms/session_hotkeys have zero hits on
+  main, the 800ms hold is still a const, 1c2b31e's gamepad work was navpad-gating in a
+  different region — genuinely live, unlike #23. Context: #65 merged this session.
+- **Branch / PR:** `pick/input` — https://github.com/atiner117/omnideck/pull/66
+- **Changed:** pick `9e202e5` from draft #27 onto main `dac31db` + bindings-regen commit.
+  [input] table (guide_hold_ms clamped 200–5000; session_hotkeys kill-switch for the
+  Ctrl+Alt grabs); gamepad.rs reads the threshold at thread start, hotkey.rs gates its
+  grabs; read-once-at-startup documented. FIVE config.rs conflict regions (the
+  accumulated both-appended shape vs screensaver/overrides/PIN/backup) — all merged.
+  The pick's Config.ts was stale (pre-Wave-1/2 generation) — regenerated, 19 export
+  tests, new InputConfig.ts.
+- **Verify:** bun run check (pass, 348 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (70 pass — new clamp test — 1 ignored) · omnideck config smoke (pass).
+  No new deps. needs-hardware: hold-feel at custom thresholds + kill-switch in-session.
+- **Outcome:** shipped to draft PR #66 (supersedes #27 — close #27 when #66 lands).
+- **Next candidate:** #25 update-check (update.rs new — hunk-check the config.rs/
+  LiveApp.ts edges first) or #45 sleeptimer (verify no hidden dep on #38's integration
+  content per triage). Then #47 remote, lanes #10 #12 #13 #24, the +page wave (#17).
+
 ## 2026-08-01 20:55 — Wave 2 pick 5 NOT PICKED: #23 verified fully superseded, closed
 - **Vision tie:** PR-TRIAGE-2026-07-26 follow-through — the triage's own "verify first"
   discipline applied to its Wave 2 #23 row, which turned out to be wrong.
