@@ -29,6 +29,14 @@ pub fn spawn_if_session(app: tauri::AppHandle) {
     if !in_gamescope && std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_none() {
         return;
     }
+    // Config kill-switch (`[input] session_hotkeys = false`): some keyboards/remotes send
+    // chords that collide with the grab, and a grab we own means the app underneath never
+    // sees the keys. Opt-out beats fighting it. Wins over OMNIDECK_FORCE_HOTKEY too — an
+    // explicit config "no" is stronger than a dev/test env knob.
+    if !crate::config::load_or_create().input.session_hotkeys {
+        tracing::info!("hotkey: disabled by [input] session_hotkeys = false — no global grabs");
+        return;
+    }
     std::thread::spawn(move || {
         if let Err(e) = run(app) {
             tracing::error!("hotkey: {e} — Ctrl+Alt+Home/End unavailable");

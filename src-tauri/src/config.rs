@@ -204,6 +204,34 @@ impl LaunchOverride {
     }
 }
 
+/// `[input]` — controller/hotkey tuning (parking-lot item, NOTES-DEEPDIVE-ROADMAP.md #6).
+/// Read once at startup by the gamepad and hotkey threads — changes need a relaunch (both
+/// threads park in blocking waits; re-reading per event would be config I/O at 125 Hz).
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct InputConfig {
+    /// Guide-button long-hold threshold in ms: hold this long to close the current app
+    /// (short press switches). Clamped 200–5000 — below 200 every tap "closes", above 5000
+    /// the hold reads as broken.
+    pub guide_hold_ms: u64,
+    /// Grab Ctrl+Alt+Home/End inside the gamescope session (keyboard escape hatch —
+    /// hotkey.rs). False = no global grabs, for users whose media keyboard needs the chord.
+    pub session_hotkeys: bool,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self { guide_hold_ms: 800, session_hotkeys: true }
+    }
+}
+
+impl InputConfig {
+    fn normalize(&mut self) {
+        self.guide_hold_ms = self.guide_hold_ms.clamp(200, 5000);
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
@@ -213,6 +241,9 @@ pub struct Config {
     /// generated default config (empty map serializes to nothing) — purely opt-in.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub launch_overrides: std::collections::BTreeMap<String, LaunchOverride>,
+    /// `[input]` — guide-button hold threshold + session hotkey toggle.
+    #[serde(default)]
+    pub input: InputConfig,
     /// `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
     #[serde(default)]
@@ -266,6 +297,7 @@ fn defaults() -> Config {
         media_server: Default::default(),
         screensaver: Default::default(),
         launch_overrides: Default::default(),
+        input: Default::default(),
         apps: apps::list(),
         favorites: Vec::new(),
         recent_apps: Vec::new(),
@@ -315,6 +347,7 @@ pub fn load_or_create() -> Config {
         for ov in cfg.launch_overrides.values_mut() {
             ov.normalize();
         }
+        cfg.input.normalize();
         cfg.config_path = path_str;
         return cfg;
     }
@@ -549,7 +582,7 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_backup, sanitize_for_backup, write_atomic, Config, LaunchOverride, ScreensaverConfig, Settings};
+    use super::{parse_backup, sanitize_for_backup, write_atomic, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings};
 
     #[test]
     fn write_atomic_creates_overwrites_and_leaves_no_temp() {
@@ -665,6 +698,22 @@ grid_columns = 0
         };
         assert!(err.starts_with("not a valid OmniDeck backup:"), "{err}");
         assert_eq!(err.lines().count(), 1, "error should be toast-sized: {err}");
+    }
+
+    #[test]
+    fn input_config_clamps_hold_threshold() {
+        let mut i = InputConfig { guide_hold_ms: 50, ..Default::default() };
+        i.normalize();
+        assert_eq!(i.guide_hold_ms, 200); // a tap must never read as a "close" hold
+
+        let mut i = InputConfig { guide_hold_ms: 60_000, ..Default::default() };
+        i.normalize();
+        assert_eq!(i.guide_hold_ms, 5000);
+
+        let mut i = InputConfig::default();
+        i.normalize();
+        assert_eq!(i.guide_hold_ms, 800); // default untouched
+        assert!(i.session_hotkeys);
     }
 
     #[test]
