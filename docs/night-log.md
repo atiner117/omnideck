@@ -20,6 +20,28 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-01 20:42 — Wave 2 pick 4: config backup/restore, atomic + serialized
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #5 — the "adapt to 981a977"
+  pick done as flagged, not blind. Context: #63 merged + #14 closed this session at
+  Andrew's direction.
+- **Branch / PR:** `pick/backup` — https://github.com/atiner117/omnideck/pull/64
+- **Changed:** pick `569663a` from draft #21 onto main `99d36ff` (backup_config /
+  restore_config + backend.ts wrappers; sanitized snapshots, credentials stripped by
+  default, restore re-normalizes hostile input and works from the broken-config state)
+  + TWO adaptation commits: (a) restore takes SAVE_LOCK and both paths write through
+  write_atomic — no truncated config.toml/backup possible; (b) both commands moved to
+  the blocking pool (write_atomic fsyncs — the documented blocking() class). ONE
+  conflict: config.rs tests module (fourth pick in a row with that shape) — merged.
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (68 pass — 4 new backup tests incl. hostile-backup normalization —
+  1 ignored) · export suite ran, bindings zero drift. No new deps.
+- **Outcome:** shipped to draft PR #64 (supersedes #21 — close #21 when #64 lands).
+- **Next candidate:** #23 atomic (pick ONLY the fsutil/media_profiles half — config
+  half already done by 981a977 per triage) or #27 [input] (re-read the gamepad.rs
+  merge — P0-hardened). Then #25 update-check, #45 sleeptimer, #47 remote. The +page
+  wave (#17 SettingDef first) is the remaining big block.
+
 ## 2026-08-01 18:40 — Wave 2 pick 3: launcher spawn-error mapping (argv lane)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, #6 backend (launcher robustness).
   Context: #62 merged + #31 closed this session at Andrew's direction.
