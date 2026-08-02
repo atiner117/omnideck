@@ -299,11 +299,16 @@ impl Default for Config {
             config_version: CONFIG_VERSION,
             settings: Settings::default(),
             media_server: Default::default(),
+            screensaver: Default::default(),
+            remote: Default::default(),
+            launch_overrides: Default::default(),
+            input: Default::default(),
             apps: Vec::new(),
             favorites: Vec::new(),
             recent_apps: Vec::new(),
             config_path: String::new(),
             config_error: None,
+            has_pin: None,
         }
     }
 }
