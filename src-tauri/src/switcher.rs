@@ -280,25 +280,28 @@ pub fn deck_cancel() -> bool {
     if !session_ok() {
         return false;
     }
-    // Connect FIRST, like every sibling: failing after the snapshot was taken and the groups
-    // thawed would strand the windows unmapped with the restore state already destroyed.
-    let Ok((conn, _screen_num)) = x11rb::connect(None) else { return false };
-    let (wins, groups) = std::mem::take(&mut *crate::sync::lock_or_recover(
-        &LAST_HIDE,
-        "switcher.LAST_HIDE",
-    ));
-    if wins.is_empty() && groups.is_empty() {
-        return false;
-    }
-    // Resume before mapping, same as toggle: the windows must be able to repaint/take focus.
-    for g in &groups {
-        cont_group(*g);
-    }
-    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|g| !groups.contains(g));
-    let failed = set_mapped(&conn, &wins, true);
-    crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
-        .retain(|w| !wins.contains(w) || failed.contains(w));
-    true
+    // Connection established FIRST, like every sibling (with_x11 proves it before the
+    // closure runs): failing after the snapshot was taken and the groups thawed would
+    // strand the windows unmapped with the restore state already destroyed.
+    with_x11(|conn, _root| {
+        let (wins, groups) = std::mem::take(&mut *crate::sync::lock_or_recover(
+            &LAST_HIDE,
+            "switcher.LAST_HIDE",
+        ));
+        if wins.is_empty() && groups.is_empty() {
+            return false;
+        }
+        // Resume before mapping, same as toggle: the windows must be able to repaint/take focus.
+        for g in &groups {
+            cont_group(*g);
+        }
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|g| !groups.contains(g));
+        let failed = set_mapped(conn, &wins, true);
+        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
+            .retain(|w| !wins.contains(w) || failed.contains(w));
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Bring ONE launched app group to the front (the deck-switcher's "open this card"): map
