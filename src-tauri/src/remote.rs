@@ -176,19 +176,30 @@ fn volume_command(action: &str, value: Option<u8>) -> Result<(), String> {
         }
         _ => unreachable!(),
     };
-    match std::process::Command::new("wpctl").args(&wpctl).status() {
-        Ok(st) if st.success() => return Ok(()),
-        Ok(st) => return Err(format!("wpctl exited with {st}")),
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!("couldn't run wpctl: {e}"))
-        }
-        Err(_) => {} // no wpctl — try pactl below
+    // Bounded (proc.rs): wpctl/pactl talk to the local sound-server socket and normally
+    // answer in milliseconds; a wedged PipeWire must not hang the remote's request thread
+    // forever (the same P0 class audio.rs handles for sink switching). has_bin picks the
+    // tool so "not installed" still falls through instead of being eaten by the timeout.
+    const VOLUME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+    if crate::apps::has_bin("wpctl") {
+        let mut cmd = std::process::Command::new("wpctl");
+        cmd.args(&wpctl);
+        return match crate::proc::output_with_timeout(cmd, VOLUME_TIMEOUT) {
+            Some(out) if out.status.success() => Ok(()),
+            Some(out) => Err(format!("wpctl exited with {}", out.status)),
+            None => Err("wpctl did not respond (sound server not responding?)".into()),
+        };
     }
-    match std::process::Command::new("pactl").args(&pactl).status() {
-        Ok(st) if st.success() => Ok(()),
-        Ok(st) => Err(format!("pactl exited with {st}")),
-        Err(_) => Err("neither wpctl nor pactl is available for volume control".into()),
+    if crate::apps::has_bin("pactl") {
+        let mut cmd = std::process::Command::new("pactl");
+        cmd.args(&pactl);
+        return match crate::proc::output_with_timeout(cmd, VOLUME_TIMEOUT) {
+            Some(out) if out.status.success() => Ok(()),
+            Some(out) => Err(format!("pactl exited with {}", out.status)),
+            None => Err("pactl did not respond (sound server not responding?)".into()),
+        };
     }
+    Err("neither wpctl nor pactl is available for volume control".into())
 }
 
 // ---- HTTP plumbing ----
