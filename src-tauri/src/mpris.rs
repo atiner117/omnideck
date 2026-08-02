@@ -195,7 +195,9 @@ pub async fn control(action: &str) -> Result<(), String> {
 /// (Players with no MPRIS presence — e.g. mpv without an MPRIS plugin — are not reachable
 /// from here; that gap is documented, not papered over with a kill.)
 pub async fn pause_all() -> usize {
-    let Some(conn) = CONN.get() else { return 0 };
+    // current_conn() is None while the supervised watcher (9e7eb5b) is mid-reconnect —
+    // nothing to pause through in that window; the timer's best-effort contract covers it.
+    let Some(conn) = current_conn() else { return 0 };
     let playing: Vec<String> = crate::sync::lock_or_recover(state(), "mpris.players")
         .iter()
         .filter(|(_, p)| p.status == "Playing")
@@ -203,7 +205,7 @@ pub async fn pause_all() -> usize {
         .collect();
     let mut paused = 0;
     for name in playing {
-        let Ok(builder) = PlayerProxy::builder(conn).destination(name.clone()) else { continue };
+        let Ok(builder) = PlayerProxy::builder(&conn).destination(name.clone()) else { continue };
         let Ok(player) = builder.build().await else { continue };
         match player.pause().await {
             Ok(()) => paused += 1,
