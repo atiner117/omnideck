@@ -20,6 +20,30 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 10:22 — Wave 2 pick 8: sleep timer — pause playback in N minutes
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, parking-lot sleep timer; VISION couch
+  ergonomics (falling asleep to media). Context: #67 merged + #25 closed this session
+  at Andrew's direction.
+- **Branch / PR:** `pick/sleep` — https://github.com/atiner117/omnideck/pull/68
+- **Changed:** pick `42ab518` from draft #45 onto main `1291401` + ONE adaptation
+  commit. Hidden-dep check FIRST (triage's "forked from #38's tip" worry): every
+  cross-module call verified on main (sync::lock_or_recover = #48 helper) — clean.
+  sleep_timer.rs (set/cancel/get, generation-counter race-free re-arm, not persisted
+  by design), mpris::pause_all (pause-not-kill, all Playing players), SleepTimer.svelte
+  (presentational, +page wiring deferred). ADAPTATION: pause_all was written against
+  the old OnceLock CONN — rewired onto 9e7eb5b's supervised watcher via current_conn()
+  (None mid-reconnect → no-op). The triage filed that drift under #18 but it bit here —
+  caught by the gate (compile error), fixed, recorded. Conflicts: Cargo.toml tokio line
+  (kept main's — feature superset), lib.rs tail, backend.ts export line.
+- **Verify:** bun run check (pass, 351 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (81 pass — 6 new sleep-timer tests — 1 ignored) · bindings in sync ·
+  Cargo.lock clean (no new deps). needs-runtime-verify: live MPRIS pause at expiry.
+- **Outcome:** shipped to draft PR #68 (supersedes #45 — close #45 when #68 lands).
+- **Next candidate:** #47 remote (last Wave 2 feature; keep needs-hardware label;
+  gamepad.rs + mpris.rs edges — hunk-check both against the P0/supervisor changes
+  first). Then lanes #10 #12 #13 #24 and the +page wave (#17 SettingDef first).
+
 ## 2026-08-02 09:28 — Wave 2 pick 7: update-check backend (GitHub latest-release probe)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #4 (check half only — acting on
   an update stays per-distro follow-up). Hunk-checked first: zero update symbols on
