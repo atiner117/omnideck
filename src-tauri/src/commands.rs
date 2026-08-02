@@ -136,8 +136,9 @@ pub fn get_config() -> config::Config {
 /// backup is meant to travel (email, cloud drive), the secrets are not. Returns the path
 /// written so the UI can toast it.
 #[tauri::command]
-pub fn backup_config(dest: String, include_credentials: bool) -> Result<String, String> {
-    config::backup_to(std::path::Path::new(&dest), include_credentials)
+pub async fn backup_config(dest: String, include_credentials: bool) -> Result<String, String> {
+    // blocking: write_atomic fsyncs the file and its directory.
+    blocking(move || config::backup_to(std::path::Path::new(&dest), include_credentials)).await?
 }
 
 /// Restore config.toml from a backup file. The contents pass through the same
@@ -145,10 +146,14 @@ pub fn backup_config(dest: String, include_credentials: bool) -> Result<String, 
 /// the backup keep their current values. Returns the freshly loaded config (token masked,
 /// same as `get_config`) so the UI can re-render without a restart.
 #[tauri::command]
-pub fn restore_config(src: String) -> Result<config::Config, String> {
-    let mut cfg = config::restore_from(std::path::Path::new(&src))?;
-    cfg.media_server.token.clear(); // never hand the real token to the webview
-    Ok(cfg)
+pub async fn restore_config(src: String) -> Result<config::Config, String> {
+    // blocking: fsync via write_atomic, and SAVE_LOCK can wait behind another saver.
+    blocking(move || {
+        let mut cfg = config::restore_from(std::path::Path::new(&src))?;
+        cfg.media_server.token.clear(); // never hand the real token to the webview
+        Ok(cfg)
+    })
+    .await?
 }
 
 /// Prepare the custom wallpaper: a display-sized, cached copy served over `omnideck://`
