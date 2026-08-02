@@ -20,6 +20,27 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-01 20:55 — Wave 2 pick 5 NOT PICKED: #23 verified fully superseded, closed
+- **Vision tie:** PR-TRIAGE-2026-07-26 follow-through — the triage's own "verify first"
+  discipline applied to its Wave 2 #23 row, which turned out to be wrong.
+- **Branch / PR:** `docs/triage-23` (this record + triage addendum) — no code PR; #23
+  closed instead. Context: #64 merged + #21 closed this session at Andrew's direction.
+- **Changed:** attempted the pick of `89e859b` (fsutil.rs + media_profiles conversion);
+  the conflict revealed main's media_profiles.rs ALREADY calls
+  crate::config::write_atomic at the same site — converted by `1c2b31e` (#48 deep-review
+  fixes), which was in the triage's own `c6ab9ef` baseline. Config half = `981a977`.
+  fsutil.rs is strictly weaker than main's write_atomic (no fsync of contents/dir, no
+  symlink write-through, no permission preservation; pid-only vs pid+seq temp naming).
+  Zero live content — aborted the pick, deleted the branch, closed #23 citing both
+  commits. Triage status block gains the correction + the lesson: file-level overlap
+  ≠ live content; check hunks before picking.
+- **Verify:** verification-only iteration — git log -S evidence, no build gates apply.
+- **Outcome:** #23 closed as fully superseded; triage doc corrected (this branch).
+- **Next candidate:** #27 [input] config (re-read the gamepad.rs merge — P0-hardened;
+  after the #23 lesson, check its hunks against `1c2b31e` FIRST) or #25 update-check
+  (update.rs is new — likely genuinely live). Then #45 sleeptimer, #47 remote, the
+  +page wave (#17 first).
+
 ## 2026-08-01 20:42 — Wave 2 pick 4: config backup/restore, atomic + serialized
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #5 — the "adapt to 981a977"
   pick done as flagged, not blind. Context: #63 merged + #14 closed this session at
