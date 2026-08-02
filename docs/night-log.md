@@ -20,6 +20,35 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 12:36 — Wave 2 FINAL pick: phone-as-remote (authed LAN HTTP)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2 complete; VISION couch-first control —
+  the phone becomes a second remote. Context: #68 merged + #45 closed this session at
+  Andrew's direction.
+- **Branch / PR:** `pick/remote` — https://github.com/atiner117/omnideck/pull/69
+  (needs-hardware label kept).
+- **Changed:** both picks from draft #47 (`8a84fd7` + `23d72b8` rebind-race fix) onto
+  main `9f431e9` + TWO adaptations + one integration fix. remote.rs (std::net, zero
+  deps, off by default, urandom token constant-time compared / IPC-masked /
+  backup-stripped). Adaptations: (a) `stop` joined main's Verb-enum control() — gains
+  the 2s frozen-player timeout; (b) volume wpctl/pactl shell-outs bounded via
+  proc::output_with_timeout + has_bin fallback (were unbounded .status() — the P0
+  wedged-PipeWire class). Integration fix: synthetic remote presses set
+  EXTERNAL_ACTIVITY so a phone-driven session can't dim (only exists because #59 +
+  remote both landed). DISCARDED: a manual Config Default impl w/ config_version —
+  #10's lane content, not this feature. SIX conflicted files; Config.ts via regen
+  (23 export tests, RemoteConfig/RemoteStatus new).
+- **Verify:** bun run check (pass, 353 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (90 pass — 9 remote tests incl. hermetic loopback auth/routing matrix —
+  1 ignored) · bindings in sync. needs-hardware: phone pairing, live transport/volume/
+  nav, rebind under enable/disable cycling.
+- **Outcome:** shipped to draft PR #69 (supersedes #47 — close #47 when #69 lands).
+  WAVE 2 COMPLETE: #61–#68 merged, #69 in draft — 9 features salvaged, 1 verified
+  obsolete (#23), 41→16 open drafts since the triage began.
+- **Next candidate:** lanes #10 (config_version + Emby header + re-resolve — diff vs
+  7cdd45f first) #12 #13 #24, then the +page wave (#17 SettingDef first, strict
+  triage order). Wave 4 reworks (#41–#43) last.
+
 ## 2026-08-02 10:22 — Wave 2 pick 8: sleep timer — pause playback in N minutes
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, parking-lot sleep timer; VISION couch
   ergonomics (falling asleep to media). Context: #67 merged + #25 closed this session

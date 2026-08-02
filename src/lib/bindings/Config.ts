@@ -3,6 +3,7 @@ import type { App } from "./App";
 import type { InputConfig } from "./InputConfig";
 import type { LaunchOverride } from "./LaunchOverride";
 import type { MediaServerConfig } from "./MediaServerConfig";
+import type { RemoteConfig } from "./RemoteConfig";
 import type { ScreensaverConfig } from "./ScreensaverConfig";
 import type { Settings } from "./Settings";
 
@@ -25,7 +26,12 @@ media_server: MediaServerConfig,
  * `[screensaver]` — OLED burn-in protection timings (gamepad.rs idle events +
  * frontend overlay).
  */
-screensaver: ScreensaverConfig, apps: Array<App>, 
+screensaver: ScreensaverConfig, 
+/**
+ * `[remote]` — phone-as-remote LAN HTTP server (remote.rs). Off by default; the
+ * token is generated on first enable and masked over IPC like media_server.token.
+ */
+remote: RemoteConfig, apps: Array<App>, 
 /**
  * Favorited tile ids (shown on the Home category).
  */
