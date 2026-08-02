@@ -449,6 +449,91 @@ pub fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
     mutate_and_save(|cfg| cfg.recent_apps = recent_apps)
 }
 
+// ---- Backup / restore (roadmap #5) ----
+//
+// config.toml accumulates curated state (custom launchers, favorites, recents, media-server
+// pairing). Backup is a sanitized TOML snapshot the user can carry between machines; restore
+// funnels the file through the same `normalize()` gates as a hand-edited config, so a crafted
+// backup can't inject anything a hand-edit couldn't.
+
+/// Prepare an in-memory config for writing to a backup file: strip the IPC-only fields and,
+/// unless the user opts in, blank the credential-shaped fields (the threat model is "the user
+/// emails themselves the zip" — see NOTES-DEEPDIVE-ROADMAP.md #5).
+fn sanitize_for_backup(mut cfg: Config, include_credentials: bool) -> Config {
+    cfg.config_path = String::new();
+    cfg.config_error = None;
+    if !include_credentials {
+        cfg.media_server.token = String::new();
+        cfg.settings.steamgriddb_key = String::new();
+    }
+    cfg
+}
+
+/// Parse + sanitize backup text. Every field goes through the same `normalize()` pass as a
+/// hand-edited config.toml, so restore is exactly as safe as editing the file by hand.
+fn parse_backup(text: &str) -> Result<Config, String> {
+    let mut cfg: Config =
+        toml::from_str(text).map_err(|e| {
+            let first = e.to_string().lines().next().unwrap_or("parse error").to_string();
+            format!("not a valid OmniDeck backup: {first}")
+        })?;
+    cfg.settings.normalize();
+    cfg.media_server.normalize();
+    cfg.config_path = String::new();
+    cfg.config_error = None;
+    Ok(cfg)
+}
+
+/// Write a backup of the current config.toml to `dest`. Refuses while the on-disk config is in
+/// the parse-error state (the in-memory defaults are NOT the user's config — backing them up
+/// would launder the broken state into a "good" backup). Returns the path written.
+pub fn backup_to(dest: &std::path::Path, include_credentials: bool) -> Result<String, String> {
+    if !dest.is_absolute() {
+        return Err("backup destination must be an absolute path".into());
+    }
+    let mut cfg = load_or_create();
+    if let Some(err) = cfg.config_error.take() {
+        return Err(format!("not backing up a broken config.toml — {err}"));
+    }
+    let cfg = sanitize_for_backup(cfg, include_credentials);
+    let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    // write_atomic creates the parent dir and never leaves a truncated backup.
+    write_atomic(dest, text.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Replace config.toml with the (sanitized) contents of a backup file, then return the freshly
+/// loaded config so the UI can re-render. Unlike `mutate_and_save` this intentionally works
+/// while the current config is broken — restoring a backup is exactly how the user fixes that.
+/// Credential fields left empty in the backup (the default) keep their current on-disk values,
+/// so a sanitized backup never wipes a working pairing.
+pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
+    let text = fs::read_to_string(src).map_err(|e| format!("couldn't read backup: {e}"))?;
+    let mut cfg = parse_backup(&text)?;
+
+    // Serialize with every other config write: an auto-save (recents fire on launch) racing
+    // the restore must not interleave with it. Poison-tolerant like mutate_and_save.
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Keep current credentials when the backup carries none (sanitized backups blank them).
+    let current = load_or_create();
+    if current.config_error.is_none() {
+        if cfg.media_server.token.is_empty() {
+            cfg.media_server.token = current.media_server.token;
+        }
+        if cfg.settings.steamgriddb_key.is_empty() {
+            cfg.settings.steamgriddb_key = current.settings.steamgriddb_key;
+        }
+    }
+
+    let path = config_path().ok_or("no config path")?;
+    let out = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    // Atomic replace: a crash mid-restore must not leave a truncated config.toml that the
+    // load path then refuses to overwrite (the exact clobber-protection deadlock).
+    write_atomic(&path, out.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(load_or_create())
+}
+
 pub fn report(cfg: &Config) -> String {
     let mut s = String::from("OmniDeck config\n");
     s.push_str(&format!("  path:    {}\n", cfg.config_path));
@@ -464,7 +549,7 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{write_atomic, LaunchOverride, ScreensaverConfig, Settings};
+    use super::{parse_backup, sanitize_for_backup, write_atomic, Config, LaunchOverride, ScreensaverConfig, Settings};
 
     #[test]
     fn write_atomic_creates_overwrites_and_leaves_no_temp() {
@@ -520,6 +605,66 @@ args = ["--verbose"]
         // Empty map stays out of the serialized default config (opt-in table).
         let out = toml::to_string_pretty(&super::Config::default()).unwrap();
         assert!(!out.contains("launch_overrides"), "{out}");
+    }
+
+    #[test]
+    fn backup_strips_credentials_by_default() {
+        let mut cfg = Config::default();
+        cfg.settings.steamgriddb_key = "sgdb-secret".into();
+        cfg.media_server.token = "jf-secret".into();
+        cfg.config_path = "/home/x/.config/omnideck/config.toml".into();
+        cfg.config_error = Some("boom".into());
+
+        let clean = sanitize_for_backup(cfg.clone(), false);
+        assert_eq!(clean.settings.steamgriddb_key, "");
+        assert_eq!(clean.media_server.token, "");
+        assert_eq!(clean.config_path, "");
+        assert!(clean.config_error.is_none());
+
+        let keep = sanitize_for_backup(cfg, true);
+        assert_eq!(keep.settings.steamgriddb_key, "sgdb-secret");
+        assert_eq!(keep.media_server.token, "jf-secret");
+        assert_eq!(keep.config_path, ""); // IPC-only fields always stripped
+    }
+
+    #[test]
+    fn backup_roundtrips_through_parse() {
+        let mut cfg = Config::default();
+        cfg.settings.grid_columns = 8;
+        cfg.favorites = vec!["steam:123".into()];
+        cfg.recent_apps = vec!["app:firefox".into()];
+        let text = toml::to_string_pretty(&sanitize_for_backup(cfg, false)).unwrap();
+        let back = parse_backup(&text).unwrap();
+        assert_eq!(back.settings.grid_columns, 8);
+        assert_eq!(back.favorites, vec!["steam:123".to_string()]);
+        assert_eq!(back.recent_apps, vec!["app:firefox".to_string()]);
+    }
+
+    #[test]
+    fn restore_normalizes_hostile_backup() {
+        // A crafted backup goes through the same normalize() gates as a hand-edited config.
+        let text = r##"
+[settings]
+accent = "red; background:url(http://evil)"
+search_provider = "javascript:alert(1)"
+ui_scale_custom = 99.0
+grid_columns = 0
+"##;
+        let cfg = parse_backup(text).unwrap();
+        assert_eq!(cfg.settings.accent, "#4cc2ff");
+        assert_eq!(cfg.settings.search_provider, "");
+        assert_eq!(cfg.settings.ui_scale_custom, 3.5);
+        assert_eq!(cfg.settings.grid_columns, 1);
+    }
+
+    #[test]
+    fn restore_rejects_garbage_with_first_line() {
+        let err = match parse_backup("this is { not toml") {
+            Ok(_) => panic!("garbage should not parse"),
+            Err(e) => e,
+        };
+        assert!(err.starts_with("not a valid OmniDeck backup:"), "{err}");
+        assert_eq!(err.lines().count(), 1, "error should be toast-sized: {err}");
     }
 
     #[test]
