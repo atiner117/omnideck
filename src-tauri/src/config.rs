@@ -497,10 +497,8 @@ pub fn backup_to(dest: &std::path::Path, include_credentials: bool) -> Result<St
     }
     let cfg = sanitize_for_backup(cfg, include_credentials);
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    if let Some(parent) = dest.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    fs::write(dest, text).map_err(|e| e.to_string())?;
+    // write_atomic creates the parent dir and never leaves a truncated backup.
+    write_atomic(dest, text.as_bytes()).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -512,6 +510,10 @@ pub fn backup_to(dest: &std::path::Path, include_credentials: bool) -> Result<St
 pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
     let text = fs::read_to_string(src).map_err(|e| format!("couldn't read backup: {e}"))?;
     let mut cfg = parse_backup(&text)?;
+
+    // Serialize with every other config write: an auto-save (recents fire on launch) racing
+    // the restore must not interleave with it. Poison-tolerant like mutate_and_save.
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // Keep current credentials when the backup carries none (sanitized backups blank them).
     let current = load_or_create();
@@ -525,11 +527,10 @@ pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
     }
 
     let path = config_path().ok_or("no config path")?;
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     let out = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(&path, out).map_err(|e| e.to_string())?;
+    // Atomic replace: a crash mid-restore must not leave a truncated config.toml that the
+    // load path then refuses to overwrite (the exact clobber-protection deadlock).
+    write_atomic(&path, out.as_bytes()).map_err(|e| e.to_string())?;
     Ok(load_or_create())
 }
 
