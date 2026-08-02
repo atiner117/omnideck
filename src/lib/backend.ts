@@ -22,7 +22,8 @@ import type { MediaLibrary } from "./bindings/MediaLibrary";
 import type { MediaSections } from "./bindings/MediaSections";
 import type { Settings } from "./bindings/Settings";
 import type { Tier } from "./bindings/Tier";
-export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, LiveApp, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier };
+import type { UpdateInfo } from "./bindings/UpdateInfo";
+export type { App, Capability, Config, Game, GamepadEvent, Gpu, Library, LibrarySummary, LiveApp, MediaInfo, MediaItem, MediaLibrary, MediaSections, Settings, Tier, UpdateInfo };
 
 // ---- command wrappers (typed returns; reject on backend Err — callers decide UX) ----
 export const getCapability = () => invoke<Capability>("get_capability");
@@ -61,6 +62,9 @@ export const closeCurrentApp = () => invoke<boolean>("close_current_app");
 export const switchApp = (id?: string) => invoke<boolean>("switch_app", { id: id ?? null });
 export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
+/** Check GitHub for a newer release. Cached for the process lifetime; `force` bypasses the
+ *  cache (manual "Check now"). Gate the automatic boot-time call on `settings.check_updates`. */
+export const checkUpdate = (force = false) => invoke<UpdateInfo>("check_update", { force });
 
 // ---- deck switcher (iOS-style app cards — switcher.rs / watchdog.rs) ----
 // LiveApp is generated (./bindings/LiveApp) and re-exported above — no hand-written twin.

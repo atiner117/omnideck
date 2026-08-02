@@ -42,6 +42,7 @@ pub struct Settings {
     // Parental controls (pin.rs). Deterrence, not access control — see pin.rs header.
     pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it; masked over IPC (see Config::has_pin).
     pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN. Only set_locked_categories writes it (PIN-verified).
+    pub check_updates: bool, // boot-time release check (update.rs); manual check always works
 }
 
 impl Default for Settings {
@@ -75,6 +76,7 @@ impl Default for Settings {
             ambient_volume: 0.35,
             pin_hash: String::new(),
             locked_categories: Vec::new(),
+            check_updates: true,
         }
     }
 }

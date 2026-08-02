@@ -20,6 +20,28 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 09:28 — Wave 2 pick 7: update-check backend (GitHub latest-release probe)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #4 (check half only — acting on
+  an update stays per-distro follow-up). Hunk-checked first: zero update symbols on
+  main, genuinely live. Context: #66 merged + #27 closed this session at Andrew's
+  direction.
+- **Branch / PR:** `pick/update` — https://github.com/atiner117/omnideck/pull/67
+- **Changed:** pick `a19ad7f` from draft #25 onto main `ce6a3a8` + bindings-regen
+  commit. New update.rs (check_update(force) → UpdateInfo; process-lifetime cache for
+  the 60 req/hr unauthed API, force bypass; drafts/prereleases never offered; rides
+  http::client() with the SSRF/timeout policy, compile-time URL). settings.check_updates
+  (default true) gates the boot-time call. FIVE conflicted files, all appended-tail
+  shapes (config.rs vs PIN, lib.rs handler list, commands.rs vs backup, backend.ts
+  export line merged LiveApp+UpdateInfo, Settings.ts via regen — 20 export tests).
+- **Verify:** bun run check (pass, 349 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (75 pass — 5 new update:: tests — 1 ignored). No new deps. Live-network
+  probe deliberately not smoked headlessly (unauthed API budget); couch "Check now".
+- **Outcome:** shipped to draft PR #67 (supersedes #25 — close #25 when #67 lands).
+- **Next candidate:** #45 sleeptimer (verify no hidden dep on #38's integration tip
+  per triage) or #47 remote (needs-hardware label). Then lanes #10 #12 #13 #24 and
+  the +page wave (#17 SettingDef first).
+
 ## 2026-08-01 21:02 — Wave 2 pick 6: [input] config — hold threshold + hotkey kill-switch
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #6 (input tuning). Hunk-checked
   FIRST per the #23 lesson: InputConfig/guide_hold_ms/session_hotkeys have zero hits on
