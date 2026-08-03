@@ -20,6 +20,30 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 22:44 — Lane pick 3: fable-frontend + quotesplit (launch token superseded)
+- **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE (icon fetch
+  was O(library) at mount) + launcher UX (paths with spaces). Deliberately landed
+  BEFORE the +page wave: these lanes sat under the extractions in the original
+  integration layering — landing first shrinks the wave's conflict surface. Context:
+  #71 merged + #12 closed this session at Andrew's direction.
+- **Branch / PR:** `pick/frontend` — https://github.com/atiner117/omnideck/pull/72
+- **Changed:** hunk-check split #13: launch token `2ba8a99` SUPERSEDED (f176d25's
+  launchId.ts is the same feature, evolved — triage's collision flag confirmed);
+  icon windowing `416afd4` + derived clamps `2332d2e` live (minus-line test: the code
+  they replace exists verbatim on main). #24's `b7978d7` fully live (argv.ts new).
+  All three picked CLEAN — zero conflicts. + argv.test.ts (8 tests, one per
+  documented tokenizer rule — nav/osk/launchId all have suites, the new pure module
+  shouldn't be the exception). Unblocks the wave's 7a3be33 carry-fix (#32).
+- **Verify:** bun run check (pass, 355 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass — 8 new argv) · cargo clippy/test (pass, 91 — no Rust changes,
+  ritual run). No bindings, no deps.
+- **Outcome:** shipped to draft PR #72 (supersedes #13 AND #24 — close both when it
+  lands). ALL LANES DONE: #9-#17 fully drained (landed or verified-superseded).
+- **Next candidate:** Wave 3 — the +page wave in strict triage order: #17 SettingDef
+  (`2b6f329`,`fad46d9`) first, then #26 deck → #30 medianav → #32 form (+7a3be33) →
+  #28 router → #46 overscan → #44 layouts. One pick per iteration, fresh conflict
+  check each (main has moved ~20 merges past the triage baseline).
+
 ## 2026-08-02 17:53 — Lane pick 2: fable-backend — pooled X11 connection (half superseded)
 - **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE posture — the
   navpad polls any_app_visible ~3x/s and paid a fresh X connect+auth per poll. Context:
