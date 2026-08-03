@@ -20,6 +20,30 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 22:52 — Wave 3 pick 1 REFRESHED: #60 (SettingDef) updated across 13 merges
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 1 — kept mergeable. Process note:
+  a PARALLEL iteration had already opened PR #60 (2026-07-31, based on post-#59 main);
+  this session nearly opened a duplicate — the #53 lesson (full inventory before
+  absence claims) applies to sessions too, caught here by a stale-branch collision.
+  Updated #60 in place per the 07-29 precedent. Context: #72 merged + #13/#24 closed
+  this session at Andrew's direction — all lane drafts (#9–#17) now drained.
+- **Branch / PR:** `pick/settings` — https://github.com/atiner117/omnideck/pull/60
+  (updated in place; branch is checked out in the main workspace — pushed to the ref
+  from a detached worktree HEAD).
+- **Changed:** merged main (through #72 — Wave 2 + all three lane picks) into the
+  branch. ONE +page.svelte conflict: the settings-row onclick — kept the port's
+  settingRowClick extraction, rewired `focus = i` → `focusRaw = i` (#72 made focus
+  $derived; a write to it would fail svelte-check). night-log slotted chronologically
+  (the 07-31 entry sits between the Aug-1 and Jul-30 blocks).
+- **Verify:** bun run check (pass, 356 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — ritual, no Rust changes).
+- **Outcome:** #60 refreshed and green — ready for Andrew's review. The +page wave's
+  step 1 is mergeable again.
+- **Next candidate:** merge #60, then #26 deck (`bd4bfe3` DeckSwitcher extraction) —
+  fresh conflict check against post-#60 main; the wave stays strictly sequential
+  (#26 → #30 → #32 (+7a3be33) → #28 → #46 → #44).
+
 ## 2026-08-02 22:44 — Lane pick 3: fable-frontend + quotesplit (launch token superseded)
 - **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE (icon fetch
   was O(library) at mount) + launcher UX (paths with spaces). Deliberately landed
@@ -297,6 +321,29 @@ Entry template:
 - **Next candidate:** Wave 2 small picks: #31 [launch_overrides] (`6d63db2`, serde adds)
   or #14 argv PATH-resolve — both small. #21 backup needs the same "adapt to 981a977"
   treatment as this pick. Then the +page wave, #17 SettingDef first.
+
+## 2026-07-31 22:57 — Wave 3 pick 1: table-driven Settings model (SettingDef table)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 1 — the sequenced +page.svelte cluster
+  (frontend-split track, VISION priority 1) opens with #17's SettingDef table; #46 overscan
+  and #44 layouts explicitly depend on these settings-defs. Wave 1 fully merged last night
+  (#54–#59 all in main), so the wave was unblocked.
+- **Branch / PR:** `pick/settings` — https://github.com/atiner117/omnideck/pull/60
+- **Changed:** #17's two commits ported onto main `705d96b`: new `src/lib/settings-defs.ts`
+  (+254, byte-identical to `2b6f329`) and the +page.svelte collapse (−177/+43) of the four
+  string-key dispatchers (settingValue/adjustSetting/cycleSetting/NUM_META+setNum+setText)
+  into one pass over SETTING_DEFS. NOTE: `git cherry-pick`/`apply` were sandbox-blocked
+  this session, so the port was done by hand with extra verification: every hunk site
+  confirmed textually identical to the draft's base first (main's #48/Wave-1 work never
+  touched the settings machinery — no rows dropped), then the result diffed against
+  `fad46d9` to confirm the settings hunks match exactly (only main-side features differ).
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · no Rust touched.
+- **Outcome:** shipped to draft PR #60 (supersedes #17 — close it when this lands).
+- **Next candidate:** Wave 3 step 2: #26 DeckSwitcher extraction (`bd4bfe3`) onto a
+  `pick/deck` branch off whatever main is then — but re-check against main first: main's
+  deck code gained `deckCancel`/freeze handling since the draft, so the extraction may
+  need the same hand-merge treatment as tonight. Steps stay sequential: #26 → #30 → #32
+  → #28 → #46 → #44.
 
 ## 2026-07-30 18:56 — Wave 1 pick 6 (FINAL): screensaver pair — idle backend + OLED overlay
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 1 complete; roadmap #1 (OLED screensaver) —
