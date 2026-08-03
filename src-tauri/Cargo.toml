@@ -40,9 +40,9 @@ clap = { version = "4", features = ["derive"] }
 # event-driven MPRIS Now Playing (replaces the 4 s `playerctl` fork+exec poll)
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
-# backoff sleep in the MPRIS reconnect supervisor (already in-tree via reqwest/zbus; the
-# runtime itself is tauri's tokio). `time` for sleeps/timeouts, `macros` for the join!
-# that runs the media-section fetches concurrently.
+# backoff sleep in the MPRIS reconnect supervisor and sleep_timer.rs's 1 s expiry poll
+# (already in-tree via reqwest/zbus; the runtime itself is tauri's tokio). `time` for
+# sleeps/timeouts, `macros` for the join! that runs the media-section fetches concurrently.
 tokio = { version = "1", default-features = false, features = ["time", "macros"] }
 # global Ctrl+Alt+Home grab inside the gamescope session (keyboard path back to OmniDeck
 # while a launched app holds focus — the keyboard twin of the gamepad Guide button)
@@ -52,6 +52,9 @@ x11rb = { version = "0.13", features = ["randr"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# pin.rs: parental-controls PIN — only an argon2id PHC hash is ever stored in config.toml,
+# NEVER the plaintext PIN (deterrence, not access control; see pin.rs header)
+argon2 = { version = "0.5", features = ["std"] } # std → rand_core/getrandom for OsRng salts
 # navpad.rs: virtual keyboard/mouse over /dev/uinput so the controller can navigate
 # launched PWAs/browsers console-style; also examples/virtual-pad.rs (uinput gamepad
 # injector for the nested-session harness — gilrs sees it as a real evdev pad)

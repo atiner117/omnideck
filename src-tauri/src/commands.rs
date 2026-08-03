@@ -105,7 +105,7 @@ pub fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, i
     std::process::Command::new("steam")
         .arg(format!("steam://rungameid/{appid}"))
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| spawn_error("steam", &e))?;
     let label = name.unwrap_or_else(|| format!("game {appid}"));
     let _ = app.emit("app-launched", label.clone());
     watchdog::watch_steam_game(app, appid, label, id);
@@ -122,9 +122,50 @@ pub fn get_config() -> config::Config {
     let mut cfg = config::load_or_create();
     // The media-server token stays out of the webview: the frontend only needs to know
     // whether a server is configured (media_available covers that). Masked, not moved —
-    // config.toml keeps the real value.
+    // config.toml keeps the real value. Same for the phone-remote token (its ONE
+    // deliberate exposure is the pairing URL from remote_status — see remote.rs).
     cfg.media_server.token.clear();
+    // Same for the PIN hash: a 4–6 digit PIN is offline-crackable from its argon2 hash,
+    // so the webview only gets presence (has_pin) — verification happens in verify_pin.
+    cfg.has_pin = Some(!cfg.settings.pin_hash.is_empty());
+    cfg.settings.pin_hash.clear();
+    cfg.remote.token.clear();
     cfg
+}
+
+/// Back up config.toml to `dest` as a sanitized TOML snapshot (roadmap #5). Credentials
+/// (media-server token, SteamGridDB key) are excluded unless `include_credentials` — the
+/// backup is meant to travel (email, cloud drive), the secrets are not. Returns the path
+/// written so the UI can toast it.
+#[tauri::command]
+pub async fn backup_config(dest: String, include_credentials: bool) -> Result<String, String> {
+    // blocking: write_atomic fsyncs the file and its directory.
+    blocking(move || config::backup_to(std::path::Path::new(&dest), include_credentials)).await?
+}
+
+/// Restore config.toml from a backup file. The contents pass through the same
+/// `Settings::normalize` gates as a hand-edited config, and credential fields left empty in
+/// the backup keep their current values. Returns the freshly loaded config (token masked,
+/// same as `get_config`) so the UI can re-render without a restart.
+#[tauri::command]
+pub async fn restore_config(src: String) -> Result<config::Config, String> {
+    // blocking: fsync via write_atomic, and SAVE_LOCK can wait behind another saver.
+    blocking(move || {
+        let mut cfg = config::restore_from(std::path::Path::new(&src))?;
+        cfg.media_server.token.clear(); // never hand the real token to the webview
+        cfg.remote.token.clear();
+        Ok(cfg)
+    })
+    .await?
+}
+
+/// Check GitHub for a newer release (roadmap #4, check-only — acting on it is per-distro
+/// follow-up). Result is cached for the process lifetime (unauthed GitHub API = 60 req/hr);
+/// `force` bypasses the cache for a manual "Check now". The frontend gates the automatic
+/// boot-time call on `settings.check_updates`; a manual check always works.
+#[tauri::command]
+pub async fn check_update(force: bool) -> Result<crate::update::UpdateInfo, String> {
+    crate::update::check(force).await
 }
 
 /// Prepare the custom wallpaper: a display-sized, cached copy served over `omnideck://`
@@ -232,6 +273,10 @@ fn media_play_blocking(app: tauri::AppHandle, id: String, name: String) -> Resul
         }
         exec.push("--force-window=immediate".into());
         exec.push(format!("--force-media-title={name}"));
+        // Auth rides in a header, not the URL: stream_url() carries no api_key, so the
+        // token stays out of mpv's log/OSD/IPC/watch-later and server access logs. (mpv
+        // splits --http-header-fields on commas; Jellyfin tokens are hex, so no escaping.)
+        exec.push(format!("--http-header-fields=X-Emby-Token: {}", srv.token()));
         exec.push(srv.stream_url(&id));
         exec
     } else if has_client {
@@ -322,6 +367,21 @@ pub async fn deck_close(group: u32) -> Result<(), String> {
     if ok { Ok(()) } else { Err("could not close that app".into()) }
 }
 
+/// Map a spawn failure to a message the UI can toast. Custom-launcher input arrives as a
+/// raw argv vector, so a typo'd binary otherwise surfaces as an opaque "No such file or
+/// directory". Mapping the error at the spawn (instead of pre-flighting PATH ourselves)
+/// can never disagree with execvp's real resolution — permission bits, ACLs, and the
+/// unset-PATH default search all stay the kernel's/libc's call.
+fn spawn_error(cmd: &str, e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            format!("command not found: {cmd} (not an executable on PATH)")
+        }
+        std::io::ErrorKind::PermissionDenied => format!("cannot run {cmd}: permission denied"),
+        _ => format!("failed to launch {cmd}: {e}"),
+    }
+}
+
 /// True if `arg` is safe to pass to a browser after the BROWSER token: an http(s) URL, or
 /// our `--app=<http(s) URL>` PWA form. Rejects flags so a crafted `search_provider` or a
 /// hand-edited config can't inject e.g. Chromium's `--renderer-cmd-prefix` (arbitrary exec).
@@ -336,6 +396,23 @@ fn is_safe_browser_arg(arg: &str) -> bool {
 #[tauri::command]
 pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
     let mut exec = exec;
+    // Per-tile `[launch_overrides]` (config.rs): extra argv is appended BEFORE the BROWSER
+    // token is processed, so override args on a browser tile go through the same URL-only
+    // guard as everything else; env is applied at spawn below.
+    let overrides = id
+        .as_deref()
+        .and_then(|i| config::load_or_create().launch_overrides.get(i).cloned());
+    if let Some(ov) = &overrides {
+        exec.extend(ov.args.iter().cloned());
+        if !ov.args.is_empty() || !ov.env.is_empty() {
+            tracing::info!(
+                "launch_overrides[{}]: +{} arg(s), {} env var(s)",
+                id.as_deref().unwrap_or(""),
+                ov.args.len(),
+                ov.env.len()
+            );
+        }
+    }
     if exec.first().map(|s| s == "BROWSER").unwrap_or(false) {
         // Only URLs may follow the BROWSER token (flag-injection guard — see is_safe_browser_arg).
         for a in &exec[1..] {
@@ -393,7 +470,14 @@ pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<Str
             command.env("QT_QPA_PLATFORMTHEME", "kde");
         }
     }
-    let child = command.spawn().map_err(|e| e.to_string())?;
+    // Per-tile env AFTER the session defaults above, so an override can also retarget
+    // XDG_CURRENT_DESKTOP/QT_QPA_PLATFORMTHEME for a stubborn app.
+    if let Some(ov) = &overrides {
+        for (k, v) in &ov.env {
+            command.env(k, v);
+        }
+    }
+    let child = command.spawn().map_err(|e| spawn_error(cmd, &e))?;
     watchdog::watch_child(app, child, name.unwrap_or_else(|| cmd.clone()), id);
     Ok(())
 }
@@ -425,7 +509,7 @@ pub fn game_properties(appid: String) -> Result<(), String> {
         .arg(format!("steam://gameproperties/{appid}"))
         .spawn()
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| spawn_error("steam", &e))
 }
 
 /// Current media snapshot from the MPRIS watcher's state (no I/O). The frontend calls this
@@ -492,9 +576,54 @@ pub async fn app_icon(url: String) -> Option<String> {
     icons::favicon(&url).await
 }
 
+// --- Sleep timer (sleep_timer.rs) ---
+
+/// Arm the sleep timer: pause playback in `minutes`. Re-setting REPLACES a running timer.
+/// Deliberately not persisted across restarts (see sleep_timer.rs). Returns the initial
+/// status so the UI can render the countdown without a second round-trip.
+#[tauri::command]
+pub fn set_sleep_timer(app: tauri::AppHandle, minutes: u32) -> Result<crate::sleep_timer::SleepTimerStatus, String> {
+    crate::sleep_timer::set(app, minutes)
+}
+
+/// Cancel the sleep timer; false when none was armed (idempotent).
+#[tauri::command]
+pub fn cancel_sleep_timer() -> bool {
+    crate::sleep_timer::cancel()
+}
+
+/// Remaining/total seconds of the armed timer, or None. The frontend calls this once at
+/// mount (before its `sleep-timer-tick` listener attaches), then relies on events.
+#[tauri::command]
+pub fn get_sleep_timer() -> Option<crate::sleep_timer::SleepTimerStatus> {
+    crate::sleep_timer::get()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_safe_browser_arg;
+    use super::{is_safe_browser_arg, spawn_error};
+
+    #[test]
+    fn spawn_errors_map_to_clear_messages() {
+        // Drive real spawns so the io::Error kinds are the ones execvp actually produces.
+        let cmd = "omnideck-test-no-such-binary";
+        let e = std::process::Command::new(cmd).spawn().unwrap_err();
+        assert_eq!(
+            spawn_error(cmd, &e),
+            format!("command not found: {cmd} (not an executable on PATH)")
+        );
+
+        // A file that exists but isn't executable -> permission denied, not "not found".
+        let plain = std::env::temp_dir()
+            .join(format!("omnideck-test-notexec-{}", std::process::id()));
+        std::fs::write(&plain, "data").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let cmd = plain.to_string_lossy();
+        let e = std::process::Command::new(plain.as_os_str()).spawn().unwrap_err();
+        assert_eq!(spawn_error(&cmd, &e), format!("cannot run {cmd}: permission denied"));
+        let _ = std::fs::remove_file(&plain);
+    }
 
     #[test]
     fn rejects_unsafe_browser_args() {

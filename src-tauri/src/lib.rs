@@ -28,12 +28,16 @@ mod media_profiles;
 mod media_server;
 mod mpris;
 mod navpad;
+mod pin;
 mod proc;
+mod remote;
 mod session;
+mod sleep_timer;
 mod steamgriddb;
 mod switcher;
 mod sync;
 mod testhook;
+mod update;
 mod watchdog;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -73,6 +77,8 @@ pub fn run() {
             commands::save_apps,
             commands::save_favorites,
             commands::save_recent_apps,
+            commands::backup_config,
+            commands::restore_config,
             commands::game_properties,
             commands::media_now_playing,
             commands::media_control,
@@ -95,7 +101,16 @@ pub fn run() {
             commands::deck_cancel,
             audio::audio_outputs,
             audio::audio_set_output,
-            gamepad::notify_activity
+            gamepad::notify_activity,
+            pin::set_pin,
+            pin::verify_pin,
+            pin::set_locked_categories,
+            commands::check_update,
+            commands::set_sleep_timer,
+            commands::cancel_sleep_timer,
+            commands::get_sleep_timer,
+            remote::remote_status,
+            remote::set_remote_enabled
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -104,6 +119,8 @@ pub fn run() {
             tauri::async_runtime::spawn(mpris::watch(app.handle().clone()));
             // Session-only: global Ctrl+Alt+Home returns home while a launched app has focus.
             hotkey::spawn_if_session(app.handle().clone());
+            // Phone remote: inert unless `[remote] enabled = true` (off by default).
+            remote::spawn_if_enabled(app.handle().clone());
             // Session-only: record the real output mode (the fps meter can't prove it).
             gpu::log_session_display_mode();
             // Test-only FIFO control channel — inert without OMNIDECK_TEST_CONTROL.

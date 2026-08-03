@@ -20,6 +20,284 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 22:44 — Lane pick 3: fable-frontend + quotesplit (launch token superseded)
+- **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE (icon fetch
+  was O(library) at mount) + launcher UX (paths with spaces). Deliberately landed
+  BEFORE the +page wave: these lanes sat under the extractions in the original
+  integration layering — landing first shrinks the wave's conflict surface. Context:
+  #71 merged + #12 closed this session at Andrew's direction.
+- **Branch / PR:** `pick/frontend` — https://github.com/atiner117/omnideck/pull/72
+- **Changed:** hunk-check split #13: launch token `2ba8a99` SUPERSEDED (f176d25's
+  launchId.ts is the same feature, evolved — triage's collision flag confirmed);
+  icon windowing `416afd4` + derived clamps `2332d2e` live (minus-line test: the code
+  they replace exists verbatim on main). #24's `b7978d7` fully live (argv.ts new).
+  All three picked CLEAN — zero conflicts. + argv.test.ts (8 tests, one per
+  documented tokenizer rule — nav/osk/launchId all have suites, the new pure module
+  shouldn't be the exception). Unblocks the wave's 7a3be33 carry-fix (#32).
+- **Verify:** bun run check (pass, 355 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass — 8 new argv) · cargo clippy/test (pass, 91 — no Rust changes,
+  ritual run). No bindings, no deps.
+- **Outcome:** shipped to draft PR #72 (supersedes #13 AND #24 — close both when it
+  lands). ALL LANES DONE: #9-#17 fully drained (landed or verified-superseded).
+- **Next candidate:** Wave 3 — the +page wave in strict triage order: #17 SettingDef
+  (`2b6f329`,`fad46d9`) first, then #26 deck → #30 medianav → #32 form (+7a3be33) →
+  #28 router → #46 overscan → #44 layouts. One pick per iteration, fresh conflict
+  check each (main has moved ~20 merges past the triage baseline).
+
+## 2026-08-02 17:53 — Lane pick 2: fable-backend — pooled X11 connection (half superseded)
+- **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE posture — the
+  navpad polls any_app_visible ~3x/s and paid a fresh X connect+auth per poll. Context:
+  #70 merged + #10 closed this session at Andrew's direction.
+- **Branch / PR:** `pick/x11` — https://github.com/atiner117/omnideck/pull/71
+- **Changed:** hunk-check split the lane: `ca208ee` (VapourSynth re-probe) SUPERSEDED
+  by 1c2b31e's refined version — THIRD lane item that commit pre-empted; only
+  `e564ced` (pooled X11) live. Picked it + one completion commit. with_x11 (liveness
+  round-trip on reuse, transparent reconnect; hotkey thread keeps its own conn —
+  wait_for_event would wedge a shared one). Merge care: main's #48 deck-flow logic won
+  everywhere (early-exit, freeze/LAST_HIDE snapshot, find-first + map-before-thaw) —
+  only the pooling structure taken from the pick; premature-resume ordering discarded.
+  Completion: deck_cancel (born in #48) converted too, connect-first ordering kept.
+  Mid-resolution cargo check used to arbitrate before committing.
+- **Verify:** bun run check (pass, 353 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — 1 ignored). Rust-only, no bindings, no new deps.
+  needs-session-verify: deck open/pick/cancel cycles over the pooled conn —
+  packaging/test-session.sh covers exactly these paths.
+- **Outcome:** shipped to draft PR #71 (supersedes #12 — close #12 when #71 lands).
+- **Next candidate:** #13 frontend polish (focus-clamp refactor, icon-load windowing,
+  launch token — triage flags launch-token may collide with f176d25's per-launch
+  instance ids: hunk-check) and #24 quotesplit — both touch +page edges; consider
+  folding into the +page wave instead. #17 SettingDef starts Wave 3 proper.
+
+## 2026-08-02 12:48 — Lane pick 1: fable-media — re-resolve, mpv token header, config_version
+- **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; media-server track reliability.
+  Context: #69 merged + #47 closed this session at Andrew's direction — Wave 2 fully
+  landed.
+- **Branch / PR:** `pick/media` — https://github.com/atiner117/omnideck/pull/70
+- **Changed:** all three #10 commits onto main `2f9aa52` + one fix. Hunk-check first:
+  API-header auth already on main (7cdd45f) but the mpv-stream api_key param wasn't;
+  server() still OnceLock; config_version zero hits — all three live. `158cfc2`
+  (RwLock re-resolve cache, Arc<JellyfinServer>, invalidate() after config saves;
+  KEPT 7cdd45f's valid_id; EXTENDED: restore_from invalidates too — #64 postdates the
+  pick), `ba5b856` (mpv stream auth via X-Emby-Token header — token out of URL-shaped
+  surfaces), `f7ef503` (CONFIG_VERSION=1, serialized first, migration hook). Fix: the
+  manual Config Default predated Waves 1-2 — completed with the accumulated fields
+  (caught by the export suite at compile).
+- **Verify:** bun run check (pass, 353 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — 1 ignored) · **live mediasrv smoke against the real Jellyfin**:
+  12 resume + 16 latest browsed through the new RwLock path · 23 export tests,
+  bindings in sync. No new deps.
+- **Outcome:** shipped to draft PR #70 (supersedes #10 — close #10 when #70 lands).
+- **Next candidate:** #12 backend polish (#20 pooled X11 conn, #23 VapourSynth
+  re-probe — hunk-check both halves) or #13 frontend polish / #24 quotesplit (+page
+  edges — may belong with the +page wave). Then #17 SettingDef starts Wave 3 proper.
+
+## 2026-08-02 12:36 — Wave 2 FINAL pick: phone-as-remote (authed LAN HTTP)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2 complete; VISION couch-first control —
+  the phone becomes a second remote. Context: #68 merged + #45 closed this session at
+  Andrew's direction.
+- **Branch / PR:** `pick/remote` — https://github.com/atiner117/omnideck/pull/69
+  (needs-hardware label kept).
+- **Changed:** both picks from draft #47 (`8a84fd7` + `23d72b8` rebind-race fix) onto
+  main `9f431e9` + TWO adaptations + one integration fix. remote.rs (std::net, zero
+  deps, off by default, urandom token constant-time compared / IPC-masked /
+  backup-stripped). Adaptations: (a) `stop` joined main's Verb-enum control() — gains
+  the 2s frozen-player timeout; (b) volume wpctl/pactl shell-outs bounded via
+  proc::output_with_timeout + has_bin fallback (were unbounded .status() — the P0
+  wedged-PipeWire class). Integration fix: synthetic remote presses set
+  EXTERNAL_ACTIVITY so a phone-driven session can't dim (only exists because #59 +
+  remote both landed). DISCARDED: a manual Config Default impl w/ config_version —
+  #10's lane content, not this feature. SIX conflicted files; Config.ts via regen
+  (23 export tests, RemoteConfig/RemoteStatus new).
+- **Verify:** bun run check (pass, 353 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (90 pass — 9 remote tests incl. hermetic loopback auth/routing matrix —
+  1 ignored) · bindings in sync. needs-hardware: phone pairing, live transport/volume/
+  nav, rebind under enable/disable cycling.
+- **Outcome:** shipped to draft PR #69 (supersedes #47 — close #47 when #69 lands).
+  WAVE 2 COMPLETE: #61–#68 merged, #69 in draft — 9 features salvaged, 1 verified
+  obsolete (#23), 41→16 open drafts since the triage began.
+- **Next candidate:** lanes #10 (config_version + Emby header + re-resolve — diff vs
+  7cdd45f first) #12 #13 #24, then the +page wave (#17 SettingDef first, strict
+  triage order). Wave 4 reworks (#41–#43) last.
+
+## 2026-08-02 10:22 — Wave 2 pick 8: sleep timer — pause playback in N minutes
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, parking-lot sleep timer; VISION couch
+  ergonomics (falling asleep to media). Context: #67 merged + #25 closed this session
+  at Andrew's direction.
+- **Branch / PR:** `pick/sleep` — https://github.com/atiner117/omnideck/pull/68
+- **Changed:** pick `42ab518` from draft #45 onto main `1291401` + ONE adaptation
+  commit. Hidden-dep check FIRST (triage's "forked from #38's tip" worry): every
+  cross-module call verified on main (sync::lock_or_recover = #48 helper) — clean.
+  sleep_timer.rs (set/cancel/get, generation-counter race-free re-arm, not persisted
+  by design), mpris::pause_all (pause-not-kill, all Playing players), SleepTimer.svelte
+  (presentational, +page wiring deferred). ADAPTATION: pause_all was written against
+  the old OnceLock CONN — rewired onto 9e7eb5b's supervised watcher via current_conn()
+  (None mid-reconnect → no-op). The triage filed that drift under #18 but it bit here —
+  caught by the gate (compile error), fixed, recorded. Conflicts: Cargo.toml tokio line
+  (kept main's — feature superset), lib.rs tail, backend.ts export line.
+- **Verify:** bun run check (pass, 351 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (81 pass — 6 new sleep-timer tests — 1 ignored) · bindings in sync ·
+  Cargo.lock clean (no new deps). needs-runtime-verify: live MPRIS pause at expiry.
+- **Outcome:** shipped to draft PR #68 (supersedes #45 — close #45 when #68 lands).
+- **Next candidate:** #47 remote (last Wave 2 feature; keep needs-hardware label;
+  gamepad.rs + mpris.rs edges — hunk-check both against the P0/supervisor changes
+  first). Then lanes #10 #12 #13 #24 and the +page wave (#17 SettingDef first).
+
+## 2026-08-02 09:28 — Wave 2 pick 7: update-check backend (GitHub latest-release probe)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #4 (check half only — acting on
+  an update stays per-distro follow-up). Hunk-checked first: zero update symbols on
+  main, genuinely live. Context: #66 merged + #27 closed this session at Andrew's
+  direction.
+- **Branch / PR:** `pick/update` — https://github.com/atiner117/omnideck/pull/67
+- **Changed:** pick `a19ad7f` from draft #25 onto main `ce6a3a8` + bindings-regen
+  commit. New update.rs (check_update(force) → UpdateInfo; process-lifetime cache for
+  the 60 req/hr unauthed API, force bypass; drafts/prereleases never offered; rides
+  http::client() with the SSRF/timeout policy, compile-time URL). settings.check_updates
+  (default true) gates the boot-time call. FIVE conflicted files, all appended-tail
+  shapes (config.rs vs PIN, lib.rs handler list, commands.rs vs backup, backend.ts
+  export line merged LiveApp+UpdateInfo, Settings.ts via regen — 20 export tests).
+- **Verify:** bun run check (pass, 349 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (75 pass — 5 new update:: tests — 1 ignored). No new deps. Live-network
+  probe deliberately not smoked headlessly (unauthed API budget); couch "Check now".
+- **Outcome:** shipped to draft PR #67 (supersedes #25 — close #25 when #67 lands).
+- **Next candidate:** #45 sleeptimer (verify no hidden dep on #38's integration tip
+  per triage) or #47 remote (needs-hardware label). Then lanes #10 #12 #13 #24 and
+  the +page wave (#17 SettingDef first).
+
+## 2026-08-01 21:02 — Wave 2 pick 6: [input] config — hold threshold + hotkey kill-switch
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #6 (input tuning). Hunk-checked
+  FIRST per the #23 lesson: InputConfig/guide_hold_ms/session_hotkeys have zero hits on
+  main, the 800ms hold is still a const, 1c2b31e's gamepad work was navpad-gating in a
+  different region — genuinely live, unlike #23. Context: #65 merged this session.
+- **Branch / PR:** `pick/input` — https://github.com/atiner117/omnideck/pull/66
+- **Changed:** pick `9e202e5` from draft #27 onto main `dac31db` + bindings-regen commit.
+  [input] table (guide_hold_ms clamped 200–5000; session_hotkeys kill-switch for the
+  Ctrl+Alt grabs); gamepad.rs reads the threshold at thread start, hotkey.rs gates its
+  grabs; read-once-at-startup documented. FIVE config.rs conflict regions (the
+  accumulated both-appended shape vs screensaver/overrides/PIN/backup) — all merged.
+  The pick's Config.ts was stale (pre-Wave-1/2 generation) — regenerated, 19 export
+  tests, new InputConfig.ts.
+- **Verify:** bun run check (pass, 348 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (70 pass — new clamp test — 1 ignored) · omnideck config smoke (pass).
+  No new deps. needs-hardware: hold-feel at custom thresholds + kill-switch in-session.
+- **Outcome:** shipped to draft PR #66 (supersedes #27 — close #27 when #66 lands).
+- **Next candidate:** #25 update-check (update.rs new — hunk-check the config.rs/
+  LiveApp.ts edges first) or #45 sleeptimer (verify no hidden dep on #38's integration
+  content per triage). Then #47 remote, lanes #10 #12 #13 #24, the +page wave (#17).
+
+## 2026-08-01 20:55 — Wave 2 pick 5 NOT PICKED: #23 verified fully superseded, closed
+- **Vision tie:** PR-TRIAGE-2026-07-26 follow-through — the triage's own "verify first"
+  discipline applied to its Wave 2 #23 row, which turned out to be wrong.
+- **Branch / PR:** `docs/triage-23` (this record + triage addendum) — no code PR; #23
+  closed instead. Context: #64 merged + #21 closed this session at Andrew's direction.
+- **Changed:** attempted the pick of `89e859b` (fsutil.rs + media_profiles conversion);
+  the conflict revealed main's media_profiles.rs ALREADY calls
+  crate::config::write_atomic at the same site — converted by `1c2b31e` (#48 deep-review
+  fixes), which was in the triage's own `c6ab9ef` baseline. Config half = `981a977`.
+  fsutil.rs is strictly weaker than main's write_atomic (no fsync of contents/dir, no
+  symlink write-through, no permission preservation; pid-only vs pid+seq temp naming).
+  Zero live content — aborted the pick, deleted the branch, closed #23 citing both
+  commits. Triage status block gains the correction + the lesson: file-level overlap
+  ≠ live content; check hunks before picking.
+- **Verify:** verification-only iteration — git log -S evidence, no build gates apply.
+- **Outcome:** #23 closed as fully superseded; triage doc corrected (this branch).
+- **Next candidate:** #27 [input] config (re-read the gamepad.rs merge — P0-hardened;
+  after the #23 lesson, check its hunks against `1c2b31e` FIRST) or #25 update-check
+  (update.rs is new — likely genuinely live). Then #45 sleeptimer, #47 remote, the
+  +page wave (#17 first).
+
+## 2026-08-01 20:42 — Wave 2 pick 4: config backup/restore, atomic + serialized
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, roadmap #5 — the "adapt to 981a977"
+  pick done as flagged, not blind. Context: #63 merged + #14 closed this session at
+  Andrew's direction.
+- **Branch / PR:** `pick/backup` — https://github.com/atiner117/omnideck/pull/64
+- **Changed:** pick `569663a` from draft #21 onto main `99d36ff` (backup_config /
+  restore_config + backend.ts wrappers; sanitized snapshots, credentials stripped by
+  default, restore re-normalizes hostile input and works from the broken-config state)
+  + TWO adaptation commits: (a) restore takes SAVE_LOCK and both paths write through
+  write_atomic — no truncated config.toml/backup possible; (b) both commands moved to
+  the blocking pool (write_atomic fsyncs — the documented blocking() class). ONE
+  conflict: config.rs tests module (fourth pick in a row with that shape) — merged.
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (68 pass — 4 new backup tests incl. hostile-backup normalization —
+  1 ignored) · export suite ran, bindings zero drift. No new deps.
+- **Outcome:** shipped to draft PR #64 (supersedes #21 — close #21 when #64 lands).
+- **Next candidate:** #23 atomic (pick ONLY the fsutil/media_profiles half — config
+  half already done by 981a977 per triage) or #27 [input] (re-read the gamepad.rs
+  merge — P0-hardened). Then #25 update-check, #45 sleeptimer, #47 remote. The +page
+  wave (#17 SettingDef first) is the remaining big block.
+
+## 2026-08-01 18:40 — Wave 2 pick 3: launcher spawn-error mapping (argv lane)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2, #6 backend (launcher robustness).
+  Context: #62 merged + #31 closed this session at Andrew's direction.
+- **Branch / PR:** `pick/argv` — https://github.com/atiner117/omnideck/pull/63
+- **Changed:** both picks from draft #14 onto main `914ac9e`: `88d8ce7` (PATH-resolve
+  pre-flight) then `3411922` (the refinement that REMOVES the pre-flight for a
+  spawn_error() helper mapping raw OS errors to actionable messages at the spawn site
+  — race-free, net −71/+33). ONE conflict: the spawn() line vs #62's override-env
+  block — kept the override block, applied spawn_error on the same spawn.
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (64 pass — new spawn_errors_map_to_clear_messages — 1 ignored).
+  Rust-only, no bindings, no new deps.
+- **Outcome:** shipped to draft PR #63 (supersedes #14 — close #14 when #63 lands).
+- **Next candidate:** #21 backup (adapt to 981a977: reuse write_atomic) or #27
+  [input] config (gamepad.rs was P0-hardened — re-read the merge per triage). After
+  the small picks: the +page wave, #17 SettingDef first.
+
+## 2026-08-01 18:31 — Wave 2 pick 2: [launch_overrides] per-tile env + args
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2; roadmap parking-lot "per-game launch
+  options", scoped to the launch_command spawn path (Steam titles keep Steam's own
+  Launch Options — documented). Context: #61 (PIN backend) merged + #19 closed this
+  session, at Andrew's direction, after all four CI checks went green.
+- **Branch / PR:** `pick/overrides` — https://github.com/atiner117/omnideck/pull/62
+- **Changed:** one pick, `6d63db2` from draft #31, onto main `d3b1fb9`:
+  [launch_overrides."<tile-id>"] table (env map + extra args), applied in
+  launch_command BEFORE the BROWSER token so browser tiles keep the URL-only argv
+  guard; normalize() drops env entries Command::env can't represent (empty/=/NUL
+  keys, NUL values). Hand-editable only; empty map serializes to nothing. THREE
+  config.rs conflicts (defaults list, normalize block, tests module vs #59+#61
+  additions) — all both-appended, kept everything. Bindings regenerated: 18 export
+  tests (new LaunchOverride.ts), zero drift.
+- **Verify:** bun run check (pass, 347 files, 0 errors) · bun run build (pass) ·
+  bun run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (63 pass — incl. NUL/'=' injection-shape drops — 1 ignored) · omnideck
+  config smoke (pass). No new deps.
+- **Outcome:** shipped to draft PR #62 (supersedes #31 — close #31 when #62 lands).
+- **Next candidate:** #14 argv PATH-resolve (small) or #21 backup (needs the same
+  "adapt to 981a977" treatment as the PIN pick — reuse write_atomic, don't duplicate).
+  The +page wave (#17 first) is the bigger prize once the small picks drain.
+
+## 2026-08-01 18:23 — Wave 2 pick 1: PIN backend (argon2) cherry-picked onto post-Wave-1 main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 2; roadmap #2 backend half — pairs with the
+  already-landed PinModal (#56). Context: Wave 1 (#54–#59) was merged 2026-07-30 at
+  Andrew's direction and the triage close-list executed (16 drafts closed, 41→25 open).
+- **Branch / PR:** `pick/pin` — https://github.com/atiner117/omnideck/pull/61
+- **Changed:** two picks from draft #19 onto main `705d96b`: `ea5def6` (new pin.rs —
+  argon2id PHC hashes, fresh salt, set_pin/verify_pin on the blocking pool; threat model
+  = deterrence, documented) + `b429c0c` (locked_categories writes PIN-gated via
+  set_locked_categories; pin_hash masked over IPC behind has_pin, cleared pre-save).
+  Conflicts: lib.rs appended-tail (kept all) + config.rs save path — kept
+  `has_pin = None`, DROPPED the pick's create_dir_all as redundant with main's
+  write_atomic (the triage's "adapt to 981a977" note, applied). New dep: argon2.
+  Bindings regenerated, 17 export tests, zero drift.
+- **Verify:** bun run check (pass, 346 files, 0 errors) · bun run build (pass) · bun run
+  test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (60 pass — 6 new pin:: tests — 1 ignored) · cargo audit (pass) · cargo deny NOT
+  runnable locally (not installed) — CI's cargo-deny job is the gate for the new dep.
+- **Outcome:** shipped to draft PR #61 (supersedes #19 — close #19 when #61 lands).
+  Also this session: #52 (triage doc, status updated) and #53 (loop inventory guard)
+  merged at Andrew's direction.
+- **Next candidate:** Wave 2 small picks: #31 [launch_overrides] (`6d63db2`, serde adds)
+  or #14 argv PATH-resolve — both small. #21 backup needs the same "adapt to 981a977"
+  treatment as this pick. Then the +page wave, #17 SettingDef first.
+
 ## 2026-07-31 22:57 — Wave 3 pick 1: table-driven Settings model (SettingDef table)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 1 — the sequenced +page.svelte cluster
   (frontend-split track, VISION priority 1) opens with #17's SettingDef table; #46 overscan
@@ -179,6 +457,45 @@ Entry template:
 - **Next candidate:** Wave 1 pick 2: #34 `omnideck logs` (`802aff6`, cli.rs + logging.rs) —
   triage says it picks cleanly before/after doctor; cli.rs now differs from #34's base, so
   expect a trivial context-line conflict at worst.
+
+## 2026-07-29 22:51 — Triage correction: "PR-less" lane branches are open drafts #9–#17
+- **Vision tie:** guardrails / landing path for the draft backlog — the 2026-07-26 triage is the
+  document Andrew will use to drain 41 open drafts, and it contained the exact mistake PR #53
+  guards against: absence claims from a partial (#18–#47) inventory.
+- **Branch / PR:** `loop/night-20260726` — https://github.com/atiner117/omnideck/pull/52 (updated
+  in place; a second competing triage doc on a fresh branch would have made things worse).
+- **Changed:** `docs/PR-TRIAGE-2026-07-26.md` only. Verified against the FULL open-PR inventory
+  (41 open, `gh pr list --state open --limit 200`): every row of the "PR-less branches" table maps
+  1:1 to drafts #9–#17 (`fable-audio`=#15, `fable-settings`=#17, `fable-frontend`=#13,
+  `fable-backend`=#12, `fable-media`=#10, `fable-argv`=#14, `fable-mpris`=#11, `fable-tokens`=#16,
+  `loop/night-20260711`=#9). Rewrote that table with the PR column; actions now read "land/close
+  the existing draft" instead of "open a PR"/"delete"; #9/#11/#16 flagged as joining the close
+  list; Wave-3 step 1 and the #35 note now point at #17/#15; header/coverage corrected from
+  "30 (#18–#47)" to "39 (#9–#47)". Cherry-pick analysis itself untouched.
+- **Verify:** docs-only — no build gates apply (bun/cargo untouched).
+- **Outcome:** shipped to existing draft PR #52 (title/body updated to match).
+- **Next candidate:** with the triage now trustworthy, start grinding Wave 1: cherry-pick #33
+  (doctor, `fc0a7b3`) onto a fresh `pick/doctor` branch off main, full Verify gate, PR that
+  supersedes #33 — one pick per iteration.
+
+## 2026-07-26 03:45 — Merge-triage of the 30 open fable drafts vs post-rewrite main
+- **Vision tie:** priority 1 (frontend-split / media-server tracks) — the tracks are blocked not
+  by missing code but by 30 unreviewable drafts stranded behind the 2026-07-19 history rewrite;
+  this unblocks them. New features tonight would only have deepened the conflict pile.
+- **Branch / PR:** `loop/night-20260726` — https://github.com/atiner117/omnideck/pull/52
+- **Changed:** new `docs/PR-TRIAGE-2026-07-26.md`. Deterministic git analysis (merge-base, tree
+  ids, file-level overlap; `git merge-tree` was sandbox-blocked, so overlap is honestly labeled a
+  conflict *superset*): all drafts root at pre-rewrite `c7c5067`, but the duplicated trunk is
+  tree-identical (`369ed3b^{tree}` == `4b9389b^{tree}`), so each PR = 1–4 cherry-pickable commits.
+  Six drafts superseded by #48 (close: #20, #22, #40, #38, #39 + mpris/tokens lanes and all of
+  `loop/night-20260711`); eight zero-overlap clean picks (#33 #34 #35 #36 #29 #37 + pairs); a
+  sequenced +page.svelte wave; two PR-less prerequisite lanes flagged (fable-audio backend for
+  #35, fable-settings SettingDef table for #44/#46).
+- **Verify:** docs-only — no build gates apply (bun/cargo untouched).
+- **Outcome:** shipped to draft PR #52.
+- **Next candidate:** if Andrew agrees with the triage, the loop can grind Waves 1–2 one
+  cherry-pick per iteration (start: #33 doctor, then #34 logs — both zero-overlap `cli.rs`
+  picks, full Verify gate each). Otherwise: `fable-audio` backend + #35 modal as one pick.
 
 ## 2026-07-13 07:15 — Phone-as-remote: authed LAN HTTP remote (parking lot)
 - **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 parking lot (phone-as-remote); VISION

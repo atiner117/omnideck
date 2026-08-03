@@ -18,6 +18,7 @@
   import { initSfx, sfxMove, sfxEnter } from "$lib/sfx";
   import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
+  import { splitArgv } from "$lib/argv";
   import type { Tile } from "$lib/tiles";
   import { SETTING_DEFS, ACCENTS, normalizeNum, type SettingDef, type CycleDef, type NumDef, type TextDef } from "$lib/settings-defs";
 
@@ -101,7 +102,7 @@
   let favorites = $state<string[]>([]);
   let recentApps = $state<string[]>([]); // app ids, most-recent-first
   let catSel = $state(1);
-  let focus = $state(0);
+  let focusRaw = $state(0); // raw cursor — read via the clamped `focus` $derived below
   let status = $state("Loading…");
   let fps = $state(0); // current (500ms window) frame rate
   let fpsAvg = $state(0); // smoothed average
@@ -283,13 +284,17 @@
     }),
   );
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
+  // The cursor clamps to the live list length as a $derived (not a write-back $effect): when
+  // the list shrinks under it (uninstall, filter change) every read sees the clamped index in
+  // the same render pass — no second render, no effect re-entry risk. Writers set focusRaw.
+  let focus = $derived(itemCount ? Math.min(focusRaw, itemCount - 1) : 0);
   // ---- windowed (virtualized) item rail ----
   // The rail translates so the focused row sits at the top of the clipped wrap, meaning only
   // ~[focus, focus + viewport-rows] can ever be on screen. Render just that slice — a small
   // margin above (upward-slide transition + the `near` fade) and a generous one below (covers a
   // 4K panel at the smallest UI scale, ~32 visible rows) — and preserve absolute row offsets
-  // with a spacer, so each keypress costs O(window), not O(library). Art loading keys off the
-  // same window: a 1,000-game library no longer fires a fetch per game at mount.
+  // with a spacer, so each keypress costs O(window), not O(library). Art AND app-icon loading
+  // key off the same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
   let winRange = $derived(railWindow(items.length, focus, WIN_ABOVE, WIN_BELOW));
   let winLo = $derived(winRange.lo);
@@ -385,7 +390,7 @@
 
   // ---- navigation (XMB: left/right = category, up/down = item) ----
   // Entry focus for the current category: settings starts past its leading section header.
-  function resetFocus() { focus = catId === "settings" && visibleSettings[0]?.type === "header" ? 1 : 0; }
+  function resetFocus() { focusRaw = catId === "settings" && visibleSettings[0]?.type === "header" ? 1 : 0; }
   function moveCat(d: number) { const n = CATEGORIES.length; catSel = (catSel + d + n) % n; resetFocus(); sfxMove(); }
   function moveItem(d: number) {
     settingsEditing = false;
@@ -396,7 +401,7 @@
       let guard = 0;
       while (visibleSettings[f]?.type === "header" && guard++ < itemCount) f = (f + d + itemCount) % itemCount;
     }
-    focus = f;
+    focusRaw = f;
     sfxMove();
   }
   function onWheel(e: WheelEvent) { e.preventDefault(); if (navGate()) moveItem(e.deltaY > 0 ? 1 : -1); }
@@ -648,7 +653,7 @@
   }
   // Mouse click on a settings row (headers aren't rendered as buttons, so they never get here).
   function settingRowClick(d: SettingDef, i: number) {
-    focus = i;
+    focusRaw = i; // focus is $derived (#72's clamp refactor) — writes go through focusRaw
     if (d.type === "num" || d.type === "text") settingsEditing = !settingsEditing;
     else if (d.type === "action") doAction(d.key);
     else if (d.type === "cycle") cycleSetting(d);
@@ -700,8 +705,14 @@
     let id = base; for (let n = 2; apps.some((a) => a.id === id); n++) id = `${base}-${n}`;
     // A bare URL (e.g. a SearXNG instance) is launched as a browser app so it opens in the
     // browser AND gets its site favicon; anything else is run as a normal argv command.
+    // The split is quote-aware (review #6) so paths with spaces work: "/My Games/app" --flag.
     const isUrl = /^https?:\/\//i.test(cmd);
-    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : cmd.split(/\s+/);
+    const argv = isUrl ? null : splitArgv(cmd);
+    if (!isUrl && (!argv || argv.length === 0)) {
+      reportError(argv ? "Command is empty" : "Unbalanced quote in command", null);
+      return; // keep the form open so the user can fix it
+    }
+    const exec = isUrl ? ["BROWSER", `--app=${cmd}`] : argv!;
     const app = { id, name, icon: fIcon || "🚀", exec, accent: "#3a4256", category: fCat };
     const next = [...apps, app];
     cfg = { ...cfg, apps: next };
@@ -711,7 +722,7 @@
   }
 
   let catalogOpen = $state(false);
-  let catFocus = $state(0);
+  let catFocusRaw = $state(0); // raw cursor — read via the clamped `catFocus` $derived below
   let catQuery = $state("");
   let catSort = $state<"group" | "alpha">("group");
   let displayedCatalog = $derived.by(() => {
@@ -719,6 +730,8 @@
     const q = catQuery.trim().toLowerCase();
     return q ? base.filter((c) => c.name.toLowerCase().includes(q)) : base;
   });
+  // clamped like `focus` above: typing in the filter shrinks displayedCatalog under the cursor
+  let catFocus = $derived(Math.min(catFocusRaw, Math.max(0, displayedCatalog.length - 1)));
 
   // ---- global search (games + apps, with a web-search fallback) ----
   let searchOpen = $state(false);
@@ -766,8 +779,8 @@
     else if (k === "⏎") searchActivate();
     else searchQuery += k;
   }
-  function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocus = 0; }
-  function catMove(d: number) { catFocus = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
+  function toggleCatalog() { holdStop(); catalogOpen = !catalogOpen; catFocusRaw = 0; }
+  function catMove(d: number) { catFocusRaw = clamp(catFocus + d, 0, displayedCatalog.length - 1); queueMicrotask(() => document.querySelector(`[data-cat="${catFocus}"]`)?.scrollIntoView({ block: "nearest" })); }
   function isAdded(id: string) { return apps.some((a) => a.id === id); }
   async function catToggle(i: number) {
     const e = displayedCatalog[i]; if (!e || !cfg) return;
@@ -1118,11 +1131,11 @@
     };
   });
 
-  $effect(() => { if (focus >= itemCount && itemCount) focus = itemCount - 1; });
-  $effect(() => { if (catFocus >= displayedCatalog.length) catFocus = Math.max(0, displayedCatalog.length - 1); });
-  // fetch site icons for visible web/app tiles + the add-apps catalog (cached on disk)
-  $effect(() => { for (const t of items) if (t.kind === "app") loadAppIcon(t.app); });
-  $effect(() => { for (const c of displayedCatalog) loadAppIcon(c); });
+  // fetch site icons for web/app tiles — windowed like game art, so a rail keypress costs
+  // O(window) and a large library doesn't fan out icon IPC for every off-screen tile
+  $effect(() => { for (const t of winItems) if (t.kind === "app") loadAppIcon(t.app); });
+  // the add-apps catalog is the one full-list pass (it's small + scrollable) — only while open
+  $effect(() => { if (!catalogOpen) return; for (const c of displayedCatalog) loadAppIcon(c); });
   // game art only for windowed rows — scrolling pulls art in just ahead of visibility
   $effect(() => { for (const t of winItems) if (t.kind === "game") loadArt(t.game); });
   // load the custom background image (data URL) when that mode is selected
@@ -1223,7 +1236,7 @@
           {#each winItems as t, wi (t.id)}
             {@const i = wi + winLo}
             <button class="xitem" class:focused={i === focus} class:near={Math.abs(i - focus) <= 4}
-              onclick={() => { focus = i; launchTile(t); }}>
+              onclick={() => { focusRaw = i; launchTile(t); }}>
               <span class="xthumb" style={t.kind === "app" ? `background:${appIcons[t.app.id] ? (iconBg[t.app.id] ?? "#f4f5f8") : t.app.accent}` : ""}>
                 {#if t.kind === "game" && art[t.game.appid]}
                   <img src={art[t.game.appid]} alt="" decoding="async" onerror={() => artError(t.game.appid)} />
@@ -1269,7 +1282,7 @@
       {appIcons}
       {iconBg}
       {isAdded}
-      onfocus={(i) => (catFocus = i)}
+      onfocus={(i) => (catFocusRaw = i)}
       ontoggle={catToggle}
       onsortswap={() => (catSort = catSort === "group" ? "alpha" : "group")}
       onclose={() => (catalogOpen = false)}
@@ -1413,7 +1426,7 @@
         <button class="cbtn" onclick={() => (formOpen = false)}>Cancel</button>
         <button class="cbtn danger" onclick={addCustom}>Add</button>
       </div>
-      <p class="phint">Command is split on spaces. Use the full path if it isn't on PATH. Esc to close.</p>
+      <p class="phint">Split on spaces; quote paths that contain them: "/My Games/app" --flag. Use the full path if it isn't on PATH. Esc to close.</p>
     </Modal>
   {/if}
 

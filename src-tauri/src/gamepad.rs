@@ -29,6 +29,28 @@ pub fn notify_activity() {
     EXTERNAL_ACTIVITY.store(true, Ordering::Relaxed);
 }
 
+/// Synthetic pad input (the phone remote, remote.rs): emit the same `gamepad-event`
+/// press/release pair a physical button produces — `code` uses gilrs debug names
+/// ("DPadUp", "South", …) so the webview's existing input handling can't tell the
+/// difference and no new frontend path is needed.
+pub fn emit_synthetic_button(handle: &tauri::AppHandle, code: &str) {
+    // Remote presses bypass gilrs, so they'd never reset the screensaver's idle clock —
+    // count them as external activity like DOM input.
+    EXTERNAL_ACTIVITY.store(true, Ordering::Relaxed);
+    for (kind, value) in [("button_pressed", 1.0), ("button_released", 0.0)] {
+        let _ = handle.emit(
+            "gamepad-event",
+            GamepadEvent {
+                kind: kind.into(),
+                code: code.into(),
+                value,
+                gamepad: "remote".into(),
+                name: "Phone Remote".into(),
+            },
+        );
+    }
+}
+
 pub fn gamepad_loop(handle: tauri::AppHandle) {
     let mut gilrs = match gilrs::Gilrs::new() {
         Ok(g) => g,
@@ -57,13 +79,16 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
     const AXIS_EPS: f32 = 0.05;
 
     // Guide/Home button, console-style: SHORT press switches between OmniDeck and the
-    // launched app (it keeps running — music keeps playing); LONG hold (>= 800 ms) closes
-    // it. The close fires the moment the hold crosses the threshold — while the button is
-    // still down, like a console power chord — not at release (M2 feedback: release-time
-    // close feels laggy and unconfirmed). The short-press switch still decides at release
-    // (that's the only way to know it STAYED short). gilrs reads evdev directly, so all of
-    // this works even while the launched app holds window focus.
-    const GUIDE_HOLD_CLOSE: std::time::Duration = std::time::Duration::from_millis(800);
+    // launched app (it keeps running — music keeps playing); LONG hold (default 800 ms,
+    // config `[input] guide_hold_ms`) closes it. The close fires the moment the hold
+    // crosses the threshold — while the button is still down, like a console power chord —
+    // not at release (M2 feedback: release-time close feels laggy and unconfirmed). The
+    // short-press switch still decides at release (that's the only way to know it STAYED
+    // short). gilrs reads evdev directly, so all of this works even while the launched app
+    // holds window focus. The threshold is read ONCE at thread start (normalize() clamped
+    // it 200–5000 ms) — a boot-time knob isn't worth config I/O on a 125 Hz loop.
+    let guide_hold_close =
+        std::time::Duration::from_millis(crate::config::load_or_create().input.guide_hold_ms);
     let mut guide_down: Option<std::time::Instant> = None; // Some = held, hold not yet fired
 
     // Virtual keyboard/mouse bridge: while a launched app is in front, the pad drives IT
@@ -188,7 +213,7 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         // already sitting in the queue must win — otherwise a ~790 ms press whose release
         // we haven't read yet would misfire as a hold. Fire the close mid-hold and consume
         // the press so the eventual release is a no-op.
-        if guide_down.is_some_and(|t| t.elapsed() >= GUIDE_HOLD_CLOSE) {
+        if guide_down.is_some_and(|t| t.elapsed() >= guide_hold_close) {
             guide_down = None;
             if crate::watchdog::return_home() {
                 tracing::info!("guide (hold): closed the current app");

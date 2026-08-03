@@ -39,6 +39,10 @@ pub struct Settings {
     pub live_wallpaper: String, // animated background: "off" | "waves" (PSP-style ribbon)
     pub ambient: bool, // synthesized ambient background music (subtle, off by default)
     pub ambient_volume: f64, // ambient music volume multiplier (0.0–1.0)
+    // Parental controls (pin.rs). Deterrence, not access control — see pin.rs header.
+    pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it; masked over IPC (see Config::has_pin).
+    pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN. Only set_locked_categories writes it (PIN-verified).
+    pub check_updates: bool, // boot-time release check (update.rs); manual check always works
 }
 
 impl Default for Settings {
@@ -70,6 +74,9 @@ impl Default for Settings {
             live_wallpaper: "waves".into(),
             ambient: false,
             ambient_volume: 0.35,
+            pin_hash: String::new(),
+            locked_categories: Vec::new(),
+            check_updates: true,
         }
     }
 }
@@ -164,11 +171,91 @@ impl Settings {
     }
 }
 
+/// `[launch_overrides.<tile-id>]` — per-tile launch tuning (roadmap parking-lot item:
+/// "per-game launch options"), hand-editable ("config is king"):
+///
+/// ```toml
+/// [launch_overrides."app:retroarch"]
+/// env = { MANGOHUD = "1" }
+/// args = ["--verbose"]
+/// ```
+///
+/// `env` is applied to the spawned process, `args` are appended to the tile's argv —
+/// custom launchers and catalog apps only (launch_command). Steam titles don't go through
+/// our spawn (`steam://rungameid` hands off to the running client), so per-game overrides
+/// for them belong in Steam's own Launch Options. Threat model: a hand-edited config can
+/// already put arbitrary argv in a custom launcher's `exec`, so env/args add no capability
+/// it didn't have; browser (BROWSER-token) tiles still pass the same URL-only argv guard,
+/// override args included.
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(default)]
+pub struct LaunchOverride {
+    /// Extra environment for the spawned process (e.g. MANGOHUD=1, WINEESYNC=1).
+    pub env: std::collections::BTreeMap<String, String>,
+    /// Extra argv appended after the tile's own exec args.
+    pub args: Vec<String>,
+}
+
+impl LaunchOverride {
+    /// Drop entries `Command::env` can't represent (empty key, '=' or NUL in the key,
+    /// NUL in the value) instead of failing the whole launch at spawn time.
+    fn normalize(&mut self) {
+        self.env.retain(|k, v| !k.is_empty() && !k.contains(['=', '\0']) && !v.contains('\0'));
+        self.args.retain(|a| !a.contains('\0'));
+    }
+}
+
+/// `[input]` — controller/hotkey tuning (parking-lot item, NOTES-DEEPDIVE-ROADMAP.md #6).
+/// Read once at startup by the gamepad and hotkey threads — changes need a relaunch (both
+/// threads park in blocking waits; re-reading per event would be config I/O at 125 Hz).
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct InputConfig {
+    /// Guide-button long-hold threshold in ms: hold this long to close the current app
+    /// (short press switches). Clamped 200–5000 — below 200 every tap "closes", above 5000
+    /// the hold reads as broken.
+    pub guide_hold_ms: u64,
+    /// Grab Ctrl+Alt+Home/End inside the gamescope session (keyboard escape hatch —
+    /// hotkey.rs). False = no global grabs, for users whose media keyboard needs the chord.
+    pub session_hotkeys: bool,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self { guide_hold_ms: 800, session_hotkeys: true }
+    }
+}
+
+impl InputConfig {
+    fn normalize(&mut self) {
+        self.guide_hold_ms = self.guide_hold_ms.clamp(200, 5000);
+    }
+}
+
+/// Current config.toml schema version. Bump when a field is removed/renamed/reshaped (added
+/// fields don't need it — `#[serde(default)]` migrates those), and branch on the file's
+/// `config_version` in `load_or_create` to migrate old shapes. No migrations exist yet;
+/// this field is the hook so version-1 files are identifiable when the first one lands.
+pub const CONFIG_VERSION: u32 = 1;
+
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
 pub struct Config {
+    /// Schema version of this file (see `CONFIG_VERSION`). First field: TOML needs plain
+    /// values emitted before tables. Absent in pre-versioning files — those deserialize to
+    /// the current version, correct while every shape change so far has been additive.
+    pub config_version: u32,
     pub settings: Settings,
+    /// `[launch_overrides]` — per-tile env/args tuning, keyed by tile id. Absent from the
+    /// generated default config (empty map serializes to nothing) — purely opt-in.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub launch_overrides: std::collections::BTreeMap<String, LaunchOverride>,
+    /// `[input]` — guide-button hold threshold + session hotkey toggle.
+    #[serde(default)]
+    pub input: InputConfig,
     /// `[media_server]` — Jellyfin browse/play integration (media_server.rs). Empty =
     /// unconfigured; the jellyfin-mpv-shim pairing is adopted as a fallback at runtime.
     #[serde(default)]
@@ -177,6 +264,10 @@ pub struct Config {
     /// frontend overlay).
     #[serde(default)]
     pub screensaver: ScreensaverConfig,
+    /// `[remote]` — phone-as-remote LAN HTTP server (remote.rs). Off by default; the
+    /// token is generated on first enable and masked over IPC like media_server.token.
+    #[serde(default)]
+    pub remote: crate::remote::RemoteConfig,
     pub apps: Vec<apps::App>,
     /// Favorited tile ids (shown on the Home category).
     pub favorites: Vec<String>,
@@ -192,6 +283,34 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional = nullable))] // absent over IPC when None
     pub config_error: Option<String>,
+    /// Whether a parental PIN is set. IPC-only (set by `get_config`, never written to disk):
+    /// the webview needs presence, not the hash — `settings.pin_hash` is masked over IPC
+    /// like `media_server.token`, since a 4–6 digit PIN is offline-crackable from its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))] // absent over IPC unless get_config sets it
+    pub has_pin: Option<bool>,
+}
+
+/// Manual impl (not derived): the container-level `#[serde(default)]` fills missing fields
+/// from this, and `config_version` must default to the CURRENT version, not the derive's 0.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            config_version: CONFIG_VERSION,
+            settings: Settings::default(),
+            media_server: Default::default(),
+            screensaver: Default::default(),
+            remote: Default::default(),
+            launch_overrides: Default::default(),
+            input: Default::default(),
+            apps: Vec::new(),
+            favorites: Vec::new(),
+            recent_apps: Vec::new(),
+            config_path: String::new(),
+            config_error: None,
+            has_pin: None,
+        }
+    }
 }
 
 /// The XDG config base: $XDG_CONFIG_HOME (when absolute), else ~/.config. Shared with
@@ -209,17 +328,22 @@ fn config_path() -> Option<PathBuf> {
 
 fn defaults() -> Config {
     Config {
+        config_version: CONFIG_VERSION,
         settings: Settings {
             onboarded: false, // a fresh install runs the onboarding wizard
             ..Default::default()
         },
         media_server: Default::default(),
         screensaver: Default::default(),
+        remote: Default::default(),
+        launch_overrides: Default::default(),
+        input: Default::default(),
         apps: apps::list(),
         favorites: Vec::new(),
         recent_apps: Vec::new(),
         config_path: String::new(),
         config_error: None,
+        has_pin: None,
     }
 }
 
@@ -260,6 +384,11 @@ pub fn load_or_create() -> Config {
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
         cfg.media_server.normalize();
         cfg.screensaver.normalize();
+        cfg.remote.normalize();
+        for ov in cfg.launch_overrides.values_mut() {
+            ov.normalize();
+        }
+        cfg.input.normalize();
         cfg.config_path = path_str;
         return cfg;
     }
@@ -343,13 +472,45 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
     }
     mutate(&mut cfg);
     cfg.config_path = String::new(); // never written to disk
+    cfg.has_pin = None; // IPC-only, never written to disk
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())
+    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())?;
+    // The media-server resolution caches the config it saw; drop it so a `[media_server]`
+    // edited into config.toml (or a future in-app editor) takes effect on the next probe
+    // instead of requiring a restart. Cheap: re-resolution is lazy, on the next server() call.
+    crate::media_server::invalidate();
+    Ok(())
 }
 
 /// Persist new settings, preserving the apps list and not writing internal fields.
+/// The parental-control fields are deliberately preserved from disk (server-authoritative):
+/// - `pin_hash` is only written by `save_pin_hash` (via the `set_pin` command, which
+///   verifies the current PIN first);
+/// - `locked_categories` is only written by `save_locked_categories` (via the
+///   `set_locked_categories` command, PIN-verified when a PIN is set) — otherwise a plain
+///   settings save could empty the locked list and unlock everything without the PIN.
+///
+/// A settings payload can therefore neither clear/replace the PIN nor change the locks.
 pub fn save_settings(settings: Settings) -> Result<(), String> {
-    mutate_and_save(|cfg| cfg.settings = settings)
+    mutate_and_save(|cfg| {
+        let pin_hash = std::mem::take(&mut cfg.settings.pin_hash);
+        let locked = std::mem::take(&mut cfg.settings.locked_categories);
+        cfg.settings = settings;
+        cfg.settings.pin_hash = pin_hash;
+        cfg.settings.locked_categories = locked;
+    })
+}
+
+/// Persist a new PIN hash (empty = lock removed). Only pin.rs::set_pin calls this,
+/// after verifying the current PIN.
+pub fn save_pin_hash(pin_hash: String) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.settings.pin_hash = pin_hash)
+}
+
+/// Persist the PIN-locked category ids. Only pin.rs::set_locked_categories calls this,
+/// after verifying the PIN (when one is set).
+pub fn save_locked_categories(locked_categories: Vec<String>) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.settings.locked_categories = locked_categories)
 }
 
 /// Persist a new apps list (used by the in-app "Add apps" catalog screen).
@@ -367,6 +528,104 @@ pub fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
     mutate_and_save(|cfg| cfg.recent_apps = recent_apps)
 }
 
+/// Persist a change to the `[remote]` table (phone-remote enable/token — remote.rs).
+pub fn update_remote(f: impl FnOnce(&mut crate::remote::RemoteConfig)) -> Result<(), String> {
+    mutate_and_save(|cfg| f(&mut cfg.remote))
+}
+
+// ---- Backup / restore (roadmap #5) ----
+//
+// config.toml accumulates curated state (custom launchers, favorites, recents, media-server
+// pairing). Backup is a sanitized TOML snapshot the user can carry between machines; restore
+// funnels the file through the same `normalize()` gates as a hand-edited config, so a crafted
+// backup can't inject anything a hand-edit couldn't.
+
+/// Prepare an in-memory config for writing to a backup file: strip the IPC-only fields and,
+/// unless the user opts in, blank the credential-shaped fields (the threat model is "the user
+/// emails themselves the zip" — see NOTES-DEEPDIVE-ROADMAP.md #5).
+fn sanitize_for_backup(mut cfg: Config, include_credentials: bool) -> Config {
+    cfg.config_path = String::new();
+    cfg.config_error = None;
+    if !include_credentials {
+        cfg.media_server.token = String::new();
+        cfg.settings.steamgriddb_key = String::new();
+        cfg.remote.token = String::new();
+    }
+    cfg
+}
+
+/// Parse + sanitize backup text. Every field goes through the same `normalize()` pass as a
+/// hand-edited config.toml, so restore is exactly as safe as editing the file by hand.
+fn parse_backup(text: &str) -> Result<Config, String> {
+    let mut cfg: Config =
+        toml::from_str(text).map_err(|e| {
+            let first = e.to_string().lines().next().unwrap_or("parse error").to_string();
+            format!("not a valid OmniDeck backup: {first}")
+        })?;
+    cfg.settings.normalize();
+    cfg.media_server.normalize();
+    cfg.remote.normalize();
+    cfg.config_path = String::new();
+    cfg.config_error = None;
+    Ok(cfg)
+}
+
+/// Write a backup of the current config.toml to `dest`. Refuses while the on-disk config is in
+/// the parse-error state (the in-memory defaults are NOT the user's config — backing them up
+/// would launder the broken state into a "good" backup). Returns the path written.
+pub fn backup_to(dest: &std::path::Path, include_credentials: bool) -> Result<String, String> {
+    if !dest.is_absolute() {
+        return Err("backup destination must be an absolute path".into());
+    }
+    let mut cfg = load_or_create();
+    if let Some(err) = cfg.config_error.take() {
+        return Err(format!("not backing up a broken config.toml — {err}"));
+    }
+    let cfg = sanitize_for_backup(cfg, include_credentials);
+    let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    // write_atomic creates the parent dir and never leaves a truncated backup.
+    write_atomic(dest, text.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Replace config.toml with the (sanitized) contents of a backup file, then return the freshly
+/// loaded config so the UI can re-render. Unlike `mutate_and_save` this intentionally works
+/// while the current config is broken — restoring a backup is exactly how the user fixes that.
+/// Credential fields left empty in the backup (the default) keep their current on-disk values,
+/// so a sanitized backup never wipes a working pairing.
+pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
+    let text = fs::read_to_string(src).map_err(|e| format!("couldn't read backup: {e}"))?;
+    let mut cfg = parse_backup(&text)?;
+
+    // Serialize with every other config write: an auto-save (recents fire on launch) racing
+    // the restore must not interleave with it. Poison-tolerant like mutate_and_save.
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Keep current credentials when the backup carries none (sanitized backups blank them).
+    let current = load_or_create();
+    if current.config_error.is_none() {
+        if cfg.media_server.token.is_empty() {
+            cfg.media_server.token = current.media_server.token;
+        }
+        if cfg.settings.steamgriddb_key.is_empty() {
+            cfg.settings.steamgriddb_key = current.settings.steamgriddb_key;
+        }
+        if cfg.remote.token.is_empty() {
+            cfg.remote.token = current.remote.token;
+        }
+    }
+
+    let path = config_path().ok_or("no config path")?;
+    let out = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    // Atomic replace: a crash mid-restore must not leave a truncated config.toml that the
+    // load path then refuses to overwrite (the exact clobber-protection deadlock).
+    write_atomic(&path, out.as_bytes()).map_err(|e| e.to_string())?;
+    // A restored backup can change [media_server] — drop the cached resolution like
+    // mutate_and_save does, so the new pairing takes effect without a restart.
+    crate::media_server::invalidate();
+    Ok(load_or_create())
+}
+
 pub fn report(cfg: &Config) -> String {
     let mut s = String::from("OmniDeck config\n");
     s.push_str(&format!("  path:    {}\n", cfg.config_path));
@@ -382,7 +641,7 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{write_atomic, ScreensaverConfig, Settings};
+    use super::{parse_backup, sanitize_for_backup, write_atomic, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION};
 
     #[test]
     fn write_atomic_creates_overwrites_and_leaves_no_temp() {
@@ -407,6 +666,127 @@ mod tests {
         assert_eq!(leftovers, vec!["config.toml".to_string()], "stray temp file left: {leftovers:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn launch_override_normalize_drops_unspawnable_entries() {
+        let mut ov = LaunchOverride::default();
+        ov.env.insert("MANGOHUD".into(), "1".into());
+        ov.env.insert("".into(), "x".into()); // empty key
+        ov.env.insert("A=B".into(), "x".into()); // '=' in key
+        ov.env.insert("NULKEY\0".into(), "x".into()); // NUL in key
+        ov.env.insert("NULVAL".into(), "x\0y".into()); // NUL in value
+        ov.args = vec!["--verbose".into(), "bad\0arg".into()];
+        ov.normalize();
+        assert_eq!(ov.env.len(), 1);
+        assert_eq!(ov.env.get("MANGOHUD").map(String::as_str), Some("1"));
+        assert_eq!(ov.args, vec!["--verbose".to_string()]);
+    }
+
+    #[test]
+    fn launch_overrides_parse_from_toml() {
+        let text = r#"
+[launch_overrides."app:retroarch"]
+env = { MANGOHUD = "1" }
+args = ["--verbose"]
+"#;
+        let cfg: super::Config = toml::from_str(text).unwrap();
+        let ov = cfg.launch_overrides.get("app:retroarch").expect("override parsed");
+        assert_eq!(ov.env.get("MANGOHUD").map(String::as_str), Some("1"));
+        assert_eq!(ov.args, vec!["--verbose".to_string()]);
+        // Empty map stays out of the serialized default config (opt-in table).
+        let out = toml::to_string_pretty(&super::Config::default()).unwrap();
+        assert!(!out.contains("launch_overrides"), "{out}");
+    }
+
+    #[test]
+    fn backup_strips_credentials_by_default() {
+        let mut cfg = Config::default();
+        cfg.settings.steamgriddb_key = "sgdb-secret".into();
+        cfg.media_server.token = "jf-secret".into();
+        cfg.remote.token = "remotesecret".into();
+        cfg.config_path = "/home/x/.config/omnideck/config.toml".into();
+        cfg.config_error = Some("boom".into());
+
+        let clean = sanitize_for_backup(cfg.clone(), false);
+        assert_eq!(clean.settings.steamgriddb_key, "");
+        assert_eq!(clean.media_server.token, "");
+        assert_eq!(clean.remote.token, "");
+        assert_eq!(clean.config_path, "");
+        assert!(clean.config_error.is_none());
+
+        let keep = sanitize_for_backup(cfg, true);
+        assert_eq!(keep.settings.steamgriddb_key, "sgdb-secret");
+        assert_eq!(keep.media_server.token, "jf-secret");
+        assert_eq!(keep.remote.token, "remotesecret");
+        assert_eq!(keep.config_path, ""); // IPC-only fields always stripped
+    }
+
+    #[test]
+    fn backup_roundtrips_through_parse() {
+        let mut cfg = Config::default();
+        cfg.settings.grid_columns = 8;
+        cfg.favorites = vec!["steam:123".into()];
+        cfg.recent_apps = vec!["app:firefox".into()];
+        let text = toml::to_string_pretty(&sanitize_for_backup(cfg, false)).unwrap();
+        let back = parse_backup(&text).unwrap();
+        assert_eq!(back.settings.grid_columns, 8);
+        assert_eq!(back.favorites, vec!["steam:123".to_string()]);
+        assert_eq!(back.recent_apps, vec!["app:firefox".to_string()]);
+    }
+
+    #[test]
+    fn restore_normalizes_hostile_backup() {
+        // A crafted backup goes through the same normalize() gates as a hand-edited config.
+        let text = r##"
+[settings]
+accent = "red; background:url(http://evil)"
+search_provider = "javascript:alert(1)"
+ui_scale_custom = 99.0
+grid_columns = 0
+"##;
+        let cfg = parse_backup(text).unwrap();
+        assert_eq!(cfg.settings.accent, "#4cc2ff");
+        assert_eq!(cfg.settings.search_provider, "");
+        assert_eq!(cfg.settings.ui_scale_custom, 3.5);
+        assert_eq!(cfg.settings.grid_columns, 1);
+    }
+
+    #[test]
+    fn restore_rejects_garbage_with_first_line() {
+        let err = match parse_backup("this is { not toml") {
+            Ok(_) => panic!("garbage should not parse"),
+            Err(e) => e,
+        };
+        assert!(err.starts_with("not a valid OmniDeck backup:"), "{err}");
+        assert_eq!(err.lines().count(), 1, "error should be toast-sized: {err}");
+    }
+
+    #[test]
+    fn input_config_clamps_hold_threshold() {
+        let mut i = InputConfig { guide_hold_ms: 50, ..Default::default() };
+        i.normalize();
+        assert_eq!(i.guide_hold_ms, 200); // a tap must never read as a "close" hold
+
+        let mut i = InputConfig { guide_hold_ms: 60_000, ..Default::default() };
+        i.normalize();
+        assert_eq!(i.guide_hold_ms, 5000);
+
+        let mut i = InputConfig::default();
+        i.normalize();
+        assert_eq!(i.guide_hold_ms, 800); // default untouched
+        assert!(i.session_hotkeys);
+    }
+
+    #[test]
+    fn config_version_defaults_to_current_and_serializes_first() {
+        // Pre-versioning files (no config_version key) read as the current version.
+        let c: Config = toml::from_str("").unwrap();
+        assert_eq!(c.config_version, CONFIG_VERSION);
+        assert_eq!(Config::default().config_version, CONFIG_VERSION);
+        // And it must serialize as a plain value BEFORE any [table] — toml errors otherwise.
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(text.starts_with(&format!("config_version = {CONFIG_VERSION}")), "{text}");
     }
 
     #[test]

@@ -13,6 +13,37 @@ the next one.
    recent iterations did and their "next candidate" notes). Skim the relevant `NOTES-*.md` for the
    area you're about to touch.
 
+   Then **inventory every open PR — all of them, before you choose anything:**
+   ```bash
+   # --limit high enough to never truncate; note the count, it's your denominator
+   gh pr list --state open --limit 200 --json number --jq 'length'
+   gh pr list --state open --limit 200 --json number,title,headRefName,baseRefName \
+     --jq '.[] | "\(.number)\t\(.headRefName)\t\(.title)"'
+   ```
+   There is a deep backlog of *unmerged* drafts. Because they never landed, their features do not
+   exist on `main` — so `VISION.md` and the roadmap will read as though the work is still open when
+   a finished draft is already sitting there. **An open PR's title outranks the roadmap docs**, which
+   are gitignored (`.gitignore:28`) and have been found stale before.
+
+   Rules for using that inventory:
+   - **Never narrow the range and then draw a conclusion about absence.** It is fine to *analyse* a
+     subset — it is never fine to say "no PR exists for X" from a subset. Absence claims require the
+     full list.
+   - Before writing that any lane, feature, or branch has no PR, **search the full inventory for it
+     by name** and show what you searched:
+     ```bash
+     gh pr list --state open --limit 200 --search '<lane-or-branch-keyword>' \
+       --json number,title,headRefName --jq '.[] | "\(.number)\t\(.headRefName)\t\(.title)"'
+     ```
+   - If you report on a subset, **state the subset and the total** ("triaged #18–#47; 39 open in
+     total, #9–#17 not covered") so nobody mistakes partial coverage for complete coverage.
+   - If a candidate increment already has an open PR, **do not reimplement it** — pick something
+     else, or write up the landing path for the existing one.
+
+   > This exists because the 2026-07-26 iteration triaged #18–#47, silently dropped #9–#17, and
+   > concluded the `fable-audio` and `fable-settings` lanes had "no PR" and should have PRs opened —
+   > when those lanes *are* PRs #15 and #17. Following that would have opened duplicates.
+
 2. **Propose one increment.** Choose the single highest-value change that advances a VISION.md
    priority and is **shippable and verifiable tonight**. Small and coherent — one concern. Prefer a
    "next candidate" left by the previous iteration if it still makes sense.
@@ -68,6 +99,9 @@ the next one.
    logged."
 
 ## Hard rules
+- **No absence claim from a partial search.** "There is no PR / no test / no implementation for X"
+  is only publishable after searching the *complete* set, and you must show the search. If you only
+  looked at part of it, say what you didn't look at instead.
 - `main` is untouchable: no direct commits, no merge, no force-push.
 - One increment per iteration; if in doubt, smaller.
 - The gate is **green build**, not elapsed time. If an increment runs long, commit it as WIP on the
