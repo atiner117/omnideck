@@ -20,6 +20,30 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 22:52 — Wave 3 pick 1 REFRESHED: #60 (SettingDef) updated across 13 merges
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 1 — kept mergeable. Process note:
+  a PARALLEL iteration had already opened PR #60 (2026-07-31, based on post-#59 main);
+  this session nearly opened a duplicate — the #53 lesson (full inventory before
+  absence claims) applies to sessions too, caught here by a stale-branch collision.
+  Updated #60 in place per the 07-29 precedent. Context: #72 merged + #13/#24 closed
+  this session at Andrew's direction — all lane drafts (#9–#17) now drained.
+- **Branch / PR:** `pick/settings` — https://github.com/atiner117/omnideck/pull/60
+  (updated in place; branch is checked out in the main workspace — pushed to the ref
+  from a detached worktree HEAD).
+- **Changed:** merged main (through #72 — Wave 2 + all three lane picks) into the
+  branch. ONE +page.svelte conflict: the settings-row onclick — kept the port's
+  settingRowClick extraction, rewired `focus = i` → `focusRaw = i` (#72 made focus
+  $derived; a write to it would fail svelte-check). night-log slotted chronologically
+  (the 07-31 entry sits between the Aug-1 and Jul-30 blocks).
+- **Verify:** bun run check (pass, 356 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — ritual, no Rust changes).
+- **Outcome:** #60 refreshed and green — ready for Andrew's review. The +page wave's
+  step 1 is mergeable again.
+- **Next candidate:** merge #60, then #26 deck (`bd4bfe3` DeckSwitcher extraction) —
+  fresh conflict check against post-#60 main; the wave stays strictly sequential
+  (#26 → #30 → #32 (+7a3be33) → #28 → #46 → #44).
+
 ## 2026-08-02 22:44 — Lane pick 3: fable-frontend + quotesplit (launch token superseded)
 - **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE (icon fetch
   was O(library) at mount) + launcher UX (paths with spaces). Deliberately landed
