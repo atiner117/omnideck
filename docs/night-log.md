@@ -20,6 +20,36 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-03 10:47 — Wave 3 pick 3: MediaNav extraction (neighbour check caught a regression)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 3 — the +page.svelte cluster
+  (frontend-split track). Context: #74 merged + #26 closed this session at Andrew's
+  direction.
+- **Branch / PR:** `pick/medianav` — https://github.com/atiner117/omnideck/pull/75
+- **Changed:** `38e2ec2` from draft #30 onto main `cd6f44c`. medianav.svelte.ts new
+  (+95): MediaNav class owns open/loading/stack/focus/posters; page keeps input
+  routing, status toast, Now-Playing cards, error reporting — injected as
+  onerror/onplay/holdstop. +page −98. THE #74 LESSON PAID OFF — read both removed
+  regions in full instead of trusting the pick's boundaries, found TWO problems:
+  (1) the pick's onplay keys the NP card `media-${id}`, but main uses the per-LAUNCH
+  key the backend RETURNS (`media-<id>#<seq>`) — taking the pick verbatim would have
+  silently regressed the exact fix that superseded #13's launch-token commit (replay
+  shares a key → first exit clears the live card). Rewrote the callback, carried
+  main's explanatory comment. (2) the pick's overlay-active expression predates #48's
+  NP transport overlay and omits `npOpen` — would have stopped the transport
+  suppressing rail input. Kept npOpen + took the mediaNav.open rename. Verified the
+  module carries main's newer behaviors (pct/series subtitle, resume/latest dedup)
+  BEFORE dropping the inline code.
+- **Verify:** bun run check (pass, 358 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — ritual). Zero stale mediaOpen/mediaStack/mediaFocus/
+  mediaLoading refs left. No bindings, no deps.
+  needs-session-verify: drill-down/back/play against live Jellyfin from the couch.
+- **Outcome:** shipped to draft PR #75 (supersedes #30 — close #30 when #75 lands).
+- **Next candidate:** #32 form (`95dc85d` LauncherForm extraction) PLUS `7a3be33`
+  (the quote-split carry-fix — now applicable since #72 landed argv.ts). Same
+  discipline: read whole removed regions. Then #28 router (biggest +page rewrite,
+  everything later assumes it) → #46 overscan → #44 layouts.
+
 ## 2026-08-03 06:14 — Wave 3 pick 2: DeckSwitcher extraction (CSS-neighbour trap)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 2 — the +page.svelte cluster
   (frontend-split track, VISION priority 1). Context: #60 merged + #17 closed this
