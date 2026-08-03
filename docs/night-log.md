@@ -20,6 +20,35 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 23:00 — Wave 3 step 1 re-issued: SettingDef port refreshed onto post-lane main
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 1 (frontend-split track, VISION
+  priority 1) — the wave's opening pick must be mergeable before #26 deck can follow.
+  Context: #71 and #72 merged during this session; #60 went CONFLICTING (its base
+  `705d96b` predates the six lane merges; #72's derived-clamp refactor rewrote the
+  settings row click path #60 also touches).
+- **Branch / PR:** `pick/settings2` — https://github.com/atiner117/omnideck/pull/73
+  (supersedes #60 AND #17 — close both when it lands; #60's title marked).
+- **Changed:** #60's port re-resolved by hand onto main `378b067`: settings-defs.ts
+  byte-identical; +page.svelte collapse re-applied hunk-by-hunk onto main's file. ONE
+  real overlap: settingRowClick writes `focusRaw` now (focus is a read-only $derived
+  since #72). Proof of fidelity: diff of the result vs #60's tip shows ONLY main-side
+  changes. #60's night-log entry carried into the log in date order. Why a new PR:
+  sandbox blocks every merge-commit route (`git merge`/`cherry-pick`/`write-tree`/
+  MERGE_HEAD writes — all denied); a plain commit onto pick/settings would pollute
+  #60's review diff with ~3.2k already-merged lines, so the repo's supersede pattern
+  won. Branch built via tmp-commit + `git checkout <sha> -- <paths>` + `git branch -f`
+  restore of pick/settings to its pushed tip.
+- **Verify:** bun run check (pass, 356 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo check (clean; Rust tree byte-identical to merged main).
+  No bindings, no deps.
+- **Outcome:** shipped to draft PR #73.
+- **Next candidate:** Wave 3 step 2: #26 DeckSwitcher extraction (`bd4bfe3`) onto a
+  `pick/deck` branch off post-#73 main — expect the same hand-merge treatment: main's
+  deck flow gained #48's freeze/LAST_HIDE handling and #71's pooled X11 since the
+  draft. Strict order holds: #26 → #30 → #32 (+7a3be33) → #28 → #46 → #44. If #73
+  isn't merged yet, still branch off main and hunk-check — the deck extraction's
+  +page surface barely overlaps the settings region.
+
 ## 2026-08-02 22:44 — Lane pick 3: fable-frontend + quotesplit (launch token superseded)
 - **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE (icon fetch
   was O(library) at mount) + launcher UX (paths with spaces). Deliberately landed
