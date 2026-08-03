@@ -20,6 +20,31 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-02 17:53 — Lane pick 2: fable-backend — pooled X11 connection (half superseded)
+- **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; NOTES-PERFORMANCE posture — the
+  navpad polls any_app_visible ~3x/s and paid a fresh X connect+auth per poll. Context:
+  #70 merged + #10 closed this session at Andrew's direction.
+- **Branch / PR:** `pick/x11` — https://github.com/atiner117/omnideck/pull/71
+- **Changed:** hunk-check split the lane: `ca208ee` (VapourSynth re-probe) SUPERSEDED
+  by 1c2b31e's refined version — THIRD lane item that commit pre-empted; only
+  `e564ced` (pooled X11) live. Picked it + one completion commit. with_x11 (liveness
+  round-trip on reuse, transparent reconnect; hotkey thread keeps its own conn —
+  wait_for_event would wedge a shared one). Merge care: main's #48 deck-flow logic won
+  everywhere (early-exit, freeze/LAST_HIDE snapshot, find-first + map-before-thaw) —
+  only the pooling structure taken from the pick; premature-resume ordering discarded.
+  Completion: deck_cancel (born in #48) converted too, connect-first ordering kept.
+  Mid-resolution cargo check used to arbitrate before committing.
+- **Verify:** bun run check (pass, 353 files, 0 errors) · bun run build (pass) · bun
+  run test (13 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — 1 ignored). Rust-only, no bindings, no new deps.
+  needs-session-verify: deck open/pick/cancel cycles over the pooled conn —
+  packaging/test-session.sh covers exactly these paths.
+- **Outcome:** shipped to draft PR #71 (supersedes #12 — close #12 when #71 lands).
+- **Next candidate:** #13 frontend polish (focus-clamp refactor, icon-load windowing,
+  launch token — triage flags launch-token may collide with f176d25's per-launch
+  instance ids: hunk-check) and #24 quotesplit — both touch +page edges; consider
+  folding into the +page wave instead. #17 SettingDef starts Wave 3 proper.
+
 ## 2026-08-02 12:48 — Lane pick 1: fable-media — re-resolve, mpv token header, config_version
 - **Vision tie:** PR-TRIAGE-2026-07-26 remaining lanes; media-server track reliability.
   Context: #69 merged + #47 closed this session at Andrew's direction — Wave 2 fully
