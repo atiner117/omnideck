@@ -20,6 +20,34 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-03 06:14 — Wave 3 pick 2: DeckSwitcher extraction (CSS-neighbour trap)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 2 — the +page.svelte cluster
+  (frontend-split track, VISION priority 1). Context: #60 merged + #17 closed this
+  session; #73 (a parallel session's re-issue of the same SettingDef port) closed in
+  favor of #60 after diffing both heads — functionally identical, only an explanatory
+  comment differed. #73 existed because that sandbox blocked merge commits entirely;
+  this session could merge, so #60 kept the cleaner artifact.
+- **Branch / PR:** `pick/deck` — https://github.com/atiner117/omnideck/pull/74
+- **Changed:** `bd4bfe3` from draft #26 onto main `ba1a118`. DeckSwitcher.svelte new
+  (+82), +page −54; page keeps state/input routing, passes apps/focus/iconFor +
+  callbacks. ONE conflict, and a TRAP: the pick deletes the deck CSS block, but since
+  July that block gained a neighbour — #48's Now Playing transport styles
+  (.np-scrim/.np-transport/.np-t-*) sit INSIDE the removed span. Taking the pick's
+  side wholesale would have silently deleted the transport overlay's stylesheet.
+  Split the region: deck rules dropped, NP rules kept; verified both ways (component
+  has 11 deck rules + 0 NP; page has 0 deck + 4 np-t). A11y: the component carries
+  its own prefers-reduced-motion rule.
+- **Verify:** bun run check (pass, 357 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — ritual, no Rust changes). No bindings, no deps.
+  needs-session-verify: deck open/pick/close behavior — packaging/test-session.sh.
+- **Outcome:** shipped to draft PR #74 (supersedes #26 — close #26 when #74 lands).
+- **Next candidate:** #30 medianav (`38e2e2c` MediaNav browse-state extraction) —
+  fresh conflict check against post-#74 main; the wave stays sequential
+  (#30 → #32 (+7a3be33) → #28 router → #46 overscan → #44 layouts). LESSON for the
+  remaining extractions: each removed span may have accreted neighbours since July —
+  read the WHOLE removed region, don't trust the pick's boundaries.
+
 ## 2026-08-02 22:52 — Wave 3 pick 1 REFRESHED: #60 (SettingDef) updated across 13 merges
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 1 — kept mergeable. Process note:
   a PARALLEL iteration had already opened PR #60 (2026-07-31, based on post-#59 main);
