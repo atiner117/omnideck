@@ -20,6 +20,39 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the
+  triage's own note says "everything later assumes it". Context: #76 merged + #32
+  closed this session at Andrew's direction.
+- **Branch / PR:** `pick/router` — https://github.com/atiner117/omnideck/pull/77
+- **Changed:** `8b4f268` from draft #28 onto main `3ff9090`. Three parallel input
+  paths (keyboard chain, pad chain, stick handling) collapse into ONE ordered OVERLAYS
+  roster; each entry declares open()+key/pad/stickX/stickY; anyModal derives from the
+  roster instead of a hand-synced 11-term boolean. FOUR conflict regions; took the
+  roster architecture, then repaired it — THE ROSTER IS A CLOSED LIST, so an overlay
+  missing from it is INPUT-DEAD, not merely unstyled:
+  (1) `npOpen` (the #48/bcfeb03 Now Playing transport) had NO entry — the pick predates
+  it. As-is the transport would render but ignore keyboard AND pad, and roster-derived
+  anyModal would stop suppressing rail input so arrows would scroll the grid behind it.
+  Added the entry with main's handlers verbatim at INDEX 1, matching the pre-roster
+  precedence (deck → np → wizard).
+  (2) the media entry still called the pre-#75 free functions — rewired onto the
+  MediaNav class (.open/.move/.activate/.back incl. stickY).
+  Audited the other nine 1:1 against main's anyModal; no orphaned `if (npOpen)` block
+  survived. Screensaver/remote need no entry BY DESIGN (layout-mounted self-listener;
+  synthetic gamepad-events through the normal pad path).
+- **Verify:** bun run check (pass, 359 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — ritual). No bindings, no deps.
+  needs-session-verify PRIORITY: this reshapes the whole input layer — test-session.sh
+  covers deck/pick/close; NP transport + wizard + OSK-in-search want a real controller.
+- **Outcome:** shipped to draft PR #77 (supersedes #28 — close when it lands).
+- **Next candidate:** #46 overscan (`126517f`,`20d82e1`) then #44 layouts
+  (`6af24bb`,`5c0a042`) — both were AUTHORED against this router, so post-#77 main is
+  much closer to their intended base than anything earlier in the wave was. Then Wave 4
+  reworks (#41 themes / #42 resume / #43 artcache) and #39's last loose commit
+  `0dabfea` (L2/R2 synthesis, needs-hardware).
+
 ## 2026-08-03 11:26 — Wave 3 pick 4: LauncherForm extraction + the #39 carry-fix
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 4 — the +page.svelte cluster. Also
   lands one of the two loose commits the triage flagged on #39's branch (`7a3be33`),
