@@ -20,6 +20,37 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-03 11:26 — Wave 3 pick 4: LauncherForm extraction + the #39 carry-fix
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 4 — the +page.svelte cluster. Also
+  lands one of the two loose commits the triage flagged on #39's branch (`7a3be33`),
+  applicable now that #72 put argv.ts on main. Context: #75 merged + #30 closed this
+  session at Andrew's direction.
+- **Branch / PR:** `pick/form` — https://github.com/atiner117/omnideck/pull/76
+- **Changed:** `95dc85d` + `7a3be33` onto main `1dedf1d`. LauncherForm.svelte new
+  (+72); page keeps persistence + collision toast; .confirm-btns/.cbtn move to
+  Modal.svelte's shared vocabulary, .frow into the component; +page −62. Carry-fix
+  swaps the component's `cmd.split(/\s+/)` for splitArgv (restoring what main's inline
+  addCustom did). SIX conflict regions read in full — TWO neighbour findings:
+  (1) the pick predates fa6fe2c's design tokens and hardcodes #7e8aa0/#1b2540/#2c3a5c/
+  #cdd7e6/#9fb0c8 in Modal.svelte — ported its NEW rules onto var(--surface)/
+  var(--border)/var(--text-soft)/var(--text-muted)/var(--text-dim), each mapping
+  checked against the :root block, instead of reintroducing raw hex; (2) `7a3be33`'s
+  SECOND half restores the old ebanner/bootBanner + an inline libErr line — superseded
+  by #48's durable bootErrors panel (6208ef8, the commit that killed draft #22), and
+  libErr doesn't exist on main. Kept main's panel; took only the quote-split half.
+  Verified the component carries main's slug hardening + numeric de-dup verbatim, that
+  the 10 remaining .cbtn uses sit inside <Modal>, and .frow has zero uses left.
+- **Verify:** bun run check (pass, 359 files, 0 errors) · bun run build (pass) · bun
+  run test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test
+  --release (91 pass — ritual). No bindings, no deps.
+  needs-session-verify: adding a launcher with a quoted path from the couch.
+- **Outcome:** shipped to draft PR #76 (supersedes #32 — close when it lands). #39's
+  other loose commit `0dabfea` (L2/R2 synthesis) still pending — needs-hardware.
+- **Next candidate:** #28 router (`8b4f268`) — the BIGGEST +page rewrite; everything
+  after it assumes the unified overlay roster. Expect many regions; the neighbour
+  discipline matters most here (main has gained npOpen, bootErrors, mediaNav.open,
+  DeckSwitcher, screensaver + remote overlays since July). Then #46 → #44.
+
 ## 2026-08-03 10:47 — Wave 3 pick 3: MediaNav extraction (neighbour check caught a regression)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 3 — the +page.svelte cluster
   (frontend-split track). Context: #74 merged + #26 closed this session at Andrew's
