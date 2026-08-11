@@ -94,7 +94,11 @@
      DOM position; calibration's whole job is clean edges, so it must paint on top.
      If a new surface ever needs to beat this, bump deliberately — don't tie. */
   .ovcal {
-    position: fixed; inset: 0; z-index: 50;
+    /* 65: above the durable boot-error panel (60), which mounts at top:5vh — right over the
+       top edge markers this screen exists to show — and below the toasts (70), which main
+       documents as "must clear every overlay". The original fix said 50, enough to beat the
+       old .ebanner it was written against; that banner was replaced by the z-60 panel. */
+    position: fixed; inset: 0; z-index: 65;
     background: #05070b; /* opaque: the frame/markers must be the only thing near the edges */
     display: grid; place-items: center;
     color: #eef2f8; outline: none;
