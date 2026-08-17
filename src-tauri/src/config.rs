@@ -116,6 +116,34 @@ impl ScreensaverConfig {
     }
 }
 
+/// `[appearance]` — presentation options that sit above the per-widget `[settings]` knobs
+/// (library layout now; theme/accent are planned to join it). Additive: an existing
+/// config.toml without the section deserializes to the defaults below.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct Appearance {
+    /// Library presentation: "rail" (XMB cascade, default) | "grid" (large poster grid)
+    /// | "grid-compact" (denser grid) | "list" (rows with details).
+    pub layout: String,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self { layout: "rail".into() }
+    }
+}
+
+impl Appearance {
+    /// Reset an unknown hand-edited layout to the default so the UI's render switch and
+    /// the 2D nav math never see an unexpected value.
+    fn normalize(&mut self) {
+        if !matches!(self.layout.as_str(), "rail" | "grid" | "grid-compact" | "list") {
+            self.layout = "rail".into();
+        }
+    }
+}
+
 /// True for a `#rrggbb` hex color — the only form the UI emits and CSS needs.
 fn is_hex6(s: &str) -> bool {
     let b = s.as_bytes();
@@ -249,6 +277,9 @@ pub struct Config {
     /// the current version, correct while every shape change so far has been additive.
     pub config_version: u32,
     pub settings: Settings,
+    /// `[appearance]` — library layout (and, later, theme). Additive with defaults.
+    #[serde(default)]
+    pub appearance: Appearance,
     /// `[launch_overrides]` — per-tile env/args tuning, keyed by tile id. Absent from the
     /// generated default config (empty map serializes to nothing) — purely opt-in.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -298,6 +329,7 @@ impl Default for Config {
         Self {
             config_version: CONFIG_VERSION,
             settings: Settings::default(),
+            appearance: Default::default(),
             media_server: Default::default(),
             screensaver: Default::default(),
             remote: Default::default(),
@@ -333,6 +365,7 @@ fn defaults() -> Config {
             onboarded: false, // a fresh install runs the onboarding wizard
             ..Default::default()
         },
+        appearance: Default::default(),
         media_server: Default::default(),
         screensaver: Default::default(),
         remote: Default::default(),
@@ -382,6 +415,7 @@ pub fn load_or_create() -> Config {
             }
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
+        cfg.appearance.normalize();
         cfg.media_server.normalize();
         cfg.screensaver.normalize();
         cfg.remote.normalize();
@@ -501,6 +535,11 @@ pub fn save_settings(settings: Settings) -> Result<(), String> {
     })
 }
 
+/// Persist new appearance options (library layout), preserving everything else.
+pub fn save_appearance(appearance: Appearance) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.appearance = appearance)
+}
+
 /// Persist a new PIN hash (empty = lock removed). Only pin.rs::set_pin calls this,
 /// after verifying the current PIN.
 pub fn save_pin_hash(pin_hash: String) -> Result<(), String> {
@@ -563,6 +602,7 @@ fn parse_backup(text: &str) -> Result<Config, String> {
             format!("not a valid OmniDeck backup: {first}")
         })?;
     cfg.settings.normalize();
+    cfg.appearance.normalize();
     cfg.media_server.normalize();
     cfg.remote.normalize();
     cfg.config_path = String::new();
@@ -641,7 +681,19 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_backup, sanitize_for_backup, write_atomic, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION};
+    use super::{parse_backup, sanitize_for_backup, write_atomic, Appearance, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION};
+
+    #[test]
+    fn appearance_normalize_resets_unknown_layout() {
+        let mut a = Appearance { layout: "mosaic".into() };
+        a.normalize();
+        assert_eq!(a.layout, "rail");
+        for ok in ["rail", "grid", "grid-compact", "list"] {
+            let mut a = Appearance { layout: ok.into() };
+            a.normalize();
+            assert_eq!(a.layout, ok);
+        }
+    }
 
     #[test]
     fn write_atomic_creates_overwrites_and_leaves_no_temp() {
