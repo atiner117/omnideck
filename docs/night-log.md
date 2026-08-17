@@ -20,6 +20,54 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-16 23:10 — Wave 3 pick 7 (LAST): library view modes — rail / grid / list
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 7, the final item in the +page
+  wave (frontend-split track, VISION priority 1). Closes out the wave that ran
+  #26 → #30 → #32 → #28 → #46 → #44. Context: #78 (overscan, step 6) is still
+  OPEN and unmerged — branched off main anyway per the #73 precedent, see the
+  collision note below.
+- **Branch / PR:** `pick/layouts` — https://github.com/atiner117/omnideck/pull/79
+  (supersedes #44 — close it when this lands).
+- **Changed:** #44's `6af24bb` + `5c0a042` onto main `f1e04c7`. New additive
+  `[appearance]` config section (`layout`: rail | grid | grid-compact | list) with
+  a `save_appearance` command; four new frontend files (GridView, ListView,
+  LayoutPicker, layouts.ts — the last is pure 2D nav math). The page stays the
+  single owner of `focus` + input routing, so every input path works in every
+  mode. `settings.grid_columns` — previously dead — becomes the grid density knob.
+  **FOUR repairs**, all for main-side changes the pick predates:
+  (1) `focus` is a read-only `$derived` since #72's clamp refactor — the pick's
+  three `focus = ` writes would not have compiled; routed through `focusRaw`.
+  (2) `save_settings` is `async` + `blocking()` on main (I/O off the main thread);
+  `save_appearance` follows that shape, not the pick's sync one.
+  (3) main added a manual `impl Default for Config` that the container-level
+  `serde(default)` fills missing fields from — caught by the compiler; without the
+  `appearance` line the additive-default promise breaks for existing configs.
+  (4) main added `parse_backup()`, a SECOND normalize path whose doc comment
+  promises every field is sanitized like a hand-edited config. The pick only
+  normalized in `load_or_create` (parse_backup did not exist yet), so a restored
+  backup could smuggle `layout = "mosaic"` past the check. Added there too.
+  Rail is the default and renders byte-identical to today.
+- **Verify:** bun run check (pass, 364 files, 0 errors) · bun run build (pass) ·
+  bun run test (21 pass) · cargo clippy --release --all-targets -D warnings (pass)
+  · cargo test --release (93 pass, 1 ignored — was 91: +1 layout-normalize test,
+  +1 binding export). Bindings regenerated; `diff -rq` of the generated set vs
+  `src/lib/bindings` is clean. No new deps.
+  needs-hardware: grid density/readability at 10 feet and the 2D nav feel on a
+  real pad — the whole point of the feature is something only a TV can judge.
+- **Outcome:** shipped to draft PR #79.
+- **COLLISION NOTE for Andrew:** #78 and #79 are both off `f1e04c7` and both add
+  a settings row + a config field. Whichever merges SECOND will want a trivial
+  refresh in `settings-defs.ts`, `config.rs` (`Config` struct + both `Default`
+  and `defaults()` sites) and a bindings regen. Merging #78 first is the smaller
+  fixup. Nothing else overlaps — overscan touches `<main>`'s CSS var, layouts
+  touches the item-render branch.
+- **Next candidate:** Wave 3 is DONE once #78 + #79 land. Next is **Wave 4**: the
+  round-2 lanes — #41 themes (its `tokens.css` is what `5c0a042` tokenized
+  GridView/ListView for, so it now has a consumer and lands cleanly), then #42
+  Continue Watching, then #43 artwork disk cache. Take #41 first: #43 and #44's
+  tokens both assume it. Also still loose: #39's `0dabfea` (L2/R2 synthesis,
+  needs-hardware).
+
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the
   triage's own note says "everything later assumes it". Context: #76 merged + #32
