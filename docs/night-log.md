@@ -20,6 +20,64 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-18 23:03 — Wave 4 pick 2: Continue Watching actually resumes
+- **Vision tie:** VISION priority 2 / round-2 backlog **Lane B** (resume + watched state) — the
+  "#80 log named #42 as next" candidate, taken as planned.
+- **Branch / PR:** `pick/resume` — https://github.com/atiner117/omnideck/pull/81
+  (adapts #42; supersedes it — close #42 when this lands).
+- **Open-PR inventory:** **8 open, all read before choosing** — #80, #79, #78 (the last three
+  nights' picks, all off `f1e04c7`), and #46, #44, #43, #42, #41 (the original `fable-*` drafts).
+  No subset. #42 is the only PR touching resume/watched state; this adapts it rather than
+  duplicating it.
+- **THE FINDING that reshaped the increment:** main *looks* like it already has Continue
+  Watching — `medianav.svelte.ts:51` builds a `"Continue watching"` group out of
+  `sections.resume`. It is a **facade**: `activate()` calls `onplay(r.id, r.name)` with no
+  position, `media_play` had no position parameter, and `MediaItem` never carried one. **Picking
+  a half-watched film off that row restarts it from 0:00 on main today.** So the valuable
+  increment was not #42's new parallel rail — it was making the rail main already ships do the
+  thing its label promises.
+- **Changed:** `MediaItem` += `position_secs` (100 ns ticks → whole secs, **0 ticks collapses to
+  None** so a never-started item can't ask mpv to seek) + `played`; `media_play(start_secs)` →
+  mpv `--start=`, pushed LATE in the argv so it beats `mpv_args`/the profile include (mpv: last
+  occurrence rules — per-launch intent should outrank a config default); `MediaRow` += `startSecs`
+  /`played`, threaded through `onplay` → `api.mediaPlay`; resumable rows read **"N min left"**
+  instead of total runtime; `MediaModal` shows a ✓ for watched items (`role="img"` + `aria-label`,
+  so it joins the row's accessible name instead of being a bare decorative glyph). Browse rows get
+  no `startSecs` — a series/season has no position of its own.
+  `mpv_start_flag` rejects NaN/inf/sub-second **and negative** — a negative `--start` is
+  *end-relative* in mpv, so a stray −30 would have seeked 30 s from the END of the film.
+- **FIVE things deliberately NOT taken from #42** (it was authored against a far older main):
+  (1) `valid_id`, the bounded transport retry, the non-poisoning `user()` cache, and the
+  `browse`/`poster` id gates — **all four landed on main independently since**, so re-applying
+  them is a no-op or a conflict; (2) its `sections()` rewrite onto shared path builders — #42's
+  `sections()` is **serial** with `unwrap_or_default()`, main's is concurrent `tokio::join!` with
+  per-section warn logging, so taking it would have **regressed** main; (3)
+  `ContinueWatchingRow.svelte` — a second, self-fetching rail duplicating the group `MediaModal`
+  already renders, which #42 never mounts, so it would land as dead code; (4) `tokio = { features
+  = ["time"] }` — needed only for #42's 250 ms retry sleep, and main's retry doesn't sleep, so
+  **no new dep**; (5) `get_recently_added` — `media_sections` already returns `latest` and nothing
+  consumed the new command.
+- **Verify:** bun run check (pass, 359 files, 0 errors) · bun run build (pass) · bun run test
+  (21 pass) · cargo clippy --release --all-targets -D warnings (pass) · cargo test --release
+  (**94 pass**, 1 ignored — was 91: +3). Bindings regenerated; `diff -rq` vs the generated set
+  clean. No new deps.
+  needs-hardware: not verified against a live Jellyfin server. The `UserData` shape is the same
+  one `played_pct` already reads in-tree, but *mpv landing on the right frame* wants one couch
+  test — resume is the feature you notice instantly when it's off by a scene.
+- **Outcome:** shipped to draft PR #81.
+- **COLLISION NOTE for Andrew:** #78/#79/#80/#81 are all off `f1e04c7`. #81 is the *least*
+  entangled of the four — it touches no `settings-defs.ts` row and no config field, so its only
+  expected conflict is the `docs/night-log.md` prepend point it shares with #79/#80. Merge order
+  doesn't matter for it.
+- **Next candidate:** the natural pair to this one — **mark-watched from the couch**: `set_played`
+  on `JellyfinServer` (POST/DELETE `/Users/{u}/PlayedItems/{id}`, both idempotent) plus
+  `mark_watched`/`mark_unwatched`, wired to a context action on a media row (West/Y, say) through
+  the #77 overlay roster. That needs `send_get` generalised to take a `reqwest::Method` — a
+  ~5-line change preserving main's existing retry semantics; #42 has a `request()` version of this
+  to crib the shape from, but its retry sleeps and main's doesn't. After that, **#43 artwork disk
+  cache** is the remaining untouched Wave 4 lane, and #39's `0dabfea` (L2/R2 synthesis) is still
+  loose and needs-hardware.
+
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the
   triage's own note says "everything later assumes it". Context: #76 merged + #32
