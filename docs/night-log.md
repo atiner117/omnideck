@@ -78,6 +78,165 @@ Entry template:
   cache** is the remaining untouched Wave 4 lane, and #39's `0dabfea` (L2/R2 synthesis) is still
   loose and needs-hardware.
 
+## 2026-08-17 23:20 — Wave 4 pick 1: theme system (the pick's tokens didn't exist on main)
+- **Vision tie:** VISION priority 2 — a high bang-for-effort roadmap item plugging into the
+  table-driven Settings surface; round-2 backlog **Lane A**. First item of Wave 4, which the
+  #79 log named as next ("take #41 first: #43 and #44's tokens both assume it").
+- **Branch / PR:** `pick/themes` — https://github.com/atiner117/omnideck/pull/80
+  (supersedes #41 — close it when this lands).
+- **Open-PR inventory:** 7 open, ALL of them read before choosing: #79, #78, #46, #44, #43,
+  #42, #41. #79/#78 are the previous two nights (supersede #44/#46); #43/#42/#41 are the
+  untouched Wave 4 lanes. No PR existed for this work other than #41 itself, which this
+  supersedes rather than duplicates.
+- **Changed:** #41's `532a3cf`+`e8e7927`+`4a99ac8` onto main `f1e04c7`, but **NOT verbatim —
+  the pick's entire token vocabulary is absent from main.** #41 was authored against a
+  `src/lib/tokens.css` from its own `d8f81de`, which never merged; main got tokens via
+  `fa6fe2c`, *inside* `+page.svelte`'s `:global(:root)`, under different names. The pick
+  themes `--bg`/`--surface-2`/`--surface-3`/`--text`/`--text-bright` (none exist here) and
+  leaves main's `--surface-deep`/`--surface-card`/`--text-soft`/`--text-label`/`--text-dim`/
+  `--danger` unthemed — verbatim, OLED's `--bg:#000` would be read by nothing and Light would
+  keep dark-navy cards. Kept the pick's ARCHITECTURE (registry, `applyTheme`, `data-theme`
+  stamp, settings row, config normalize); rewrote all six palettes + the Light shim against
+  main's real 9 tokens. THREE further repairs: (1) the Light shim missed `Modal.svelte`'s
+  hardcoded `.prefs { background:#121826 }` — the panel the Theme picker itself lives in, so
+  Light would have looked like a no-op from Settings; (2) the shim redundantly re-set
+  properties main has since tokenized (`.clock`, `.badge` color, `.xsheadlbl`, `.infogrid dt`,
+  `.numedit` bg) — trimmed to only what is still hardcoded; (3) the scanline z-index comment
+  cited overscan z50 from unmerged #46 — re-derived against main's real stack (chrome 2 → 5 →
+  Modal 10/11 → NP 12 → Wizard 20 → deck 40/41 → transport 44/45 → boot-errors 60 → toast 70
+  → screensaver 200/201); z5 still correct. `pageBg` resolves to `var(--surface-deep)`, not
+  the pick's `var(--bg)`. The #79 `parse_backup` trap does NOT apply: `theme` lives inside
+  `Settings`, whose `normalize()` both config paths already call. OmniDark is default and
+  renders byte-identical.
+- **Verify:** bun run check (pass, 360 files, 0 errors) · bun run build (pass) · bun run test
+  (21 pass) · cargo clippy --release --all-targets -D warnings (pass) · cargo test --release
+  (93 pass, 1 ignored — was 91: +2 theme tests). Bindings regenerated; `diff -rq` vs the
+  generated set clean. No new deps.
+  **The new tests earned their keep immediately** — `theme_ids_match_frontend` failed twice
+  during the build on a doc comment that mentioned `data-theme`, hence the comment-stripping
+  helper; `every_theme_overrides_every_base_token` is the guard that would have caught the
+  verbatim-pick bug unaided.
+  needs-hardware: this is a purely visual feature and NO palette has been seen on a panel.
+  Light most of all (the one theme carrying a shim), then OLED true-black on the TV and CRT
+  scanline density at 10 feet.
+- **Outcome:** shipped to draft PR #80.
+- **COLLISION NOTE for Andrew:** #78, #79 and #80 are all off `f1e04c7` and all add a
+  `settings-defs.ts` row + a config field; #79 and #80 also both prepend a night-log entry at
+  the same spot. Expect a trivial conflict in `docs/night-log.md` and small refreshes in
+  `settings-defs.ts` / `config.rs` for whichever merges later. Nothing else overlaps —
+  themes touch only the token layer.
+- **Next candidate:** Wave 4 continues with **#42 Continue Watching** (Jellyfin resume/watched
+  + row component) then **#43 artwork disk cache**. #43's `5c0a042`-era tokens now have a real
+  consumer, and both were authored pre-router — expect the same "read the whole removed region"
+  discipline. Also still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware). Worth
+  flagging: `+page.svelte` and `Modal.svelte` finishing their token conversion would let the
+  Light shim in themes.css be deleted outright — a clean, self-contained follow-up.
+
+## 2026-08-16 23:10 — Wave 3 pick 7 (LAST): library view modes — rail / grid / list
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 7, the final item in the +page
+  wave (frontend-split track, VISION priority 1). Closes out the wave that ran
+  #26 → #30 → #32 → #28 → #46 → #44. Context: #78 (overscan, step 6) is still
+  OPEN and unmerged — branched off main anyway per the #73 precedent, see the
+  collision note below.
+- **Branch / PR:** `pick/layouts` — https://github.com/atiner117/omnideck/pull/79
+  (supersedes #44 — close it when this lands).
+- **Changed:** #44's `6af24bb` + `5c0a042` onto main `f1e04c7`. New additive
+  `[appearance]` config section (`layout`: rail | grid | grid-compact | list) with
+  a `save_appearance` command; four new frontend files (GridView, ListView,
+  LayoutPicker, layouts.ts — the last is pure 2D nav math). The page stays the
+  single owner of `focus` + input routing, so every input path works in every
+  mode. `settings.grid_columns` — previously dead — becomes the grid density knob.
+  **FOUR repairs**, all for main-side changes the pick predates:
+  (1) `focus` is a read-only `$derived` since #72's clamp refactor — the pick's
+  three `focus = ` writes would not have compiled; routed through `focusRaw`.
+  (2) `save_settings` is `async` + `blocking()` on main (I/O off the main thread);
+  `save_appearance` follows that shape, not the pick's sync one.
+  (3) main added a manual `impl Default for Config` that the container-level
+  `serde(default)` fills missing fields from — caught by the compiler; without the
+  `appearance` line the additive-default promise breaks for existing configs.
+  (4) main added `parse_backup()`, a SECOND normalize path whose doc comment
+  promises every field is sanitized like a hand-edited config. The pick only
+  normalized in `load_or_create` (parse_backup did not exist yet), so a restored
+  backup could smuggle `layout = "mosaic"` past the check. Added there too.
+  Rail is the default and renders byte-identical to today.
+- **Verify:** bun run check (pass, 364 files, 0 errors) · bun run build (pass) ·
+  bun run test (21 pass) · cargo clippy --release --all-targets -D warnings (pass)
+  · cargo test --release (93 pass, 1 ignored — was 91: +1 layout-normalize test,
+  +1 binding export). Bindings regenerated; `diff -rq` of the generated set vs
+  `src/lib/bindings` is clean. No new deps.
+  needs-hardware: grid density/readability at 10 feet and the 2D nav feel on a
+  real pad — the whole point of the feature is something only a TV can judge.
+- **Outcome:** shipped to draft PR #79.
+- **COLLISION NOTE for Andrew:** #78 and #79 are both off `f1e04c7` and both add
+  a settings row + a config field. Whichever merges SECOND will want a trivial
+  refresh in `settings-defs.ts`, `config.rs` (`Config` struct + both `Default`
+  and `defaults()` sites) and a bindings regen. Merging #78 first is the smaller
+  fixup. Nothing else overlaps — overscan touches `<main>`'s CSS var, layouts
+  touches the item-render branch.
+- **Review pass (2026-08-18, Andrew-requested):** a /code-review at high effort
+  cleared the 2D nav math (no logic findings; the intentional behaviors — wheel
+  moves by row, hold-repeat exits into the category axis, no-move/no-blip — were
+  checked and confirmed as design) and produced 7 findings; the 4 cheap ones are
+  fixed on this branch:
+  (1) list mode kept the rail's 8-above art window, but scrollIntoView pins a
+  wrapped-to focus at the BOTTOM of the viewport — rows above it rendered emoji
+  fallbacks; list now uses a 32/40 window (the 4K worst case).
+  (2) the Grid-columns row's `lo: 3` fought the backend's 1–12 clamp — a
+  hand-edited value of 1–2 JUMPED UP to 3 on a decrease press; floor is now 1.
+  (3) layouts.ts was extracted to be unit-testable but shipped untested — added
+  layouts.test.ts (wrap, short-row clamp, single-row no-op, row-edge null, the
+  compact-density math; 21 → 35 vitest).
+  (4) grid/list render the FULL library (not the rail's window), so per-tile
+  `favorites.includes()` was O(items x favorites) per render — both views now
+  derive a Set.
+- **Review follow-ups (logged for the loop, NOT fixed here):**
+  (5) `parse_backup` still skips screensaver/launch_overrides/input normalize
+  despite its doc-comment contract — PRE-EXISTING on main (#79 narrowed the gap
+  by adding appearance); a small standalone config.rs pick.
+  (6) the layout-mode whitelist is hand-duplicated (config.rs `matches!` vs
+  layouts.ts LAYOUT_MODES) — drift means a saved mode silently reverts to rail
+  on next boot; a ts-rs-exported enum would make it impossible. Same class of
+  problem #80's theme tests solve by cross-checking — pick either mechanism.
+  (7) ListView re-implements +page's appSource/fmtPlayed as appDetail/fmtPlayed
+  and the copies already differ ("never played" vs "never") — consolidate into a
+  shared helper next time either is touched.
+- **Next candidate:** Wave 3 is DONE once #78 + #79 land. Next is **Wave 4**: the
+  round-2 lanes — #41 themes (its `tokens.css` is what `5c0a042` tokenized
+  GridView/ListView for, so it now has a consumer and lands cleanly), then #42
+  Continue Watching, then #43 artwork disk cache. Take #41 first: #43 and #44's
+  tokens both assume it. Also still loose: #39's `0dabfea` (L2/R2 synthesis,
+  needs-hardware). Plus review follow-ups (5)–(7) above — (5) is the cheapest.
+
+## 2026-08-11 13:23 — Wave 3 pick 6: TV overscan calibration (z-index invariant repaired)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 6; VISION 10-foot TV target — TVs crop
+  edges, every console ships this screen. Context: #77 merged + #28 closed this session;
+  campaign walkthrough written to the epic artifacts (changeset-walkthroughs/campaign-61-77).
+- **Branch / PR:** `pick/overscan` — https://github.com/atiner117/omnideck/pull/78
+  (needs-hardware kept).
+- **Changed:** `126517f` + `20d82e1` onto main `f1e04c7` + ONE repair.
+  OverscanCalibration.svelte (+132), --overscan on <main> + one rule with translateZ(0)
+  so fixed modals/toasts are contained; 0% is byte-identical to today; settings.overscan_pct
+  clamped 0–10 (assertion added to the EXISTING normalize test — why cargo stays at 91).
+  ORDERING PAYOFF: the settings row auto-merged into settings-defs.ts (#60) and the roster
+  entry auto-merged into OVERLAYS (#77) — this pick was authored against both, so post-wave
+  main is finally its intended base.
+  THE REPAIR: `20d82e1` existed solely to raise .ovcal from z 40 (tied with the old
+  .ebanner, which painted over the frame) to 50. Main replaced that banner with the durable
+  boot-error panel at z 60 (6208ef8) mounted at top:5vh — right over the top edge markers —
+  so 50 silently lost the commit's own invariant. Set to 65: above the panel, below the
+  toasts (70) that main documents as clearing every overlay. Also: the both-sides merge
+  duplicated the $lib/sfx import (pick predates #76's blip) — stale copy dropped;
+  Settings.ts settled by regeneration (23 export tests), not by hand.
+- **Verify:** bun run check (pass, 360 files, 0 errors) · bun run build (pass) · bun run
+  test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (91 pass) · bindings clean. needs-hardware: marker visibility at the real panel edge,
+  step feel on the 4K OLED, and the z-65 choice with a boot error raised mid-calibration.
+- **Outcome:** shipped to draft PR #78 (supersedes #46 — close when it lands).
+- **Next candidate:** #44 layouts (`6af24bb`,`5c0a042`) — LAST wave pick; also authored
+  against #60's table + #77's router, so expect the same auto-merge payoff. Then Wave 4
+  reworks (#41 themes — needs re-expression on main's tokens, NOT a rebase; #42 resume;
+  #43 artcache) and #39's last loose commit `0dabfea` (L2/R2 synthesis, needs-hardware).
+
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the
   triage's own note says "everything later assumes it". Context: #76 merged + #32

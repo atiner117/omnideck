@@ -10,8 +10,10 @@
 // save. The page applies patches via its `patchSettings` (which mutates the reactive cfg and
 // persists). The one deliberate side effect is the volume-preview blip, kept inline to match
 // the previous behavior exactly.
-import type { Settings } from "./backend";
+import type { Appearance, Settings } from "./backend";
+import { isGridLayout } from "./components/layouts";
 import { blip } from "./sfx";
+import { DEFAULT_THEME, nextTheme, themeLabel } from "./themes/themes";
 
 // ---- option lists ----
 export const ACCENTS = ["#4cc2ff", "#b14cff", "#6ee7a8", "#ff8a3d", "#ff5d6c", "#ffd166"];
@@ -56,8 +58,9 @@ function soundLabel(s: Settings): string {
 type BaseDef = {
   key: string;
   label: string;
-  /** Hide the row when this returns false (rows that only apply to a current selection). */
-  visible?: (s: Settings) => boolean;
+  /** Hide the row when this returns false (rows that only apply to a current selection).
+   *  Appearance is passed too for rows gated on the library layout (grid columns). */
+  visible?: (s: Settings, a?: Appearance) => boolean;
 };
 export type HeaderDef = BaseDef & { type: "header" };
 export type ActionDef = BaseDef & { type: "action" };
@@ -104,6 +107,11 @@ export function normalizeNum(d: NumDef, raw: number): number {
 export const SETTING_DEFS: SettingDef[] = [
   { key: "hdr-look", label: "Appearance", type: "header" },
   {
+    key: "theme", label: "Theme", type: "cycle",
+    value: (s) => themeLabel(s.theme ?? DEFAULT_THEME),
+    cycle: (s) => ({ theme: nextTheme(s.theme ?? DEFAULT_THEME) }),
+  },
+  {
     key: "size", label: "Size", type: "cycle",
     value: (s) => cap1(s.ui_scale ?? "medium"),
     cycle: (s) => ({ ui_scale: nextIn(SIZE_MODES, s.ui_scale ?? "medium", 1) }),
@@ -117,10 +125,30 @@ export const SETTING_DEFS: SettingDef[] = [
     lo: 0.8, hi: 3.5, step: 0.05,
   },
   {
+    // appearance.layout, not a Settings field: the page intercepts this key in
+    // cycleSetting (Enter/A advances the mode) and renders LayoutPicker inline
+    // (mouse picks a mode directly) — same inline-extra pattern as the accent row.
+    key: "layout", label: "Library layout", type: "cycle",
+    value: () => "", // the inline picker shows the current mode
+    cycle: () => ({}),
+  },
+  {
+    key: "gridcols", label: "Grid columns", type: "num",
+    visible: (_s, a) => isGridLayout(a?.layout ?? "rail"),
+    value: (s) => `${s.grid_columns ?? 6}`,
+    get: (s) => s?.grid_columns ?? 6,
+    set: (v) => ({ grid_columns: v }),
+    // lo matches the backend clamp (Settings::normalize, 1–12): with a floor of 3, a
+    // hand-edited grid_columns of 1–2 would JUMP UP to 3 on a decrease press.
+    lo: 1, hi: 12, step: 1, int: true,
+  },
+  {
     key: "accent", label: "Accent", type: "cycle",
     value: () => "", // the row shows a live swatch + color wheel instead of text
     cycle: (s) => ({ accent: nextIn(ACCENTS, s.accent ?? "#4cc2ff", 0) }),
   },
+  // Launches the full-screen OverscanCalibration overlay (TVs that crop edges).
+  { key: "overscan", label: "TV safe area (overscan)", type: "action" },
   { key: "hdr-bg", label: "Background", type: "header" },
   {
     key: "livewp", label: "Live wallpaper", type: "cycle",

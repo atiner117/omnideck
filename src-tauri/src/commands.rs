@@ -335,6 +335,11 @@ pub async fn save_settings(settings: config::Settings) -> Result<(), String> {
     blocking(move || config::save_settings(settings)).await?
 }
 
+#[tauri::command]
+pub async fn save_appearance(appearance: config::Appearance) -> Result<(), String> {
+    blocking(move || config::save_appearance(appearance)).await?
+}
+
 // --- Deck switcher (iOS-style app cards) ---
 //
 // The frontend owns the overlay UI + card navigation; these four commands are the window/

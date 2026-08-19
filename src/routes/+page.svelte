@@ -18,11 +18,17 @@
   import CatalogModal from "$lib/CatalogModal.svelte";
   import LauncherForm from "$lib/LauncherForm.svelte";
   import { initSfx, blip, sfxMove, sfxEnter } from "$lib/sfx";
+  import OverscanCalibration from "$lib/components/OverscanCalibration.svelte";
   import { ambientApply, ambientStop } from "$lib/ambient";
   import { OSK_ROWS, OSK_FLAT, OSK_COLS } from "$lib/osk";
   import { splitArgv } from "$lib/argv";
   import type { Tile } from "$lib/tiles";
   import { SETTING_DEFS, ACCENTS, normalizeNum, type SettingDef, type CycleDef, type NumDef, type TextDef } from "$lib/settings-defs";
+  import { applyTheme } from "$lib/themes/themes";
+  import GridView from "$lib/components/GridView.svelte";
+  import ListView from "$lib/components/ListView.svelte";
+  import LayoutPicker from "$lib/components/LayoutPicker.svelte";
+  import { LAYOUT_MODES, normalizeLayout, isGridLayout, gridColumns, gridMoveRow, gridMoveCol, type LayoutId } from "$lib/components/layouts";
 
   const CATEGORIES = [
     { id: "dashboard", label: "Home", icon: "home" },
@@ -282,9 +288,25 @@
     SETTING_DEFS.filter((d) => {
       if (d.type === "header") return true; // every section keeps ≥1 unconditional row
       const set = cfg?.settings; if (!set) return true;
-      return d.visible?.(set) ?? true;
+      return d.visible?.(set, cfg?.appearance) ?? true;
     }),
   );
+  // ---- library view mode (appearance.layout — rail | grid | grid-compact | list) ----
+  // Rail stays the inline default; grid/list render via $lib/components. The page keeps
+  // owning `focus` + input routing, so every input path (D-pad, stick, keyboard, wheel,
+  // hold-repeat) works in every mode through the same moveItem/horiz below.
+  let layout = $derived(normalizeLayout(cfg?.appearance?.layout));
+  let gcols = $derived(gridColumns(layout, cfg?.settings?.grid_columns));
+  let gridNav = $derived(catId !== "settings" && isGridLayout(layout)); // settings stays a column in every mode
+  function setLayout(v: LayoutId) {
+    if (!cfg) return;
+    cfg.appearance.layout = v; // fine-grained mutate, same rationale as patchSettings
+    api.saveAppearance($state.snapshot(cfg.appearance)).catch((e) => reportError("Couldn't save layout", e));
+  }
+  function cycleLayout() {
+    const i = LAYOUT_MODES.findIndex((m) => m.id === layout);
+    setLayout(LAYOUT_MODES[(i + 1) % LAYOUT_MODES.length].id);
+  }
   let itemCount = $derived(catId === "settings" ? visibleSettings.length : items.length);
   // The cursor clamps to the live list length as a $derived (not a write-back $effect): when
   // the list shrinks under it (uninstall, filter change) every read sees the clamped index in
@@ -298,7 +320,19 @@
   // with a spacer, so each keypress costs O(window), not O(library). Art AND app-icon loading
   // key off the same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
-  let winRange = $derived(railWindow(items.length, focus, WIN_ABOVE, WIN_BELOW));
+  // Grid modes show gcols items per row, so the art window scales with the column count
+  // (6 rows above / 14 below the focused row — covers a 4K compact grid). The rail keeps
+  // the original 8/40 rows. Grid/list render all rows (content-visibility skips
+  // offscreen paint); this window only bounds ART loading, same as the rail.
+  // List mode scrolls freely (scrollIntoView "nearest"), so unlike the rail the focused row
+  // can sit at the BOTTOM of the viewport — e.g. right after wrapping to the last item —
+  // with a full screen of rows above it. The rail's 8-above margin would leave those rows
+  // artless; match the 4K worst case (~32 visible rows) in both directions instead.
+  const LIST_WIN = 32;
+  let listNav = $derived(catId !== "settings" && layout === "list");
+  let winAbove = $derived(gridNav ? gcols * 6 : listNav ? LIST_WIN : WIN_ABOVE);
+  let winBelow = $derived(gridNav ? gcols * 14 : listNav ? Math.max(LIST_WIN, WIN_BELOW) : WIN_BELOW);
+  let winRange = $derived(railWindow(items.length, focus, winAbove, winBelow));
   let winLo = $derived(winRange.lo);
   let winItems = $derived(items.slice(winRange.lo, winRange.hi));
   let scaleNum = $derived(
@@ -307,6 +341,17 @@
       : (PRESET[cfg?.settings?.ui_scale ?? "medium"] ?? 1.6),
   );
   let settingsEditing = $state(false);
+  // Theme: stamp data-theme on <html> whenever the setting changes; the base tokens in this
+  // file's :global(:root) block plus src/lib/themes/themes.css do all the color work. Runs
+  // with the default before cfg loads, so there is no unthemed flash.
+  $effect(() => applyTheme(cfg?.settings?.theme));
+  // Page background: an explicitly chosen background_color still wins; the stock default now
+  // follows the theme's --surface-deep token instead, so OLED/Light/CRT/Deck recolor the page
+  // without the user having to clear their background setting first.
+  let pageBg = $derived.by(() => {
+    const c = cfg?.settings?.background_color ?? "#05070b";
+    return c === "#05070b" ? "var(--surface-deep)" : c;
+  });
 
   // Background = a base (solid color or a custom image) plus an optional overlay: the
   // focused game's wide hero art, or a dominant-color gradient from the focused app's icon.
@@ -397,12 +442,22 @@
   function moveItem(d: number) {
     settingsEditing = false;
     if (!itemCount) return;
+    if (gridNav) {
+      // 2D vertical move: wrap top<->bottom (the rail's modulo wrap, column-preserving).
+      // Single-row grids return focus unchanged — no move, so no sfx blip.
+      const next = gridMoveRow(focus, d, itemCount, gcols);
+      if (next === focus) return;
+      focusRaw = next; // focus is $derived (#72's clamp refactor) — writes go through focusRaw
+      sfxMove();
+      return;
+    }
     let f = (focus + d + itemCount) % itemCount;
     if (catId === "settings") {
       // Skip section headers in the pressed direction (they occupy row slots but aren't rows).
       let guard = 0;
       while (visibleSettings[f]?.type === "header" && guard++ < itemCount) f = (f + d + itemCount) % itemCount;
     }
+    if (f === focus) return; // 1-item wrap: same no-move/no-blip rule as the grid
     focusRaw = f;
     sfxMove();
   }
@@ -425,6 +480,7 @@
   function doAction(key: string) {
     holdStop(); // a held D-pad press that opens this modal must not keep auto-repeating behind it
     if (key === "addcustom") formOpen = true; // LauncherForm owns its drafts; mounting resets them
+    else if (key === "overscan") overscanOpen = true; // OverscanCalibration owns its draft too
   }
   // numeric settings: also typeable via a real <input> while editing
   function setNum(d: NumDef, raw: number) {
@@ -449,12 +505,17 @@
     patchSettings({ accent: v });
     accent = v;
   }
-  // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise always
-  // switches category (so you can never get trapped in Settings).
+  // horizontal: adjusts the focused numeric setting ONLY while editing; otherwise moves
+  // within the grid row in grid modes — falling off the row's edge (or any non-grid mode)
+  // switches category, so you can never get trapped in Settings OR in a grid.
   function horiz(dir: number) {
     const row = visibleSettings[focus];
     if (catId === "settings" && settingsEditing && row?.type === "num") { adjustSetting(row, dir); return; }
     settingsEditing = false;
+    if (gridNav && itemCount) {
+      const t = gridMoveCol(focus, dir, itemCount, gcols);
+      if (t !== null) { focusRaw = t; sfxMove(); return; }
+    }
     moveCat(dir);
   }
   function activate() {
@@ -592,6 +653,7 @@
   // Advance a cycle row to its next state (the per-row logic lives in the def's `cycle`).
   function cycleSetting(d: CycleDef) {
     if (!cfg) return;
+    if (d.key === "layout") { cycleLayout(); return; } // appearance.layout — its own save path
     const patch = d.cycle(cfg.settings);
     patchSettings(patch);
     if (patch.accent) accent = patch.accent;
@@ -719,6 +781,19 @@
   function wizardPrev() { if (wizardStep > 0) wizardStep--; }
   function wizardAccent(dir: number) { if (!cfg) return; const c = ACCENTS.indexOf(cfg.settings.accent ?? "#4cc2ff"); const a = ACCENTS[((c < 0 ? 0 : c) + (dir > 0 ? 1 : ACCENTS.length - 1)) % ACCENTS.length]; patchSettings({ accent: a }); accent = a; }
 
+  // ---- TV overscan calibration (settings action; the component owns the draft value) ----
+  // While open, `overscanPreview` overrides the saved inset so the WHOLE UI resizes live as
+  // the user adjusts; confirm persists it, cancel just drops the preview (reverts).
+  let overscanOpen = $state(false);
+  let overscanPreview = $state<number | null>(null);
+  let overscanCal = $state<ReturnType<typeof OverscanCalibration> | null>(null); // bind:this — roster forwards input into it
+  let overscanPct = $derived(overscanPreview ?? cfg?.settings?.overscan_pct ?? 0);
+  function overscanDone(pct: number | null) { // null = cancel
+    overscanOpen = false;
+    overscanPreview = null;
+    if (pct != null) patchSettings({ overscan_pct: pct });
+  }
+
   // ---- Unified input router (review #10) ----------------------------------------------------
   // One ordered roster of overlay controllers. The router walks the list and the FIRST open
   // overlay consumes the event — keyboard, gamepad buttons, and stick axes all share this single
@@ -734,6 +809,21 @@
     allowHelp?: boolean; // "?" / F1 still opens Help on top of this overlay
   };
   const OVERLAYS: Overlay[] = [
+    {
+      // TV overscan calibration: preempts everything (it repaints the whole screen). The
+      // component owns the draft; this entry only forwards input — D-pad/stick up/right
+      // grow the inset, down/left shrink, A/Enter save, B/Esc cancel.
+      open: () => overscanOpen,
+      key: (e) => overscanCal?.onkey(e),
+      pad: (c) => {
+        const d = { DPadUp: 1, DPadRight: 1, DPadDown: -1, DPadLeft: -1 }[c];
+        if (d) holdStart(c, () => overscanCal?.nudge(d));
+        else if (c === "South") overscanCal?.confirm();
+        else if (c === "East") overscanCal?.cancel();
+      },
+      stickY: (d) => overscanCal?.nudge(-d), // page "down" (+1) = shrink
+      stickX: (d) => overscanCal?.nudge(d),
+    },
     {
       // Deck switcher: arrows/L-R pick a card, Enter/A/X opens, Del/Select closes it,
       // Esc/B/Guide dismisses.
@@ -1124,7 +1214,8 @@
   });
 </script>
 
-<main style="--accent:{accent}; --scale:{scaleNum}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{cfg?.settings?.background_color ?? '#05070b'}">
+<main class:overscan={overscanPct > 0} style="--accent:{accent}; --scale:{scaleNum}; --overscan:{overscanPct}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{pageBg}">
+
   {#if baseImageShown}<div class="xbg base has" style="background-image:url({bgImageUrl})"></div>{/if}
   <div class="xbg" class:has={!!overlay} class:wash={overlay?.kind === "wash"}
     style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`
@@ -1177,6 +1268,7 @@
                 {:else}
                   <span class="xsub">{settingValue(s)}{s.type === "num" || s.type === "text" ? "  (Enter)" : ""}</span>
                 {/if}
+                {#if s.key === "layout"}<LayoutPicker value={layout} onchange={setLayout} />{/if}
                 {#if s.key === "accent"}<span class="swatch" style="background:{accent}"></span><input class="cwheel" type="color" value={accent} oninput={onAccentColor} onclick={(e) => e.stopPropagation()} />{/if}
                 {#if s.key === "bgcolor"}<span class="swatch" style="background:{cfg?.settings?.background_color ?? '#05070b'}"></span><input class="cwheel" type="color" value={cfg?.settings?.background_color ?? '#05070b'} oninput={onBgColor} onclick={(e) => e.stopPropagation()} />{/if}
               </span>
@@ -1190,6 +1282,12 @@
           {:else if catId === "games"}No games found.
           {:else}Empty — press <b>△ / A</b> to add apps & media.{/if}
         </div>
+      {:else if layout === "list"}
+        <ListView {items} {focus} {art} {appIcons} {iconBg} {favorites}
+          onactivate={(i) => { focusRaw = i; launchTile(items[i]); }} onarterror={artError} />
+      {:else if isGridLayout(layout)}
+        <GridView {items} {focus} cols={gcols} compact={layout === "grid-compact"} {art} {appIcons} {iconBg} {favorites}
+          onactivate={(i) => { focusRaw = i; launchTile(items[i]); }} onarterror={artError} />
       {:else}
         <div class="xitems" style="transform: translateY(calc({-focus} * var(--ih)))">
           {#if winLo > 0}<div class="xpad" style="height: calc({winLo} * var(--ih))" aria-hidden="true"></div>{/if}
@@ -1359,6 +1457,11 @@
       accents={ACCENTS} accent={cfg.settings.accent ?? "#4cc2ff"} />
   {/if}
 
+  {#if overscanOpen}
+    <OverscanCalibration bind:this={overscanCal} pct={cfg?.settings?.overscan_pct ?? 0}
+      onpreview={(p) => (overscanPreview = p)} onconfirm={overscanDone} oncancel={() => overscanDone(null)} />
+  {/if}
+
   <NowPlaying cards={nowCards} {inSession} onerror={reportError}
     ondismiss={(id) => (nowList = nowList.filter((x) => x.id !== id))} />
 
@@ -1411,6 +1514,17 @@
        at full-screen they hit the rem cap, so the primary use is unchanged. */
     --cw: calc(clamp(4.2rem, 8.5vw, 7rem) * var(--scale));
     --ih: calc(clamp(2.8rem, 5.2vh, 4.4rem) * var(--scale));
+  }
+  /* TV safe-area inset (--overscan = % per edge, from settings.overscan_pct or the live
+     calibration preview): shrink the whole UI into the safe rect. The transform makes
+     <main> the containing block for position:fixed descendants, so every modal/backdrop/
+     overlay (`inset: 0`) respects the inset too — one rule, all screens. Only applied when
+     non-zero, so the default stays byte-identical to today. */
+  main.overscan {
+    height: calc(100vh - 2 * var(--overscan) * 1vh);
+    width: calc(100vw - 2 * var(--overscan) * 1vw);
+    margin: calc(var(--overscan) * 1vh) calc(var(--overscan) * 1vw);
+    transform: translateZ(0);
   }
   .xbg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(var(--bg-blur, 0px)) brightness(var(--bg-bright, .82)) saturate(1.12); opacity: 0; transition: opacity .3s ease; z-index: 0; }
   .xbg.has { opacity: 1; }
