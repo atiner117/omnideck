@@ -20,7 +20,6 @@ Entry template:
 
 <!-- entries below -->
 
-<<<<<<< HEAD
 ## 2026-08-17 23:20 — Wave 4 pick 1: theme system (the pick's tokens didn't exist on main)
 - **Vision tie:** VISION priority 2 — a high bang-for-effort roadmap item plugging into the
   table-driven Settings surface; round-2 backlog **Lane A**. First item of Wave 4, which the
@@ -74,7 +73,7 @@ Entry template:
   discipline. Also still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware). Worth
   flagging: `+page.svelte` and `Modal.svelte` finishing their token conversion would let the
   Light shim in themes.css be deleted outright — a clean, self-contained follow-up.
-=======
+
 ## 2026-08-16 23:10 — Wave 3 pick 7 (LAST): library view modes — rail / grid / list
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 7, the final item in the +page
   wave (frontend-split track, VISION priority 1). Closes out the wave that ran
@@ -179,7 +178,6 @@ Entry template:
   against #60's table + #77's router, so expect the same auto-merge payoff. Then Wave 4
   reworks (#41 themes — needs re-expression on main's tokens, NOT a rebase; #42 resume;
   #43 artcache) and #39's last loose commit `0dabfea` (L2/R2 synthesis, needs-hardware).
->>>>>>> origin/main
 
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the
