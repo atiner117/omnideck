@@ -121,6 +121,8 @@ export const SETTING_DEFS: SettingDef[] = [
     value: () => "", // the row shows a live swatch + color wheel instead of text
     cycle: (s) => ({ accent: nextIn(ACCENTS, s.accent ?? "#4cc2ff", 0) }),
   },
+  // Launches the full-screen OverscanCalibration overlay (TVs that crop edges).
+  { key: "overscan", label: "TV safe area (overscan)", type: "action" },
   { key: "hdr-bg", label: "Background", type: "header" },
   {
     key: "livewp", label: "Live wallpaper", type: "cycle",

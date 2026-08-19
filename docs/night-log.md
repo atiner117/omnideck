@@ -20,6 +20,36 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-11 13:23 — Wave 3 pick 6: TV overscan calibration (z-index invariant repaired)
+- **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 6; VISION 10-foot TV target — TVs crop
+  edges, every console ships this screen. Context: #77 merged + #28 closed this session;
+  campaign walkthrough written to the epic artifacts (changeset-walkthroughs/campaign-61-77).
+- **Branch / PR:** `pick/overscan` — https://github.com/atiner117/omnideck/pull/78
+  (needs-hardware kept).
+- **Changed:** `126517f` + `20d82e1` onto main `f1e04c7` + ONE repair.
+  OverscanCalibration.svelte (+132), --overscan on <main> + one rule with translateZ(0)
+  so fixed modals/toasts are contained; 0% is byte-identical to today; settings.overscan_pct
+  clamped 0–10 (assertion added to the EXISTING normalize test — why cargo stays at 91).
+  ORDERING PAYOFF: the settings row auto-merged into settings-defs.ts (#60) and the roster
+  entry auto-merged into OVERLAYS (#77) — this pick was authored against both, so post-wave
+  main is finally its intended base.
+  THE REPAIR: `20d82e1` existed solely to raise .ovcal from z 40 (tied with the old
+  .ebanner, which painted over the frame) to 50. Main replaced that banner with the durable
+  boot-error panel at z 60 (6208ef8) mounted at top:5vh — right over the top edge markers —
+  so 50 silently lost the commit's own invariant. Set to 65: above the panel, below the
+  toasts (70) that main documents as clearing every overlay. Also: the both-sides merge
+  duplicated the $lib/sfx import (pick predates #76's blip) — stale copy dropped;
+  Settings.ts settled by regeneration (23 export tests), not by hand.
+- **Verify:** bun run check (pass, 360 files, 0 errors) · bun run build (pass) · bun run
+  test (21 pass) · cargo clippy --release -D warnings (pass) · cargo test --release
+  (91 pass) · bindings clean. needs-hardware: marker visibility at the real panel edge,
+  step feel on the 4K OLED, and the z-65 choice with a boot error raised mid-calibration.
+- **Outcome:** shipped to draft PR #78 (supersedes #46 — close when it lands).
+- **Next candidate:** #44 layouts (`6af24bb`,`5c0a042`) — LAST wave pick; also authored
+  against #60's table + #77's router, so expect the same auto-merge payoff. Then Wave 4
+  reworks (#41 themes — needs re-expression on main's tokens, NOT a rebase; #42 resume;
+  #43 artcache) and #39's last loose commit `0dabfea` (L2/R2 synthesis, needs-hardware).
+
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the
   triage's own note says "everything later assumes it". Context: #76 merged + #32

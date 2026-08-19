@@ -43,6 +43,7 @@ pub struct Settings {
     pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it; masked over IPC (see Config::has_pin).
     pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN. Only set_locked_categories writes it (PIN-verified).
     pub check_updates: bool, // boot-time release check (update.rs); manual check always works
+    pub overscan_pct: f64, // TV safe-area inset per edge, percent of the screen (0–10; 0 = off)
 }
 
 impl Default for Settings {
@@ -77,6 +78,7 @@ impl Default for Settings {
             pin_hash: String::new(),
             locked_categories: Vec::new(),
             check_updates: true,
+            overscan_pct: 0.0,
         }
     }
 }
@@ -168,6 +170,7 @@ impl Settings {
             self.live_wallpaper = "waves".into();
         }
         self.ambient_volume = self.ambient_volume.clamp(0.0, 1.0);
+        self.overscan_pct = self.overscan_pct.clamp(0.0, 10.0);
     }
 }
 
@@ -797,6 +800,7 @@ grid_columns = 0
             sound_volume: 5.0,
             grid_columns: 0,
             dashboard_recents: 999,
+            overscan_pct: 99.0,
             ..Default::default()
         };
         s.normalize();
@@ -805,6 +809,7 @@ grid_columns = 0
         assert_eq!(s.sound_volume, 1.0);
         assert_eq!(s.grid_columns, 1);
         assert_eq!(s.dashboard_recents, 50);
+        assert_eq!(s.overscan_pct, 10.0);
     }
 
     #[test]
