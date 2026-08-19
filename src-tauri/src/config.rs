@@ -44,6 +44,7 @@ pub struct Settings {
     pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it; masked over IPC (see Config::has_pin).
     pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN. Only set_locked_categories writes it (PIN-verified).
     pub check_updates: bool, // boot-time release check (update.rs); manual check always works
+    pub overscan_pct: f64, // TV safe-area inset per edge, percent of the screen (0–10; 0 = off)
 }
 
 impl Default for Settings {
@@ -79,6 +80,7 @@ impl Default for Settings {
             pin_hash: String::new(),
             locked_categories: Vec::new(),
             check_updates: true,
+            overscan_pct: 0.0,
         }
     }
 }
@@ -122,6 +124,34 @@ impl ScreensaverConfig {
 /// `[data-theme]` blocks in src/lib/themes/themes.css (enforced by theme_ids_match_frontend).
 /// First entry is the default.
 const THEME_IDS: &[&str] = &["omnidark", "oled", "light", "high-contrast", "crt", "deck"];
+
+/// `[appearance]` — presentation options that sit above the per-widget `[settings]` knobs
+/// (library layout now; theme/accent are planned to join it). Additive: an existing
+/// config.toml without the section deserializes to the defaults below.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(default)]
+pub struct Appearance {
+    /// Library presentation: "rail" (XMB cascade, default) | "grid" (large poster grid)
+    /// | "grid-compact" (denser grid) | "list" (rows with details).
+    pub layout: String,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self { layout: "rail".into() }
+    }
+}
+
+impl Appearance {
+    /// Reset an unknown hand-edited layout to the default so the UI's render switch and
+    /// the 2D nav math never see an unexpected value.
+    fn normalize(&mut self) {
+        if !matches!(self.layout.as_str(), "rail" | "grid" | "grid-compact" | "list") {
+            self.layout = "rail".into();
+        }
+    }
+}
 
 /// True for a `#rrggbb` hex color — the only form the UI emits and CSS needs.
 fn is_hex6(s: &str) -> bool {
@@ -182,6 +212,7 @@ impl Settings {
             self.live_wallpaper = "waves".into();
         }
         self.ambient_volume = self.ambient_volume.clamp(0.0, 1.0);
+        self.overscan_pct = self.overscan_pct.clamp(0.0, 10.0);
     }
 }
 
@@ -263,6 +294,9 @@ pub struct Config {
     /// the current version, correct while every shape change so far has been additive.
     pub config_version: u32,
     pub settings: Settings,
+    /// `[appearance]` — library layout (and, later, theme). Additive with defaults.
+    #[serde(default)]
+    pub appearance: Appearance,
     /// `[launch_overrides]` — per-tile env/args tuning, keyed by tile id. Absent from the
     /// generated default config (empty map serializes to nothing) — purely opt-in.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -312,6 +346,7 @@ impl Default for Config {
         Self {
             config_version: CONFIG_VERSION,
             settings: Settings::default(),
+            appearance: Default::default(),
             media_server: Default::default(),
             screensaver: Default::default(),
             remote: Default::default(),
@@ -347,6 +382,7 @@ fn defaults() -> Config {
             onboarded: false, // a fresh install runs the onboarding wizard
             ..Default::default()
         },
+        appearance: Default::default(),
         media_server: Default::default(),
         screensaver: Default::default(),
         remote: Default::default(),
@@ -396,6 +432,7 @@ pub fn load_or_create() -> Config {
             }
         };
         cfg.settings.normalize(); // defend against out-of-range values in a hand-edited config
+        cfg.appearance.normalize();
         cfg.media_server.normalize();
         cfg.screensaver.normalize();
         cfg.remote.normalize();
@@ -515,6 +552,11 @@ pub fn save_settings(settings: Settings) -> Result<(), String> {
     })
 }
 
+/// Persist new appearance options (library layout), preserving everything else.
+pub fn save_appearance(appearance: Appearance) -> Result<(), String> {
+    mutate_and_save(|cfg| cfg.appearance = appearance)
+}
+
 /// Persist a new PIN hash (empty = lock removed). Only pin.rs::set_pin calls this,
 /// after verifying the current PIN.
 pub fn save_pin_hash(pin_hash: String) -> Result<(), String> {
@@ -577,6 +619,7 @@ fn parse_backup(text: &str) -> Result<Config, String> {
             format!("not a valid OmniDeck backup: {first}")
         })?;
     cfg.settings.normalize();
+    cfg.appearance.normalize();
     cfg.media_server.normalize();
     cfg.remote.normalize();
     cfg.config_path = String::new();
@@ -655,7 +698,19 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_backup, sanitize_for_backup, write_atomic, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION, THEME_IDS};
+    use super::{parse_backup, sanitize_for_backup, write_atomic, Appearance, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION, THEME_IDS};
+
+    #[test]
+    fn appearance_normalize_resets_unknown_layout() {
+        let mut a = Appearance { layout: "mosaic".into() };
+        a.normalize();
+        assert_eq!(a.layout, "rail");
+        for ok in ["rail", "grid", "grid-compact", "list"] {
+            let mut a = Appearance { layout: ok.into() };
+            a.normalize();
+            assert_eq!(a.layout, ok);
+        }
+    }
 
     #[test]
     fn write_atomic_creates_overwrites_and_leaves_no_temp() {
@@ -911,6 +966,7 @@ grid_columns = 0
             sound_volume: 5.0,
             grid_columns: 0,
             dashboard_recents: 999,
+            overscan_pct: 99.0,
             ..Default::default()
         };
         s.normalize();
@@ -919,6 +975,7 @@ grid_columns = 0
         assert_eq!(s.sound_volume, 1.0);
         assert_eq!(s.grid_columns, 1);
         assert_eq!(s.dashboard_recents, 50);
+        assert_eq!(s.overscan_pct, 10.0);
     }
 
     #[test]
