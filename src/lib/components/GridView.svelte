@@ -35,6 +35,9 @@
   } = $props();
 
   let root = $state<HTMLElement | null>(null);
+  // Unlike the rail this renders the FULL list, so per-tile favorites.includes() would be
+  // O(items x favorites) every render pass — a Set makes the lookup O(1).
+  let favSet = $derived(new Set(favorites));
   function tileName(t: Tile) {
     return t.kind === "app" ? t.app.name : t.game.name;
   }
@@ -69,8 +72,8 @@
           </span>
         {/if}
         {#if hasArt}
-          <span class="gname">{tileName(t)}{#if favorites.includes(t.id)} ⭐{/if}</span>
-        {:else if favorites.includes(t.id)}
+          <span class="gname">{tileName(t)}{#if favSet.has(t.id)} ⭐{/if}</span>
+        {:else if favSet.has(t.id)}
           <span class="gfav">⭐</span>
         {/if}
       </button>

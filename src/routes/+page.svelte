@@ -319,11 +319,17 @@
   // key off the same window: a 1,000-game library no longer fires a fetch per game at mount.
   const WIN_ABOVE = 8, WIN_BELOW = 40;
   // Grid modes show gcols items per row, so the art window scales with the column count
-  // (6 rows above / 14 below the focused row — covers a 4K compact grid). The rail/list
-  // keep the original 8/40 rows. Grid/list render all rows (content-visibility skips
+  // (6 rows above / 14 below the focused row — covers a 4K compact grid). The rail keeps
+  // the original 8/40 rows. Grid/list render all rows (content-visibility skips
   // offscreen paint); this window only bounds ART loading, same as the rail.
-  let winAbove = $derived(gridNav ? gcols * 6 : WIN_ABOVE);
-  let winBelow = $derived(gridNav ? gcols * 14 : WIN_BELOW);
+  // List mode scrolls freely (scrollIntoView "nearest"), so unlike the rail the focused row
+  // can sit at the BOTTOM of the viewport — e.g. right after wrapping to the last item —
+  // with a full screen of rows above it. The rail's 8-above margin would leave those rows
+  // artless; match the 4K worst case (~32 visible rows) in both directions instead.
+  const LIST_WIN = 32;
+  let listNav = $derived(catId !== "settings" && layout === "list");
+  let winAbove = $derived(gridNav ? gcols * 6 : listNav ? LIST_WIN : WIN_ABOVE);
+  let winBelow = $derived(gridNav ? gcols * 14 : listNav ? Math.max(LIST_WIN, WIN_BELOW) : WIN_BELOW);
   let winRange = $derived(railWindow(items.length, focus, winAbove, winBelow));
   let winLo = $derived(winRange.lo);
   let winItems = $derived(items.slice(winRange.lo, winRange.hi));

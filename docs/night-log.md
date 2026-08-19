@@ -61,12 +61,39 @@ Entry template:
   and `defaults()` sites) and a bindings regen. Merging #78 first is the smaller
   fixup. Nothing else overlaps — overscan touches `<main>`'s CSS var, layouts
   touches the item-render branch.
+- **Review pass (2026-08-18, Andrew-requested):** a /code-review at high effort
+  cleared the 2D nav math (no logic findings; the intentional behaviors — wheel
+  moves by row, hold-repeat exits into the category axis, no-move/no-blip — were
+  checked and confirmed as design) and produced 7 findings; the 4 cheap ones are
+  fixed on this branch:
+  (1) list mode kept the rail's 8-above art window, but scrollIntoView pins a
+  wrapped-to focus at the BOTTOM of the viewport — rows above it rendered emoji
+  fallbacks; list now uses a 32/40 window (the 4K worst case).
+  (2) the Grid-columns row's `lo: 3` fought the backend's 1–12 clamp — a
+  hand-edited value of 1–2 JUMPED UP to 3 on a decrease press; floor is now 1.
+  (3) layouts.ts was extracted to be unit-testable but shipped untested — added
+  layouts.test.ts (wrap, short-row clamp, single-row no-op, row-edge null, the
+  compact-density math; 21 → 35 vitest).
+  (4) grid/list render the FULL library (not the rail's window), so per-tile
+  `favorites.includes()` was O(items x favorites) per render — both views now
+  derive a Set.
+- **Review follow-ups (logged for the loop, NOT fixed here):**
+  (5) `parse_backup` still skips screensaver/launch_overrides/input normalize
+  despite its doc-comment contract — PRE-EXISTING on main (#79 narrowed the gap
+  by adding appearance); a small standalone config.rs pick.
+  (6) the layout-mode whitelist is hand-duplicated (config.rs `matches!` vs
+  layouts.ts LAYOUT_MODES) — drift means a saved mode silently reverts to rail
+  on next boot; a ts-rs-exported enum would make it impossible. Same class of
+  problem #80's theme tests solve by cross-checking — pick either mechanism.
+  (7) ListView re-implements +page's appSource/fmtPlayed as appDetail/fmtPlayed
+  and the copies already differ ("never played" vs "never") — consolidate into a
+  shared helper next time either is touched.
 - **Next candidate:** Wave 3 is DONE once #78 + #79 land. Next is **Wave 4**: the
   round-2 lanes — #41 themes (its `tokens.css` is what `5c0a042` tokenized
   GridView/ListView for, so it now has a consumer and lands cleanly), then #42
   Continue Watching, then #43 artwork disk cache. Take #41 first: #43 and #44's
   tokens both assume it. Also still loose: #39's `0dabfea` (L2/R2 synthesis,
-  needs-hardware).
+  needs-hardware). Plus review follow-ups (5)–(7) above — (5) is the cheapest.
 
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the

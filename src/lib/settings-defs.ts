@@ -132,7 +132,9 @@ export const SETTING_DEFS: SettingDef[] = [
     value: (s) => `${s.grid_columns ?? 6}`,
     get: (s) => s?.grid_columns ?? 6,
     set: (v) => ({ grid_columns: v }),
-    lo: 3, hi: 12, step: 1, int: true,
+    // lo matches the backend clamp (Settings::normalize, 1–12): with a floor of 3, a
+    // hand-edited grid_columns of 1–2 would JUMP UP to 3 on a decrease press.
+    lo: 1, hi: 12, step: 1, int: true,
   },
   {
     key: "accent", label: "Accent", type: "cycle",

@@ -31,6 +31,8 @@
   } = $props();
 
   let root = $state<HTMLElement | null>(null);
+  // Full-list render (no window), so favorites lookups need to be O(1) — see GridView.
+  let favSet = $derived(new Set(favorites));
   function tileName(t: Tile) {
     return t.kind === "app" ? t.app.name : t.game.name;
   }
@@ -72,7 +74,7 @@
         {/if}
       </span>
       <span class="lmain">
-        <span class="lname">{tileName(t)}{#if favorites.includes(t.id)}<span class="lfav">⭐</span>{/if}</span>
+        <span class="lname">{tileName(t)}{#if favSet.has(t.id)}<span class="lfav">⭐</span>{/if}</span>
         <span class="ldetail">{detail(t)}</span>
       </span>
       {#if t.kind === "game"}
