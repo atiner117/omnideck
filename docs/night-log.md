@@ -20,6 +20,61 @@ Entry template:
 
 <!-- entries below -->
 
+<<<<<<< HEAD
+## 2026-08-17 23:20 — Wave 4 pick 1: theme system (the pick's tokens didn't exist on main)
+- **Vision tie:** VISION priority 2 — a high bang-for-effort roadmap item plugging into the
+  table-driven Settings surface; round-2 backlog **Lane A**. First item of Wave 4, which the
+  #79 log named as next ("take #41 first: #43 and #44's tokens both assume it").
+- **Branch / PR:** `pick/themes` — https://github.com/atiner117/omnideck/pull/80
+  (supersedes #41 — close it when this lands).
+- **Open-PR inventory:** 7 open, ALL of them read before choosing: #79, #78, #46, #44, #43,
+  #42, #41. #79/#78 are the previous two nights (supersede #44/#46); #43/#42/#41 are the
+  untouched Wave 4 lanes. No PR existed for this work other than #41 itself, which this
+  supersedes rather than duplicates.
+- **Changed:** #41's `532a3cf`+`e8e7927`+`4a99ac8` onto main `f1e04c7`, but **NOT verbatim —
+  the pick's entire token vocabulary is absent from main.** #41 was authored against a
+  `src/lib/tokens.css` from its own `d8f81de`, which never merged; main got tokens via
+  `fa6fe2c`, *inside* `+page.svelte`'s `:global(:root)`, under different names. The pick
+  themes `--bg`/`--surface-2`/`--surface-3`/`--text`/`--text-bright` (none exist here) and
+  leaves main's `--surface-deep`/`--surface-card`/`--text-soft`/`--text-label`/`--text-dim`/
+  `--danger` unthemed — verbatim, OLED's `--bg:#000` would be read by nothing and Light would
+  keep dark-navy cards. Kept the pick's ARCHITECTURE (registry, `applyTheme`, `data-theme`
+  stamp, settings row, config normalize); rewrote all six palettes + the Light shim against
+  main's real 9 tokens. THREE further repairs: (1) the Light shim missed `Modal.svelte`'s
+  hardcoded `.prefs { background:#121826 }` — the panel the Theme picker itself lives in, so
+  Light would have looked like a no-op from Settings; (2) the shim redundantly re-set
+  properties main has since tokenized (`.clock`, `.badge` color, `.xsheadlbl`, `.infogrid dt`,
+  `.numedit` bg) — trimmed to only what is still hardcoded; (3) the scanline z-index comment
+  cited overscan z50 from unmerged #46 — re-derived against main's real stack (chrome 2 → 5 →
+  Modal 10/11 → NP 12 → Wizard 20 → deck 40/41 → transport 44/45 → boot-errors 60 → toast 70
+  → screensaver 200/201); z5 still correct. `pageBg` resolves to `var(--surface-deep)`, not
+  the pick's `var(--bg)`. The #79 `parse_backup` trap does NOT apply: `theme` lives inside
+  `Settings`, whose `normalize()` both config paths already call. OmniDark is default and
+  renders byte-identical.
+- **Verify:** bun run check (pass, 360 files, 0 errors) · bun run build (pass) · bun run test
+  (21 pass) · cargo clippy --release --all-targets -D warnings (pass) · cargo test --release
+  (93 pass, 1 ignored — was 91: +2 theme tests). Bindings regenerated; `diff -rq` vs the
+  generated set clean. No new deps.
+  **The new tests earned their keep immediately** — `theme_ids_match_frontend` failed twice
+  during the build on a doc comment that mentioned `data-theme`, hence the comment-stripping
+  helper; `every_theme_overrides_every_base_token` is the guard that would have caught the
+  verbatim-pick bug unaided.
+  needs-hardware: this is a purely visual feature and NO palette has been seen on a panel.
+  Light most of all (the one theme carrying a shim), then OLED true-black on the TV and CRT
+  scanline density at 10 feet.
+- **Outcome:** shipped to draft PR #80.
+- **COLLISION NOTE for Andrew:** #78, #79 and #80 are all off `f1e04c7` and all add a
+  `settings-defs.ts` row + a config field; #79 and #80 also both prepend a night-log entry at
+  the same spot. Expect a trivial conflict in `docs/night-log.md` and small refreshes in
+  `settings-defs.ts` / `config.rs` for whichever merges later. Nothing else overlaps —
+  themes touch only the token layer.
+- **Next candidate:** Wave 4 continues with **#42 Continue Watching** (Jellyfin resume/watched
+  + row component) then **#43 artwork disk cache**. #43's `5c0a042`-era tokens now have a real
+  consumer, and both were authored pre-router — expect the same "read the whole removed region"
+  discipline. Also still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware). Worth
+  flagging: `+page.svelte` and `Modal.svelte` finishing their token conversion would let the
+  Light shim in themes.css be deleted outright — a clean, self-contained follow-up.
+=======
 ## 2026-08-16 23:10 — Wave 3 pick 7 (LAST): library view modes — rail / grid / list
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 7, the final item in the +page
   wave (frontend-split track, VISION priority 1). Closes out the wave that ran
@@ -124,6 +179,7 @@ Entry template:
   against #60's table + #77's router, so expect the same auto-merge payoff. Then Wave 4
   reworks (#41 themes — needs re-expression on main's tokens, NOT a rebase; #42 resume;
   #43 artcache) and #39's last loose commit `0dabfea` (L2/R2 synthesis, needs-hardware).
+>>>>>>> origin/main
 
 ## 2026-08-11 07:35 — Wave 3 pick 5: the router rewrite (roster was missing npOpen)
 - **Vision tie:** PR-TRIAGE-2026-07-26 Wave 3 step 5 — the biggest +page rewrite; the

@@ -24,6 +24,7 @@
   import { splitArgv } from "$lib/argv";
   import type { Tile } from "$lib/tiles";
   import { SETTING_DEFS, ACCENTS, normalizeNum, type SettingDef, type CycleDef, type NumDef, type TextDef } from "$lib/settings-defs";
+  import { applyTheme } from "$lib/themes/themes";
   import GridView from "$lib/components/GridView.svelte";
   import ListView from "$lib/components/ListView.svelte";
   import LayoutPicker from "$lib/components/LayoutPicker.svelte";
@@ -340,6 +341,17 @@
       : (PRESET[cfg?.settings?.ui_scale ?? "medium"] ?? 1.6),
   );
   let settingsEditing = $state(false);
+  // Theme: stamp data-theme on <html> whenever the setting changes; the base tokens in this
+  // file's :global(:root) block plus src/lib/themes/themes.css do all the color work. Runs
+  // with the default before cfg loads, so there is no unthemed flash.
+  $effect(() => applyTheme(cfg?.settings?.theme));
+  // Page background: an explicitly chosen background_color still wins; the stock default now
+  // follows the theme's --surface-deep token instead, so OLED/Light/CRT/Deck recolor the page
+  // without the user having to clear their background setting first.
+  let pageBg = $derived.by(() => {
+    const c = cfg?.settings?.background_color ?? "#05070b";
+    return c === "#05070b" ? "var(--surface-deep)" : c;
+  });
 
   // Background = a base (solid color or a custom image) plus an optional overlay: the
   // focused game's wide hero art, or a dominant-color gradient from the focused app's icon.
@@ -1202,7 +1214,8 @@
   });
 </script>
 
-<main class:overscan={overscanPct > 0} style="--accent:{accent}; --scale:{scaleNum}; --overscan:{overscanPct}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{cfg?.settings?.background_color ?? '#05070b'}">
+<main class:overscan={overscanPct > 0} style="--accent:{accent}; --scale:{scaleNum}; --overscan:{overscanPct}; --bg-blur:{cfg?.settings?.bg_blur ?? 0}px; --bg-bright:{cfg?.settings?.bg_brightness ?? 0.82}; background-color:{pageBg}">
+
   {#if baseImageShown}<div class="xbg base has" style="background-image:url({bgImageUrl})"></div>{/if}
   <div class="xbg" class:has={!!overlay} class:wash={overlay?.kind === "wash"}
     style={overlay?.kind === "art" ? `background-image:url(${overlay.url})`

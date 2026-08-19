@@ -13,6 +13,7 @@
 import type { Appearance, Settings } from "./backend";
 import { isGridLayout } from "./components/layouts";
 import { blip } from "./sfx";
+import { DEFAULT_THEME, nextTheme, themeLabel } from "./themes/themes";
 
 // ---- option lists ----
 export const ACCENTS = ["#4cc2ff", "#b14cff", "#6ee7a8", "#ff8a3d", "#ff5d6c", "#ffd166"];
@@ -105,6 +106,11 @@ export function normalizeNum(d: NumDef, raw: number): number {
 // ---- the table ----
 export const SETTING_DEFS: SettingDef[] = [
   { key: "hdr-look", label: "Appearance", type: "header" },
+  {
+    key: "theme", label: "Theme", type: "cycle",
+    value: (s) => themeLabel(s.theme ?? DEFAULT_THEME),
+    cycle: (s) => ({ theme: nextTheme(s.theme ?? DEFAULT_THEME) }),
+  },
   {
     key: "size", label: "Size", type: "cycle",
     value: (s) => cap1(s.ui_scale ?? "medium"),

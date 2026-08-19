@@ -1,0 +1,202 @@
+/*
+ * Themes (NOTES-FEATURE-BACKLOG-2026-07-12 Lane A).
+ *
+ * Each block overrides the design tokens for one `data-theme` id (stamped on <html> by
+ * applyTheme in themes.ts). The BASE values — and therefore the OmniDark theme, which has
+ * no block here — live in +page.svelte's `:global(:root)` block (review #16 put the tokens
+ * there rather than in a standalone tokens.css).
+ *
+ * A `:root[data-theme=ID]` selector is (0,2,0); the base `:root` is (0,1,0) — so these win
+ * on specificity and import order is irrelevant. The runtime props --accent / --scale /
+ * --bg-blur / --bg-bright stay user-driven and are never touched by a theme.
+ *
+ * Every theme must override EVERY base token: config.rs's every_theme_overrides_every_base_token
+ * test fails CI otherwise, because a forgotten token silently keeps its OmniDark value.
+ *
+ * Reach: everything that reads the tokens follows the theme automatically (Modal, NowPlaying,
+ * Wizard, HelpModal, SleepTimer and the page's tokenized rules). +page.svelte and Modal.svelte
+ * still hardcode part of their palette — the Light section at the bottom shims those until the
+ * deferred token conversion (review #16) lands.
+ */
+
+/* ---- OLED Black — true #000 surfaces for OLED TVs; borders carry the separation ---- */
+:root[data-theme="oled"] {
+  --surface-deep: #000000;
+  --surface: #0a111d;
+  --surface-card: #000000;
+  --border: #263450;
+  --text-muted: #9fb0c8;
+  --text-soft: #cdd7e6;
+  --text-label: #6b7790;
+  --text-dim: #7e8aa0;
+  --danger: #e0503f;
+}
+
+/* ---- Light ---- */
+:root[data-theme="light"] {
+  --surface-deep: #eef1f6;
+  --surface: #ffffff;
+  --surface-card: #f7f9fc;
+  --border: #aebccf;
+  --text-muted: #5b6b82;
+  --text-soft: #2a3547;
+  --text-label: #55637a;
+  --text-dim: #6d7b91;
+  --danger: #b3271a;
+}
+
+/* ---- High Contrast — pure black, hard white borders (accessibility) ---- */
+:root[data-theme="high-contrast"] {
+  --surface-deep: #000000;
+  --surface: #000000;
+  --surface-card: #000000;
+  --border: #f2f2f2;
+  --text-muted: #e8e8e8;
+  --text-soft: #ffffff;
+  --text-label: #d6d6d6;
+  --text-dim: #d6d6d6;
+  --danger: #ff6b5b;
+}
+
+/* ---- Retro CRT — phosphor-green darks with static scanlines ---- */
+:root[data-theme="crt"] {
+  --surface-deep: #020803;
+  --surface: #0b2617;
+  --surface-card: #04100a;
+  --border: #1f5c36;
+  --text-muted: #55b374;
+  --text-soft: #8ce6a8;
+  --text-label: #3f8f5b;
+  --text-dim: #4aa066;
+  --danger: #ff6b5b;
+}
+/* Static scanlines: fixed, non-interactive, UNANIMATED (nothing for prefers-reduced-motion
+   to object to — NOTES-A11Y), subtle enough to read through.
+   z 5: over the page chrome (header/.xmb/footer are z 2, and <main> is position:relative
+   with no z-index — no stacking context, so everything shares the root context) but UNDER
+   every overlay and alert: Modal 10/11, NowPlaying 12, Wizard 20, deck 40/41, NP transport
+   44/45, boot-errors 60, toast 70, screensaver 200/201. Modals and error UI must stay
+   scanline-free and fully legible. */
+:root[data-theme="crt"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.16) 0px,
+    rgba(0, 0, 0, 0.16) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* ---- Deck — Steam-Deck-ish blue/grey ---- */
+:root[data-theme="deck"] {
+  --surface-deep: #0e141b;
+  --surface: #22303f;
+  --surface-card: #16202d;
+  --border: #3d5875;
+  --text-muted: #8fa3b8;
+  --text-soft: #dce1e8;
+  --text-label: #708499;
+  --text-dim: #7d90a5;
+  --danger: #d1493a;
+}
+
+/*
+ * ---- Light-theme shim (TEMPORARY) ----
+ * +page.svelte and Modal.svelte still hardcode part of their palette (the token conversion
+ * was deliberately deferred by review #16). Every hardcoded value is light-on-dark, so the
+ * five DARK themes are unaffected — but on Light the UI would be light-on-light, so remap
+ * exactly those declarations here.
+ *
+ * Specificity: `:root[data-theme="light"] .x` is (0,3,0) and beats Svelte's scoped
+ * `.x.svelte-hash` (0,2,0); rules that target a `:global()` child go through `.prefs` so
+ * they outrank Svelte's compiled `.prefs.svelte-hash .child` (0,4,0) as well.
+ *
+ * DELETE THIS WHOLE SECTION once +page.svelte and Modal.svelte adopt the tokens — the
+ * theme blocks above are then sufficient on their own.
+ */
+
+/* +page.svelte */
+:root[data-theme="light"] main {
+  color: #16202e;
+}
+:root[data-theme="light"] .badge {
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .xcat {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .xclabel {
+  color: #0c1320;
+}
+:root[data-theme="light"] .xitem {
+  color: var(--text-soft);
+}
+:root[data-theme="light"] .xthumb {
+  background: var(--surface-card);
+}
+:root[data-theme="light"] .xempty {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .numedit,
+:root[data-theme="light"] .textedit {
+  color: #0c1320;
+}
+:root[data-theme="light"] .infogrid dd {
+  color: var(--text-soft);
+}
+:root[data-theme="light"] .wlead {
+  color: var(--text-soft);
+}
+:root[data-theme="light"] footer {
+  color: var(--text-muted);
+  border-top-color: var(--border);
+  background: color-mix(in srgb, var(--surface-deep) 40%, transparent);
+}
+:root[data-theme="light"] footer b {
+  color: var(--text-soft);
+}
+/* Art/wash edge fade: same gradient geometry as the page's, tinted from --surface-deep
+   instead of the hardcoded #05070b (alpha stops fa/f0/9e/33 and 59/99 ≈ these %). */
+:root[data-theme="light"] .xbg-fade {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--surface-deep) 98%, transparent) 0%,
+      color-mix(in srgb, var(--surface-deep) 94%, transparent) 26%,
+      color-mix(in srgb, var(--surface-deep) 62%, transparent) 55%,
+      color-mix(in srgb, var(--surface-deep) 20%, transparent) 100%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-deep) 35%, transparent) 0%,
+      transparent 32%,
+      color-mix(in srgb, var(--surface-deep) 60%, transparent) 100%
+    );
+}
+
+/* Modal.svelte — the panel the Theme picker itself lives in, so this one is load-bearing:
+   without it, switching to Light from the Settings modal appears to do nothing. */
+:root[data-theme="light"] .prefs {
+  background: var(--surface);
+}
+:root[data-theme="light"] .prefs .cstate.on {
+  color: #1a7f4b;
+}
+:root[data-theme="light"] .prefs .csearch {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .prefs .oskkey {
+  color: var(--text-soft);
+}
+:root[data-theme="light"] .prefs .oskkey.special {
+  background: var(--surface-card);
+}
+:root[data-theme="light"] .prefs .oskkey.focused {
+  color: #0c1320;
+}
