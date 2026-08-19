@@ -477,12 +477,12 @@
   const mediaNav = new MediaNav({
     onerror: reportError,
     holdstop: holdStop,
-    onplay: (id, name) => {
-      status = `▶ ${name}…`;
+    onplay: (id, name, startSecs) => {
+      status = startSecs ? `▶ ${name} (resuming)…` : `▶ ${name}…`;
       // The backend mints the per-LAUNCH key (media-<id>#<seq>) — keying the card on the
       // item id let a replay of the same item share a key, and the first instance's exit
       // then cleared the card of the one still playing.
-      api.mediaPlay(id, name)
+      api.mediaPlay(id, name, startSecs)
         .then((key) => { nowList = [{ id: key, kind: "app", name, category: "video" }, ...nowList.filter((e) => e.id !== key)].slice(0, 3); })
         .catch((e) => reportError("Playback failed", e));
       later(() => (status = ""), 3500);

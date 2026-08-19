@@ -88,7 +88,9 @@ export const mediaBrowse = (parent: string) => invoke<MediaItem[]>("media_browse
 export const mediaPoster = (id: string) => invoke<string | null>("media_poster", { id });
 /** Starts playback; resolves to the per-LAUNCH exit key — use it as the Now Playing card id
  *  so a replay of the same item can't share (and later clear) another instance's card. */
-export const mediaPlay = (id: string, name: string) => invoke<string>("media_play", { id, name });
+/** Play an item; `startSecs` resumes from its Jellyfin position (mpv `--start=`). */
+export const mediaPlay = (id: string, name: string, startSecs?: number) =>
+  invoke<string>("media_play", { id, name, startSecs });
 
 // ---- sleep timer (sleep_timer.rs — pause playback in N minutes) ----
 /** Arm the sleep timer (re-setting REPLACES a running one); resolves to the initial status.

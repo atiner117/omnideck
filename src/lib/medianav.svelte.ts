@@ -19,8 +19,11 @@ export class MediaNav {
   constructor(
     private deps: {
       onerror: (ctx: string, e: unknown) => void;
-      /** Play is a page concern: it owns the ▶ status toast and the Now-Playing cards. */
-      onplay: (id: string, name: string) => void;
+      /**
+       * Play is a page concern: it owns the ▶ status toast and the Now-Playing cards.
+       * `startSecs` is the row's resume point (undefined = play from the top).
+       */
+      onplay: (id: string, name: string, startSecs?: number) => void;
       /** Stop any in-progress hold-repeat when the modal opens over the rail. */
       holdstop: () => void;
     },
@@ -28,10 +31,26 @@ export class MediaNav {
 
   private row(i: MediaItem, group?: string): MediaRow {
     const browse = ["Series", "Season", "Folder", "BoxSet", "CollectionFolder"].includes(i.kind);
+    // u64 crosses the IPC boundary as a bigint; every arithmetic use below needs a Number.
+    const startSecs = i.position_secs != null ? Number(i.position_secs) : undefined;
+    const runtime = i.runtime_mins != null ? Number(i.runtime_mins) : undefined;
     const pct = i.played_pct ? `${Math.round(i.played_pct)}% · ` : "";
-    const mins = i.runtime_mins ? `${i.runtime_mins} min` : i.kind.toLowerCase();
+    // On a row you can resume, what's LEFT is the useful number — the total runtime isn't.
+    const left = startSecs !== undefined && runtime !== undefined
+      ? runtime - Math.floor(startSecs / 60)
+      : 0;
+    const mins = left > 0 ? `${left} min left` : runtime ? `${runtime} min` : i.kind.toLowerCase();
     const sub = i.series ? `${pct}${i.series}` : `${pct}${mins}`;
-    return { id: i.id, name: i.name, sub, group, browse };
+    // Browse rows (a series/season/folder) have no position of their own to resume from.
+    return {
+      id: i.id,
+      name: i.name,
+      sub,
+      group,
+      browse,
+      startSecs: browse ? undefined : startSecs,
+      played: i.played ?? false,
+    };
   }
 
   async openLibrary() {
@@ -75,7 +94,7 @@ export class MediaNav {
       this.loading = false;
     } else {
       this.open = false;
-      this.deps.onplay(r.id, r.name);
+      this.deps.onplay(r.id, r.name, r.startSecs);
     }
   }
 

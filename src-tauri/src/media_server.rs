@@ -40,6 +40,17 @@ pub struct MediaItem {
     pub played_pct: Option<f64>,
     pub runtime_mins: Option<u64>,
     pub series: Option<String>, // parent series name for episodes
+    /// Resume point in whole seconds (UserData.PlaybackPositionTicks). None = start from the
+    /// top, so "does this have a resume point" is one null-check on the frontend.
+    pub position_secs: Option<u64>,
+    /// UserData.Played — the server's fully-watched flag, for the ✓ marker on browse rows.
+    pub played: Option<bool>,
+}
+
+/// Jellyfin ticks (100 ns each) → whole seconds, rounding down. Sub-second precision is
+/// noise for a resume point and mpv's `--start` is happier with an integer.
+fn ticks_to_secs(ticks: u64) -> u64 {
+    ticks / 10_000_000
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -400,6 +411,13 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
                         played_pct: i["UserData"]["PlayedPercentage"].as_f64(),
                         runtime_mins: i["RunTimeTicks"].as_u64().map(|t| t / 600_000_000),
                         series: i["SeriesName"].as_str().map(str::to_string),
+                        // 0 ticks means "no resume point", NOT "resume at 0:00" — collapse it
+                        // to None so a never-started item can't ask mpv to seek.
+                        position_secs: i["UserData"]["PlaybackPositionTicks"]
+                            .as_u64()
+                            .map(ticks_to_secs)
+                            .filter(|s| *s > 0),
+                        played: i["UserData"]["Played"].as_bool(),
                     })
                 })
                 .collect()
@@ -447,7 +465,48 @@ fn prune(dir: &Path, max_bytes: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_id, MediaServerConfig};
+    use super::{items_of, ticks_to_secs, valid_id, MediaServerConfig};
+
+    #[test]
+    fn ticks_convert_to_whole_seconds() {
+        assert_eq!(ticks_to_secs(0), 0);
+        assert_eq!(ticks_to_secs(10_000_000), 1); // exactly 1 s
+        assert_eq!(ticks_to_secs(9_999_999), 0); // sub-second rounds down
+        assert_eq!(ticks_to_secs(28_500_000_000), 2850); // 47 min 30 s into a film
+    }
+
+    #[test]
+    fn items_carry_the_resume_point_and_watched_flag() {
+        let v = serde_json::json!([
+            {
+                "Id": "aaa", "Name": "Halfway Movie", "Type": "Movie",
+                "RunTimeTicks": 72_000_000_000u64, // 2 h
+                "UserData": {
+                    "PlaybackPositionTicks": 36_000_000_000u64, // 1 h in
+                    "PlayedPercentage": 50.0,
+                    "Played": false
+                }
+            },
+            {
+                "Id": "bbb", "Name": "Finished Episode", "Type": "Episode",
+                "SeriesName": "Some Show",
+                "UserData": { "PlaybackPositionTicks": 0, "Played": true }
+            },
+            { "Id": "ccc", "Name": "Untouched", "Type": "Movie" }
+        ]);
+        let items = items_of(&v);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].position_secs, Some(3600));
+        assert_eq!(items[0].runtime_mins, Some(120));
+        assert_eq!(items[0].played, Some(false));
+        // 0 ticks = never started, so there is nothing to seek to.
+        assert_eq!(items[1].position_secs, None);
+        assert_eq!(items[1].played, Some(true));
+        // No UserData at all → every watch-state field stays None.
+        assert_eq!(items[2].position_secs, None);
+        assert_eq!(items[2].played, None);
+        assert_eq!(items[2].played_pct, None);
+    }
 
     #[test]
     fn valid_id_accepts_jellyfin_ids_and_rejects_injection() {
