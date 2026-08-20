@@ -212,18 +212,41 @@ pub async fn media_poster(id: String) -> Option<String> {
     Some(path.to_string_lossy().into_owned())
 }
 
+/// The mpv flag for a resume position, or None when playback should start from the top.
+/// Rejects non-finite and sub-second values: a NaN would render as `--start=NaN` and abort
+/// the launch, and a NEGATIVE `--start` is end-relative in mpv — passing one through would
+/// silently seek near the end of the film instead of the beginning.
+fn mpv_start_flag(start_secs: Option<f64>) -> Option<String> {
+    let s = start_secs.filter(|s| s.is_finite() && *s >= 1.0)?;
+    Some(format!("--start={}", s.floor() as u64))
+}
+
 /// Play a media item: mpv direct-stream by default (real 4K hwdec), the Jellyfin desktop
 /// client when installed and preferred. The stream URL is built server-side from the item
 /// id — the frontend never supplies a URL, so there's nothing to validate away.
+///
+/// `start_secs` is the item's Jellyfin resume point (`MediaItem::position_secs`): mpv gets
+/// `--start=<secs>`. The desktop-client path ignores it on purpose — jellyfinmediaplayer
+/// reads resume points off the server itself.
 #[tauri::command]
-pub async fn media_play(app: tauri::AppHandle, id: String, name: String) -> Result<String, String> {
+pub async fn media_play(
+    app: tauri::AppHandle,
+    id: String,
+    name: String,
+    start_secs: Option<f64>,
+) -> Result<String, String> {
     // blocking: the body does an X11/RandR probe, the (first-play) mpv capability probe,
     // and profile-template I/O — as a sync command all of that ran inline on the main
     // thread, freezing the UI and every other IPC call for the duration.
-    blocking(move || media_play_blocking(app, id, name)).await?
+    blocking(move || media_play_blocking(app, id, name, start_secs)).await?
 }
 
-fn media_play_blocking(app: tauri::AppHandle, id: String, name: String) -> Result<String, String> {
+fn media_play_blocking(
+    app: tauri::AppHandle,
+    id: String,
+    name: String,
+    start_secs: Option<f64>,
+) -> Result<String, String> {
     if !crate::media_server::valid_id(&id) {
         return Err("invalid media id".into());
     }
@@ -273,6 +296,16 @@ fn media_play_blocking(app: tauri::AppHandle, id: String, name: String) -> Resul
         }
         exec.push("--force-window=immediate".into());
         exec.push(format!("--force-media-title={name}"));
+        // Resume point, pushed LATE so it wins over anything in `mpv_args`/the profile
+        // include (mpv: last occurrence rules) — the position is a per-launch intent, the
+        // config is only a default. Seeking here happens before the first frame renders.
+        // --no-resume-playback rides along because mpv's own watch-later state (e.g.
+        // save-position-on-quit via a shim profile include) is applied at file load,
+        // AFTER argv — without it a stale local position silently beats the server's.
+        if let Some(flag) = mpv_start_flag(start_secs) {
+            exec.push("--no-resume-playback".into());
+            exec.push(flag);
+        }
         // Auth rides in a header, not the URL: stream_url() carries no api_key, so the
         // token stays out of mpv's log/OSD/IPC/watch-later and server access logs. (mpv
         // splits --http-header-fields on commas; Jellyfin tokens are hex, so no escaping.)
@@ -606,7 +639,19 @@ pub fn get_sleep_timer() -> Option<crate::sleep_timer::SleepTimerStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_safe_browser_arg, spawn_error};
+    use super::{is_safe_browser_arg, mpv_start_flag, spawn_error};
+
+    #[test]
+    fn start_flag_only_for_real_positive_positions() {
+        assert_eq!(mpv_start_flag(None), None); // plain play, no resume point
+        assert_eq!(mpv_start_flag(Some(0.0)), None); // "from the top" needs no flag
+        assert_eq!(mpv_start_flag(Some(0.4)), None); // sub-second resume is noise
+        assert_eq!(mpv_start_flag(Some(-30.0)), None); // negative is END-relative in mpv
+        assert_eq!(mpv_start_flag(Some(f64::NAN)), None); // would render "--start=NaN"
+        assert_eq!(mpv_start_flag(Some(f64::INFINITY)), None);
+        assert_eq!(mpv_start_flag(Some(1.0)), Some("--start=1".into()));
+        assert_eq!(mpv_start_flag(Some(2850.9)), Some("--start=2850".into())); // floors
+    }
 
     #[test]
     fn spawn_errors_map_to_clear_messages() {

@@ -5,6 +5,7 @@
 import * as api from "./backend";
 import type { MediaItem } from "./backend";
 import type { MediaRow } from "./MediaModal.svelte";
+import { BROWSE_KINDS, rowStartSecs, rowSub } from "./mediarow";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -19,19 +20,29 @@ export class MediaNav {
   constructor(
     private deps: {
       onerror: (ctx: string, e: unknown) => void;
-      /** Play is a page concern: it owns the ▶ status toast and the Now-Playing cards. */
-      onplay: (id: string, name: string) => void;
+      /**
+       * Play is a page concern: it owns the ▶ status toast and the Now-Playing cards.
+       * `startSecs` is the row's resume point (undefined = play from the top).
+       */
+      onplay: (id: string, name: string, startSecs?: number) => void;
       /** Stop any in-progress hold-repeat when the modal opens over the rail. */
       holdstop: () => void;
     },
   ) {}
 
   private row(i: MediaItem, group?: string): MediaRow {
-    const browse = ["Series", "Season", "Folder", "BoxSet", "CollectionFolder"].includes(i.kind);
-    const pct = i.played_pct ? `${Math.round(i.played_pct)}% · ` : "";
-    const mins = i.runtime_mins ? `${i.runtime_mins} min` : i.kind.toLowerCase();
-    const sub = i.series ? `${pct}${i.series}` : `${pct}${mins}`;
-    return { id: i.id, name: i.name, sub, group, browse };
+    // The label + resume rules are pure and unit-tested in mediarow.ts — one place
+    // decides both what the sub-line says and whether activating seeks.
+    const browse = BROWSE_KINDS.has(i.kind);
+    return {
+      id: i.id,
+      name: i.name,
+      sub: rowSub(i, browse),
+      group,
+      browse,
+      startSecs: rowStartSecs(i, browse),
+      played: i.played ?? false,
+    };
   }
 
   async openLibrary() {
@@ -75,7 +86,7 @@ export class MediaNav {
       this.loading = false;
     } else {
       this.open = false;
-      this.deps.onplay(r.id, r.name);
+      this.deps.onplay(r.id, r.name, r.startSecs);
     }
   }
 

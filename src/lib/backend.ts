@@ -89,8 +89,10 @@ export const mediaBrowse = (parent: string) => invoke<MediaItem[]>("media_browse
 /** Fetch+cache an item's poster; resolves to the on-disk path for an omnideck:// URL. */
 export const mediaPoster = (id: string) => invoke<string | null>("media_poster", { id });
 /** Starts playback; resolves to the per-LAUNCH exit key — use it as the Now Playing card id
- *  so a replay of the same item can't share (and later clear) another instance's card. */
-export const mediaPlay = (id: string, name: string) => invoke<string>("media_play", { id, name });
+ *  so a replay of the same item can't share (and later clear) another instance's card.
+ *  `startSecs` resumes from the item's Jellyfin position (mpv `--start=`). */
+export const mediaPlay = (id: string, name: string, startSecs?: number) =>
+  invoke<string>("media_play", { id, name, startSecs: startSecs ?? null });
 
 // ---- sleep timer (sleep_timer.rs — pause playback in N minutes) ----
 /** Arm the sleep timer (re-setting REPLACES a running one); resolves to the initial status.

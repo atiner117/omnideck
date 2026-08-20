@@ -13,6 +13,10 @@
     sub: string;
     group?: string;
     browse: boolean;
+    /** Jellyfin resume point in seconds — playable rows only; absent = start from the top. */
+    startSecs?: number;
+    /** Server-side fully-watched flag; renders the ✓ marker. */
+    played?: boolean;
   };
 
   let {
@@ -52,6 +56,7 @@
         onmouseenter={() => onfocus(i)} onclick={() => { onfocus(i); onactivate(); }}>
         <span class="mposter">{#if posters[r.id]}<img src={posters[r.id]} alt="" loading="lazy" />{:else}{r.browse ? "📁" : "🎬"}{/if}</span>
         <span class="cname">{r.name}</span>
+        {#if r.played}<span class="cstate on" role="img" aria-label="watched">✓</span>{/if}
         <span class="ccat">{r.sub}</span>
       </button>
     {/each}
