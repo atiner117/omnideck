@@ -29,4 +29,8 @@ audio_samplerate: number,
  * the gamescope session, where the RandR probe is unavailable and the profiles would
  * otherwise fall back to 60. 0 (default) = auto-detect from the session's RandR mode.
  */
-display_fps: number, };
+display_fps: number, 
+/**
+ * Artwork disk-cache budget in MB (artwork_cache.rs LRU sweep). 0 (default) = 200 MB.
+ */
+art_cache_mb: bigint, };
