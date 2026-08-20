@@ -90,6 +90,37 @@ export class MediaNav {
     }
   }
 
+  /** Ids with a mark-watched request in flight. A second press on the same row would race
+   *  its own optimistic flip against the first reply and could settle on the wrong marker. */
+  private marking = new Set<string>();
+
+  /**
+   * Toggle the focused row's server-side watched flag (West / `w`).
+   *
+   * PLAYABLE ROWS ONLY. Jellyfin's PlayedItems happily accepts a series or season, but
+   * marking a whole show watched clears every episode's resume point and un-marking gives
+   * back only the flag — never the positions. That is not an undo, so it is not something a
+   * single un-confirmed button press should be able to do to a 60-episode series.
+   *
+   * The flip is optimistic: from the couch the ✓ has to move with the button, so it moves
+   * first and is put back if the server refuses.
+   */
+  async toggleWatched() {
+    const r = this.view?.rows[this.focus];
+    if (!r || r.browse || this.loading || this.marking.has(r.id)) return;
+    const next = !r.played;
+    this.marking.add(r.id);
+    r.played = next;
+    try {
+      await api.mediaSetPlayed(r.id, next);
+    } catch (e) {
+      r.played = !next;
+      this.deps.onerror(next ? "Mark watched" : "Mark unwatched", e);
+    } finally {
+      this.marking.delete(r.id);
+    }
+  }
+
   back() {
     if (this.stack.length > 1) {
       this.stack = this.stack.slice(0, -1);

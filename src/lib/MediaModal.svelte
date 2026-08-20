@@ -40,6 +40,11 @@
     onactivate: () => void;
     onclose: () => void;
   } = $props();
+
+  // The focused row drives the hint line's verbs. Mark-watched is offered on playable rows
+  // only — the page deliberately refuses it on a series/season (see MediaNav.toggleWatched),
+  // so advertising it there would promise something Enter's neighbour won't do.
+  const cur = $derived(rows[focus]);
 </script>
 
 <Modal labelledby="dlg-media" backdropLabel="Close media library" closeLabel="Close media library" {onclose}>
@@ -61,7 +66,7 @@
       </button>
     {/each}
   </div>
-  <p class="phint">{depth > 1 ? "Esc/◯ back" : "Esc/◯ close"} · ↑↓ select · Enter/✕ {rows[focus]?.browse ? "open" : "play"}</p>
+  <p class="phint">{depth > 1 ? "Esc/◯ back" : "Esc/◯ close"} · ↑↓ select · Enter/✕ {cur?.browse ? "open" : "play"}{#if cur && !cur.browse} · W/□ {cur.played ? "unwatch" : "watched"}{/if}</p>
 </Modal>
 
 <style>

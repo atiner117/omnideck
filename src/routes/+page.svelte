@@ -929,12 +929,14 @@
         if (e.key === "ArrowUp" && navGate()) mediaNav.move(-1);
         else if (e.key === "ArrowDown" && navGate()) mediaNav.move(1);
         else if (e.key === "Enter") mediaNav.activate();
+        else if (e.key === "w" || e.key === "W") mediaNav.toggleWatched();
         else if (e.key === "Escape" || e.key === "Backspace") mediaNav.back();
       },
       pad: (c) => {
         if (c === "DPadUp") holdStart(c, () => mediaNav.move(-1));
         else if (c === "DPadDown") holdStart(c, () => mediaNav.move(1));
         else if (c === "South") mediaNav.activate();
+        else if (c === "West") mediaNav.toggleWatched(); // no hold-repeat: it's a toggle
         else if (c === "East") mediaNav.back();
       },
       stickY: (d: number) => mediaNav.move(d),

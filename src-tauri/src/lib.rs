@@ -93,6 +93,7 @@ pub fn run() {
             commands::media_sections,
             commands::media_browse,
             commands::media_poster,
+            commands::media_set_played,
             commands::media_play,
             commands::bg_image,
             commands::deck_open,

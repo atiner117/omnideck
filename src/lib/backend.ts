@@ -93,6 +93,10 @@ export const mediaPoster = (id: string) => invoke<string | null>("media_poster",
  *  `startSecs` resumes from the item's Jellyfin position (mpv `--start=`). */
 export const mediaPlay = (id: string, name: string, startSecs?: number) =>
   invoke<string>("media_play", { id, name, startSecs: startSecs ?? null });
+/** Set an item's server-side watched flag. Marking watched also clears its resume point
+ *  server-side (Jellyfin's own behaviour), so un-marking restores the ✓, not the position. */
+export const mediaSetPlayed = (id: string, played: boolean) =>
+  invoke<void>("media_set_played", { id, played });
 
 // ---- sleep timer (sleep_timer.rs — pause playback in N minutes) ----
 /** Arm the sleep timer (re-setting REPLACES a running one); resolves to the initial status.

@@ -207,18 +207,28 @@ fn shim_pairing() -> Option<JellyfinServer> {
 impl JellyfinServer {
     async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}{path}", self.base);
-        let resp = self.send_get(&url).await?;
+        let resp = self.send(reqwest::Method::GET, &url).await?;
         if !resp.status().is_success() {
             return Err(format!("media server: HTTP {} on {path}", resp.status()));
         }
         resp.json().await.map_err(|e| format!("media server: bad JSON: {e}"))
     }
 
-    /// GET with one retry on a *transient* network error (connect/timeout) — a living-room
+    /// A request with one retry on a *transient* network error (connect/timeout) — a living-room
     /// box's wifi/DNS can blip, and a single retry turns a spurious empty section into a normal
     /// load. HTTP status errors are deterministic and are NOT retried.
-    async fn send_get(&self, url: &str) -> Result<reqwest::Response, String> {
-        let once = || crate::http::client().get(url).header("X-Emby-Token", &self.token).send();
+    ///
+    /// Retrying is only safe because every verb this sends is idempotent: GET reads, and
+    /// `PlayedItems` POST/DELETE set an *absolute* watched state rather than incrementing a
+    /// counter, so a replayed request lands on the same result. Keep that true of anything
+    /// added here — a non-idempotent verb would be double-applied by the retry.
+    async fn send(&self, method: reqwest::Method, url: &str) -> Result<reqwest::Response, String> {
+        let once = || {
+            crate::http::client()
+                .request(method.clone(), url)
+                .header("X-Emby-Token", &self.token)
+                .send()
+        };
         match once().await {
             Ok(r) => Ok(r),
             Err(e) if e.is_timeout() || e.is_connect() => {
@@ -323,6 +333,28 @@ impl JellyfinServer {
         Ok(items_of(&v["Items"]))
     }
 
+    /// Mark an item watched (`played = true`) or unwatched on the server — Jellyfin's
+    /// `PlayedItems`: POST sets the flag, DELETE clears it. Both set an absolute state, so
+    /// the transport retry above can't double-apply and a double press from the couch lands
+    /// exactly where the label promised.
+    ///
+    /// Marking watched also clears the item's server-side resume point (this is Jellyfin's
+    /// behaviour, not ours) — that's the expected meaning of "I'm done with this", but it is
+    /// why the caller gates this to a single playable item and not a whole series: un-marking
+    /// restores the flag, never the positions.
+    pub async fn set_played(&self, id: &str, played: bool) -> Result<(), String> {
+        if !valid_id(id) {
+            return Err("invalid item id".into());
+        }
+        let user = self.user().await?;
+        let (method, path) = played_request(&user, id, played);
+        let resp = self.send(method, &format!("{}{path}", self.base)).await?;
+        if !resp.status().is_success() {
+            return Err(format!("media server: HTTP {} marking watched", resp.status()));
+        }
+        Ok(())
+    }
+
     /// Direct-play URL for mpv. `static=true` asks the server for the untranscoded file —
     /// the whole point: mpv + hwdec does the 4K work, not a server transcode. Carries NO
     /// credential: callers must authenticate with the `X-Emby-Token` header (see `token()`),
@@ -398,6 +430,15 @@ impl JellyfinServer {
     }
 }
 
+/// The verb + path for a watch-state change: Jellyfin's `PlayedItems` uses the SAME path in
+/// both directions and only flips the method (POST sets, DELETE clears). Split out of
+/// `set_played` so that choice is unit-testable without a live server — the same reason
+/// `mpv_start_flag` lives outside the launch path.
+fn played_request(user: &str, id: &str, played: bool) -> (reqwest::Method, String) {
+    let method = if played { reqwest::Method::POST } else { reqwest::Method::DELETE };
+    (method, format!("/Users/{user}/PlayedItems/{id}"))
+}
+
 fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
     v.as_array()
         .map(|a| {
@@ -466,7 +507,19 @@ fn prune(dir: &Path, max_bytes: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{items_of, ticks_to_secs, valid_id, MediaServerConfig};
+    use super::{items_of, played_request, ticks_to_secs, valid_id, MediaServerConfig};
+
+    #[test]
+    fn played_request_flips_only_the_verb() {
+        // Same path both ways, and both verbs set an ABSOLUTE state — that's what makes the
+        // transport's blind single retry safe, so pin it.
+        let (set, set_path) = played_request("u1", "abc", true);
+        let (clear, clear_path) = played_request("u1", "abc", false);
+        assert_eq!(set, reqwest::Method::POST);
+        assert_eq!(clear, reqwest::Method::DELETE);
+        assert_eq!(set_path, "/Users/u1/PlayedItems/abc");
+        assert_eq!(clear_path, set_path);
+    }
 
     #[test]
     fn ticks_convert_to_whole_seconds() {
