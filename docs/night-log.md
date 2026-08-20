@@ -20,6 +20,57 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-19 23:05 — mark watched/unwatched from the couch (West / W)
+- **Vision tie:** VISION priority 1 (media-server track, small shippable slices) — and it is
+  literally the **"next candidate" #81's log left**: the natural pair to resume. #81 made Continue
+  Watching resume; without this you still can't tell the server you're *done* with a title, so the
+  rail only ever grows.
+- **Branch / PR:** `loop/night-20260819` — https://github.com/atiner117/omnideck/pull/83
+- **Open-PR inventory:** **1 open, total, read before choosing** — #43
+  (`loop/fable-artcache-20260712-212133`, artwork disk cache, Lane C). That is the *whole* list, not
+  a subset: `gh pr list --state open --limit 200 --json number --jq 'length'` → `1`. The backlog
+  that used to be 8+ drafts is drained — #78/#79/#80/#81/#82 all merged since the last iteration, so
+  local `main` had moved to `c2ba3b2`. Searched the inventory for this increment's keywords before
+  building: nothing open touches watched/played state, so this is not a duplicate of #43 or of
+  anything else.
+- **Changed:** `send_get` → `send(reqwest::Method, url)` (shared one-retry transport);
+  `set_played()` on Jellyfin `PlayedItems` (POST sets / DELETE clears); `played_request()` split out
+  as a pure fn so the verb+path choice is unit-testable without a server (the `mpv_start_flag`
+  pattern); `media_set_played` command + `mediaSetPlayed` IPC; `MediaNav.toggleWatched()` with an
+  optimistic flip + revert-on-failure + an in-flight id guard; West/`W` added to the #77 overlay
+  roster's media entry (no hold-repeat — it's a toggle); hint line flips "watched"/"unwatch".
+- **THE JUDGEMENT CALL:** gated to **playable rows only**. Jellyfin's `PlayedItems` accepts a
+  series/season, and it was tempting to allow it — but marking a show watched clears **every
+  episode's resume point**, and un-marking returns only the flag, *never* the positions. So the
+  "undo" is lossy, and one unconfirmed button press would be able to destroy a 60-episode series'
+  progress. The hint line therefore doesn't advertise the binding on a 📁 row either. The same
+  lossiness applies in miniature to a single item (that IS what "I'm done" means) and is documented
+  on `set_played`, `mediaSetPlayed`, and `toggleWatched`.
+- **The other thing a reviewer should look at:** the retry transport is now shared with a *mutating*
+  verb. That's only safe because both `PlayedItems` verbs set an **absolute** state rather than
+  incrementing a counter, so a replay lands on the same result. Documented on `send()` so a future
+  non-idempotent verb doesn't silently inherit the blind retry.
+- **Verify:** bun run check (pass, 369 files, 0 errors) · bun run build (pass) · bun run test
+  (44 pass, 6 files) · cargo clippy --release --all-targets -D warnings (pass) · cargo test
+  --release (**99 pass**, 1 ignored — +1 new: `played_request_flips_only_the_verb`). Bindings
+  untouched (no `#[ts(export)]` struct changed; `git status --porcelain src/lib/bindings` clean).
+  No new deps.
+  needs-hardware: not exercised against a live Jellyfin server. The endpoint shape is Jellyfin's
+  documented one, but the round trip — and that the ✓ *survives a reopen*, i.e. the server really
+  persisted it — wants one couch test.
+- **Note for the next agent:** `origin` is SSH and `git fetch origin` **hangs on the yubikey prompt**
+  for two minutes before failing. Fetch anonymously instead — the repo is public:
+  `git fetch https://github.com/atiner117/omnideck.git main`. Local `main` is stale at `dfdfa32`
+  (PR #48) and the `gh/*` remote refs are leftovers from a remote that no longer exists; don't
+  trust either as "current main".
+- **Outcome:** shipped to draft PR #83.
+- **Next candidate:** **#43 artwork disk cache** is now the only open PR and the last untouched
+  Wave 4 lane — re-pick it against current main the way #81 re-picked #42 (expect the same "authored
+  against a far older main" audit). After that, the **0.2.0 release** is the highest-value non-feature
+  work: the version bump is already done, so it needs a CHANGELOG top-off (#83 + the Wave 4 merges
+  aren't in it), a couch pass over the needs-hardware items (#77 input layer, #81 resume, #83
+  watched), and a tag. Still loose: #39's `0dabfea` (L2/R2 synthesis), needs-hardware.
+
 ## 2026-08-18 23:03 — Wave 4 pick 2: Continue Watching actually resumes
 - **Vision tie:** VISION priority 2 / round-2 backlog **Lane B** (resume + watched state) — the
   "#80 log named #42 as next" candidate, taken as planned.
