@@ -9,7 +9,7 @@
 //   · Freshness: a hit younger than REVALIDATE_AFTER is served with ZERO network. Older
 //     hits revalidate with If-None-Match/If-Modified-Since — a 304 costs headers only.
 //     Network errors serve the stale copy (a launcher on flaky wifi still shows art).
-//   · Writes are atomic (fsutil::write_atomic, temp-sibling + rename) so a power cut
+//   · Writes are atomic (config::write_atomic — temp-sibling + rename + fsync, the same helper the config/backup writes use) so a power cut
 //     mid-write can never leave a truncated image for the asset protocol to serve.
 //   · Budget: size-capped LRU sweep after every store. Serving a hit bumps the data
 //     file's mtime, so eviction order is true access recency (unlike the fetch-recency
@@ -133,12 +133,12 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
 fn store(dir: &Path, key: &str, bytes: &[u8], meta: &Meta) -> Option<PathBuf> {
     let ext = sniff_ext(bytes)?;
     let path = dir.join(format!("{key}.{ext}"));
-    crate::fsutil::write_atomic(&path, bytes).ok()?;
+    crate::config::write_atomic(&path, bytes).ok()?;
     for other in IMAGE_EXTS.iter().filter(|e| **e != ext) {
         let _ = std::fs::remove_file(dir.join(format!("{key}.{other}")));
     }
     let json = serde_json::to_vec(meta).ok()?;
-    let _ = crate::fsutil::write_atomic(&meta_path(dir, key), &json);
+    let _ = crate::config::write_atomic(&meta_path(dir, key), &json);
     Some(path)
 }
 
@@ -215,7 +215,7 @@ async fn get_in(dir: &Path, url: &str, auth: Option<(&str, &str)>) -> Option<Pat
             FetchResult::NotModified => {
                 let refreshed = Meta { fetched_unix: now_unix(), ..meta };
                 if let Ok(json) = serde_json::to_vec(&refreshed) {
-                    let _ = crate::fsutil::write_atomic(&meta_path(&dir, &key), &json);
+                    let _ = crate::config::write_atomic(&meta_path(&dir, &key), &json);
                 }
                 touch(data);
                 Some(data.clone())
