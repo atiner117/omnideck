@@ -88,6 +88,9 @@ export const mediaSections = () => invoke<MediaSections>("media_sections");
 export const mediaBrowse = (parent: string) => invoke<MediaItem[]>("media_browse", { parent });
 /** Fetch+cache an item's poster; resolves to the on-disk path for an omnideck:// URL. */
 export const mediaPoster = (id: string) => invoke<string | null>("media_poster", { id });
+/** Disk-cached local path for any artwork URL under the configured media server (backdrops,
+ *  episode thumbs, …). Rejected (null) for URLs outside the server — see commands::get_artwork. */
+export const getArtwork = (url: string) => invoke<string | null>("get_artwork", { url });
 /** Starts playback; resolves to the per-LAUNCH exit key — use it as the Now Playing card id
  *  so a replay of the same item can't share (and later clear) another instance's card.
  *  `startSecs` resumes from the item's Jellyfin position (mpv `--start=`). */

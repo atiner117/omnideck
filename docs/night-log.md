@@ -20,6 +20,45 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-20 — Wave 4 pick 3 (THE LAST ONE): artwork disk cache (adapts #43)
+- **Vision tie:** Andrew-directed iteration. Round-2 backlog **Lane C** — the final item of
+  the entire post-rewrite draft backlog; #81's log named it next. Cold boots re-fetched
+  every poster over the network; this makes remote artwork a disk-first resource.
+- **Branch / PR:** `pick/artcache` — https://github.com/atiner117/omnideck/pull/84
+  (supersedes #43 — close it when this lands).
+- **Changed:** #43's `550a8a0` + `98dc8cd` (streaming-cap hardening) onto main `c2ba3b2`.
+  New self-contained `artwork_cache.rs`: FNV-1a-keyed files + .meta sidecars, 24 h
+  freshness then ETag/If-Modified-Since revalidation (network errors serve stale), atomic
+  writes, TRUE-LRU 200 MB budget (`[media_server] art_cache_mb`, additive), legacy
+  id-keyed cache dir removed once. Wiring: poster() delegates to the cache;
+  `prefetch_posters` warms rail art post-sections (4 bounded workers); new `get_artwork`
+  command gated by `url_within_base` (token-authed fetch must not become an open proxy);
+  `omnideck doctor` gains an `[art cache]` section + `--clear-art-cache`.
+  **THREE repairs** for main-side drift the draft predates:
+  (1) the draft's base carried a `crate::fsutil` module that never landed — atomic writes
+  now route through main's identical (and fsyncing) `config::write_atomic`, one
+  implementation instead of two;
+  (2) main's `valid_id` injection gate (post-draft) kept in `poster()` even though the
+  fetch moved into the cache;
+  (3) main already HAS `doctor` (#54) — the `--clear-art-cache` flag merged into the
+  existing Doctor variant instead of the draft's duplicate; the draft's `[art cache]`
+  section edits applied cleanly onto main's doctor body (same lineage).
+  Also NOT taken: the draft's 2-arg `mediaPlay` (predates #81's startSecs; would have
+  regressed the resume plumbing and the launch-key return type).
+- **Verify:** bun run check (pass, 369 files, 0 errors) · bun run build (pass) · bun run
+  test (44 pass) · cargo clippy --release --all-targets -D warnings (pass) · cargo test
+  --release (**107 pass**, 1 ignored — was 98: +9 incl. the hermetic loopback HTTP
+  miss→hit→304 test) · bindings regenerated, drift clean · no new deps · whole-tree
+  conflict-marker sweep clean (the #82 lesson).
+- **Outcome:** shipped to draft PR (supersedes #43). needs-hardware: none strictly — the
+  loopback test covers the protocol — but the first couch boot after merge should feel
+  the pop-in disappear on the second launch.
+- **Next candidate:** the backlog is DRAINED. Next per the plan: the 0.2.0 changelog
+  top-off (~27 merged PRs since 07-27, docs-only), then #81's five review follow-ups
+  (cheapest first: parse_backup's remaining normalize gap), then the VISION rewrite
+  unblocks autonomous scope-picking again. Still loose: #39's `0dabfea` (L2/R2,
+  needs-hardware — land before couch night or not at all for 0.2.0).
+
 ## 2026-08-19 23:05 — mark watched/unwatched from the couch (West / W)
 - **Vision tie:** VISION priority 1 (media-server track, small shippable slices) — and it is
   literally the **"next candidate" #81's log left**: the natural pair to resume. #81 made Continue

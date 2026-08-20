@@ -48,7 +48,12 @@ enum CliCommand {
     },
     /// One-shot support bundle: version, session, GPU/capability, config health,
     /// library/playback/controller status — paste this into a bug report
-    Doctor,
+    Doctor {
+        /// Delete the artwork disk cache before reporting (it refills from the media
+        /// server on demand; use when posters look stale/corrupt or to reclaim disk)
+        #[arg(long)]
+        clear_art_cache: bool,
+    },
 }
 
 /// The `omnideck.<date>.log` files in the state dir, oldest → newest. The date-stamped
@@ -104,9 +109,16 @@ fn logs(lines: usize, path_only: bool) {
 /// round-trips — `omnideck mediasrv` covers those): a bug reporter shouldn't need working
 /// networking to produce the bundle. Secrets never print — the config section reports
 /// key/token PRESENCE, not values.
-fn doctor() {
+fn doctor(clear_art_cache: bool) {
     println!("OmniDeck doctor — v{}", env!("CARGO_PKG_VERSION"));
     println!();
+
+    if clear_art_cache {
+        match crate::artwork_cache::clear() {
+            Ok(()) => println!("art cache cleared (refills from the media server on demand)\n"),
+            Err(e) => println!("art cache clear FAILED: {e}\n"),
+        }
+    }
 
     // Session: the single biggest behavior fork in the app (fullscreen, hotkeys, navpad).
     println!("[session]");
@@ -147,6 +159,21 @@ fn doctor() {
 
     println!("[library]");
     println!("  steam games: {}", crate::library::scan().games.len());
+    println!();
+
+    // Artwork disk cache (artwork_cache.rs): posters served from disk across boots.
+    let art = crate::artwork_cache::stats();
+    println!("[art cache]");
+    match &art.dir {
+        Some(d) => println!("  dir:     {}", d.display()),
+        None => println!("  dir:     unavailable ($XDG_CACHE_HOME and $HOME both unset)"),
+    }
+    println!(
+        "  size:    {} entries, {:.1} MB of {} MB budget (art_cache_mb)",
+        art.entries,
+        art.bytes as f64 / (1024.0 * 1024.0),
+        art.budget_bytes / (1024 * 1024),
+    );
     println!();
 
     // Playback stack: mpv presence decides direct-play; VapourSynth decides interpolation.
@@ -247,7 +274,7 @@ pub fn handle() -> bool {
             }
         }
         CliCommand::Logs { lines, path } => logs(lines, path),
-        CliCommand::Doctor => doctor(),
+        CliCommand::Doctor { clear_art_cache } => doctor(clear_art_cache),
         CliCommand::Mediasrv => {
             let Some(srv) = crate::media_server::server() else {
                 println!("no media server configured (config [media_server] or shim pairing)");
