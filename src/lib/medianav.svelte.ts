@@ -5,6 +5,7 @@
 import * as api from "./backend";
 import type { MediaItem } from "./backend";
 import type { MediaRow } from "./MediaModal.svelte";
+import { BROWSE_KINDS, rowStartSecs, rowSub } from "./mediarow";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -30,25 +31,16 @@ export class MediaNav {
   ) {}
 
   private row(i: MediaItem, group?: string): MediaRow {
-    const browse = ["Series", "Season", "Folder", "BoxSet", "CollectionFolder"].includes(i.kind);
-    // u64 crosses the IPC boundary as a bigint; every arithmetic use below needs a Number.
-    const startSecs = i.position_secs != null ? Number(i.position_secs) : undefined;
-    const runtime = i.runtime_mins != null ? Number(i.runtime_mins) : undefined;
-    const pct = i.played_pct ? `${Math.round(i.played_pct)}% · ` : "";
-    // On a row you can resume, what's LEFT is the useful number — the total runtime isn't.
-    const left = startSecs !== undefined && runtime !== undefined
-      ? runtime - Math.floor(startSecs / 60)
-      : 0;
-    const mins = left > 0 ? `${left} min left` : runtime ? `${runtime} min` : i.kind.toLowerCase();
-    const sub = i.series ? `${pct}${i.series}` : `${pct}${mins}`;
-    // Browse rows (a series/season/folder) have no position of their own to resume from.
+    // The label + resume rules are pure and unit-tested in mediarow.ts — one place
+    // decides both what the sub-line says and whether activating seeks.
+    const browse = BROWSE_KINDS.has(i.kind);
     return {
       id: i.id,
       name: i.name,
-      sub,
+      sub: rowSub(i, browse),
       group,
       browse,
-      startSecs: browse ? undefined : startSecs,
+      startSecs: rowStartSecs(i, browse),
       played: i.played ?? false,
     };
   }

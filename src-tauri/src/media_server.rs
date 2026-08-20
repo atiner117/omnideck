@@ -403,21 +403,22 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
         .map(|a| {
             a.iter()
                 .filter_map(|i| {
+                    let ud = &i["UserData"]; // one lookup; missing UserData indexes as Null
                     Some(MediaItem {
                         id: i["Id"].as_str()?.to_string(),
                         name: i["Name"].as_str()?.to_string(),
                         kind: i["Type"].as_str().unwrap_or("").to_string(),
                         overview: i["Overview"].as_str().map(str::to_string),
-                        played_pct: i["UserData"]["PlayedPercentage"].as_f64(),
-                        runtime_mins: i["RunTimeTicks"].as_u64().map(|t| t / 600_000_000),
+                        played_pct: ud["PlayedPercentage"].as_f64(),
+                        runtime_mins: i["RunTimeTicks"].as_u64().map(|t| ticks_to_secs(t) / 60),
                         series: i["SeriesName"].as_str().map(str::to_string),
                         // 0 ticks means "no resume point", NOT "resume at 0:00" — collapse it
                         // to None so a never-started item can't ask mpv to seek.
-                        position_secs: i["UserData"]["PlaybackPositionTicks"]
+                        position_secs: ud["PlaybackPositionTicks"]
                             .as_u64()
                             .map(ticks_to_secs)
                             .filter(|s| *s > 0),
-                        played: i["UserData"]["Played"].as_bool(),
+                        played: ud["Played"].as_bool(),
                     })
                 })
                 .collect()

@@ -69,6 +69,34 @@ Entry template:
   entangled of the four — it touches no `settings-defs.ts` row and no config field, so its only
   expected conflict is the `docs/night-log.md` prepend point it shares with #79/#80. Merge order
   doesn't matter for it.
+- **Review pass (2026-08-20, Andrew-requested, /code-review high):** the review was NOT
+  clean — the headline label was dead where it mattered most. Fixed on this branch:
+  (1) **"N min left" never rendered for episodes** — `sub = series ? pct+series : pct+mins`
+  discarded the label for anything with a SeriesName, and /Items/Resume is mostly episodes;
+  the label logic is now a pure, tested module (`mediarow.ts`) and episodes read
+  "43% · Some Show · 18 min left".
+  (2) **left<=0 fell back to the FULL runtime** — double flooring made a nearly-finished
+  film read "90 min" like an untouched one; now "<1 min left".
+  (3) **the label leaked onto browse rows** — `startSecs` was masked for containers but
+  `sub` was computed from the unmasked value, so a folder could advertise "N min left" it
+  would never honor; gating now happens once, in mediarow.ts.
+  (4) **mpv watch-later beat --start** — a stale save-position-on-quit entry is applied at
+  file load, AFTER argv, so local state silently overrode the server position;
+  `--no-resume-playback` now rides with `--start`.
+  Plus: `runtime_mins` routed through ticks_to_secs (the raw 600_000_000 was the same
+  constant duplicated), UserData indexed once in items_of, the ✓ moved onto the shared
+  `.cstate on` vocabulary (it was accent-colored + unaligned vs every other modal ✓),
+  mediaPlay's orphaned exit-key JSDoc re-attached, `startSecs ?? null` per the file's own
+  optional-arg convention, BROWSE_KINDS hoisted to a module Set, +9 mediarow unit tests.
+- **Review follow-ups (logged, NOT fixed here):** (a) `start_secs` is `Option<f64>` but its
+  only producer is whole non-negative seconds — an `Option<u64>` signature deletes the
+  NaN/negative defence class; (b) no upper bound vs runtime — a stale position past EOF
+  makes mpv exit instantly while a Now Playing card and "(resuming)" toast still appear;
+  (c) `played ?? false` collapses the server's tri-state at the row boundary; (d) a
+  ✓-watched row that also carries a residual position resumes into the credits with no
+  "play from start" affordance — pair that with the mark-watched follow-up's context
+  action; (e) the "(resuming)" toast predicts mpv behavior the jellyfinmediaplayer path
+  deliberately ignores.
 - **Next candidate:** the natural pair to this one — **mark-watched from the couch**: `set_played`
   on `JellyfinServer` (POST/DELETE `/Users/{u}/PlayedItems/{id}`, both idempotent) plus
   `mark_watched`/`mark_unwatched`, wired to a context action on a media row (West/Y, say) through

@@ -299,7 +299,11 @@ fn media_play_blocking(
         // Resume point, pushed LATE so it wins over anything in `mpv_args`/the profile
         // include (mpv: last occurrence rules) — the position is a per-launch intent, the
         // config is only a default. Seeking here happens before the first frame renders.
+        // --no-resume-playback rides along because mpv's own watch-later state (e.g.
+        // save-position-on-quit via a shim profile include) is applied at file load,
+        // AFTER argv — without it a stale local position silently beats the server's.
         if let Some(flag) = mpv_start_flag(start_secs) {
+            exec.push("--no-resume-playback".into());
             exec.push(flag);
         }
         // Auth rides in a header, not the URL: stream_url() carries no api_key, so the

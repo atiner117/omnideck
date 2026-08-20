@@ -56,7 +56,7 @@
         onmouseenter={() => onfocus(i)} onclick={() => { onfocus(i); onactivate(); }}>
         <span class="mposter">{#if posters[r.id]}<img src={posters[r.id]} alt="" loading="lazy" />{:else}{r.browse ? "📁" : "🎬"}{/if}</span>
         <span class="cname">{r.name}</span>
-        {#if r.played}<span class="mwatched" role="img" aria-label="watched">✓</span>{/if}
+        {#if r.played}<span class="cstate on" role="img" aria-label="watched">✓</span>{/if}
         <span class="ccat">{r.sub}</span>
       </button>
     {/each}
@@ -68,6 +68,4 @@
   /* Poster thumb: 2:3 like real box art (the shared .cicon is square, built for icons). */
   .mposter { width: 44px; height: 66px; border-radius: 7px; flex: 0 0 auto; overflow: hidden; display: grid; place-items: center; font-size: 20px; background: #22304a; }
   .mposter img { width: 100%; height: 100%; object-fit: cover; }
-  /* Watched marker: sits between the (flex:1) name and the right-aligned .ccat sub-label. */
-  .mwatched { color: var(--accent); font-size: 15px; flex: 0 0 auto; }
 </style>
