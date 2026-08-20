@@ -20,6 +20,49 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
+- **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
+  Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
+  IPC contract/tests) over `2471f6c..` (#83 rebased onto post-#84 main via merge).
+- **Branch / PR:** `loop/night-20260819` — https://github.com/atiner117/omnideck/pull/83
+- **Fixed (corroborated):**
+  1. *Stale resume state after a toggle* (all 5 agents): `toggleWatched` flipped only `played`;
+     the row's `sub` ("43% · 18 min left") and `startSecs` kept describing a resume point the
+     server had just cleared — Enter then resumed a title the user had declared done, and the
+     same id cached in other stack frames (root rail vs drilled-in list) never updated at all.
+     Now: `syncToggled()` updates every non-browse copy of the id across the stack on server
+     confirm — `played`, `startSecs = undefined`, `sub → subPlain`. The previous session's
+     uncommitted `rowSubPlain()` was finished (truthiness matches `rowSub`, so `SeriesName: ""`
+     can't blank the line), wired via a `subPlain` baked at row construction, and tested.
+  2. *Mutating verbs through a redirect-following client* (2 agents): a 301/302/303 (http→https
+     proxy, slash normalisation) downgrades POST/DELETE to GET — browse keeps working while
+     every toggle silently no-ops. `send()` now fails loudly when a non-GET lands anywhere but
+     the requested URL.
+  3. *2xx trusted blindly*: `set_played` now reads the `UserItemDataDto` answer and errors when
+     the server acknowledges but reports the opposite `Played` (jellyfin#8168 deployments);
+     empty/non-JSON bodies still pass (Emby-lineage 204s).
+  4. *`user` path segment unvalidated* (2 agents): the id from config/shim-cred/`/Users/Me` is
+     interpolated like an item id but was never gated; `user()` now applies `valid_id` to both
+     sources. New no-IO test pins both `set_played` guards.
+  5. Error toast read as success (`⚠ Mark watched` → `⚠ Couldn't mark watched`); ✓ span now
+     always rendered so the sub-label doesn't jump ~86px when it toggles (`.cstate` reserves
+     72px); Help sheet documents the W/□ overload; night-log local/remote `main` wording fixed.
+- **Reviewed and left as follow-ups (logged, not fixed):** shared-retry idempotency is prose,
+  not a mechanism (make retry opt-in per call site before adding `?datePlayed=`); a toggle can
+  hang ~30 s on a dead server (2×15 s budget) while `marking` pins the row; `BROWSE_KINDS` is an
+  allowlist so an *unlisted* container kind would become mark-watchable (latent — libraries are
+  filtered today); the playable-only gate exists solely in TS, a future Rust caller could hand
+  `PlayedItems` a series id (doc moved caveat aside, consider a server-side Type check); hint
+  line advertises W during an in-flight drill-down when the action refuses; no `cli.rs`
+  subcommand can exercise `set_played` headlessly (an `omnideck watched <id> [--un]` would make
+  the transport fixes observable); `X-Emby-Token` survives cross-host public redirects
+  (pre-existing, whole client). Clean bills: PLAYABLE gate IS action-level, no West/W binding
+  conflicts, nothing on the rAF path, IPC contract + bindings exact, optimistic-flip mechanics
+  and in-flight guard correct.
+- **Verify:** bun run check · build · test (47) · clippy `-D warnings` · cargo test — see PR.
+- **Outcome:** fixes pushed to the PR branch; merge stays Andrew's call.
+- **Next candidate:** changelog top-off for 0.2.0 (docs-only), then the couch pass.
+
 ## 2026-08-20 — Wave 4 pick 3 (THE LAST ONE): artwork disk cache (adapts #43)
 - **Vision tie:** Andrew-directed iteration. Round-2 backlog **Lane C** — the final item of
   the entire post-rewrite draft backlog; #81's log named it next. Cold boots re-fetched
@@ -69,7 +112,7 @@ Entry template:
   (`loop/fable-artcache-20260712-212133`, artwork disk cache, Lane C). That is the *whole* list, not
   a subset: `gh pr list --state open --limit 200 --json number --jq 'length'` → `1`. The backlog
   that used to be 8+ drafts is drained — #78/#79/#80/#81/#82 all merged since the last iteration, so
-  local `main` had moved to `c2ba3b2`. Searched the inventory for this increment's keywords before
+  remote `main` had moved to `c2ba3b2` (the local ref stayed stale — see the note below). Searched the inventory for this increment's keywords before
   building: nothing open touches watched/played state, so this is not a duplicate of #43 or of
   anything else.
 - **Changed:** `send_get` → `send(reqwest::Method, url)` (shared one-retry transport);

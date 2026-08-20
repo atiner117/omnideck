@@ -10,6 +10,7 @@
     ["Select / launch", "Enter", "✕"],
     ["Back / close", "Esc", "◯"],
     ["Favorite", "F", "□"],
+    ["Watched ⇄ unwatched (media library)", "W", "□"],
     ["Add apps & media", "A", "△"],
     ["Search", "/", "Select"],
     ["Item info", "I", "R1"],

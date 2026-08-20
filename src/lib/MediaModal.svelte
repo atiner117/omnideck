@@ -17,6 +17,10 @@
     startSecs?: number;
     /** Server-side fully-watched flag; renders the ✓ marker. */
     played?: boolean;
+    /** `sub` with the progress decoration stripped — what the row switches to after a
+     *  watched-toggle succeeds, since the server clears the resume point with the flag.
+     *  Playable rows only (browse rows can't be toggled). */
+    subPlain?: string;
   };
 
   let {
@@ -61,7 +65,9 @@
         onmouseenter={() => onfocus(i)} onclick={() => { onfocus(i); onactivate(); }}>
         <span class="mposter">{#if posters[r.id]}<img src={posters[r.id]} alt="" loading="lazy" />{:else}{r.browse ? "📁" : "🎬"}{/if}</span>
         <span class="cname">{r.name}</span>
-        {#if r.played}<span class="cstate on" role="img" aria-label="watched">✓</span>{/if}
+        <!-- Always rendered: .cstate reserves min-width 72px, so a conditional span would
+             shift the sub-label ~86px left the moment the ✓ toggles on the focused row. -->
+        {#if r.played}<span class="cstate on" role="img" aria-label="watched">✓</span>{:else}<span class="cstate" aria-hidden="true"></span>{/if}
         <span class="ccat">{r.sub}</span>
       </button>
     {/each}

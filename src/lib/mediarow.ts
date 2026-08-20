@@ -39,3 +39,15 @@ export function rowSub(i: MediaItem, browse: boolean): string {
   const mins = runtime ? `${runtime} min` : i.kind.toLowerCase();
   return i.series ? `${pct}${i.series}` : `${pct}${mins}`;
 }
+
+/** The sub-label with all watch-progress decoration stripped — what a row should read
+ *  after a mark-watched/unwatched toggle succeeds: Jellyfin clears the item's resume
+ *  point and progress server-side when the flag changes, so the "%" prefix and
+ *  "N min left" are stale the moment the server confirms. */
+export function rowSubPlain(i: MediaItem): string {
+  const runtime = i.runtime_mins != null ? Number(i.runtime_mins) : undefined;
+  const mins = runtime ? `${runtime} min` : i.kind.toLowerCase();
+  // Truthiness, not ??, to match rowSub: a SeriesName of "" must fall through to the
+  // runtime, not blank the whole sub-line.
+  return i.series ? i.series : mins;
+}

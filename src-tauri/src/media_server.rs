@@ -232,18 +232,43 @@ impl JellyfinServer {
                 .header("X-Emby-Token", &self.token)
                 .send()
         };
-        match once().await {
-            Ok(r) => Ok(r),
+        let resp = match once().await {
+            Ok(r) => r,
             Err(e) if e.is_timeout() || e.is_connect() => {
                 tracing::debug!("media server: transient error on {url}, retrying once: {e}");
-                once().await.map_err(|e| format!("media server unreachable: {e}"))
+                once().await.map_err(|e| format!("media server unreachable: {e}"))?
             }
-            Err(e) => Err(format!("media server unreachable: {e}")),
+            Err(e) => return Err(format!("media server unreachable: {e}")),
+        };
+        // The shared client follows redirects, and a 301/302/303 hop rewrites the method
+        // to GET (reqwest's standard redirect behaviour). Reads tolerate that — an
+        // http→https reverse proxy keeps every browse working — but it silently turns a
+        // mutating verb into a no-op read of the redirect target. Fail loudly instead of
+        // letting the read path and the write path diverge exactly where the couch can't
+        // see it: the base URL is a configured known host, so a redirect here means the
+        // config points at the wrong address.
+        if method != reqwest::Method::GET {
+            let requested = reqwest::Url::parse(url)
+                .map_err(|e| format!("media server: bad URL {url}: {e}"))?;
+            if *resp.url() != requested {
+                return Err(format!(
+                    "media server: {method} was redirected to {} (redirects downgrade it to GET, so the change was NOT applied) — point media_server.url at the server's canonical address",
+                    resp.url()
+                ));
+            }
         }
+        Ok(resp)
     }
 
     async fn user(&self) -> Result<String, String> {
+        // The user id is interpolated into request paths exactly like item ids, and it
+        // arrives from outside (config.toml / the shim's cred.json / the server's own
+        // /Users/Me answer) — gate it with the same charset check as valid_id so a value
+        // containing `/` or `?` can't reshape a path, least of all PlayedItems' mutating one.
         if let Some(u) = &self.preknown_user {
+            if !valid_id(u) {
+                return Err("media server: configured user id is not a valid Jellyfin id".into());
+            }
             return Ok(u.clone());
         }
         if let Some(u) = self.user_id.get() {
@@ -255,6 +280,9 @@ impl JellyfinServer {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .ok_or_else(|| "media server: couldn't resolve user".to_string())?;
+        if !valid_id(&id) {
+            return Err("media server: /Users/Me returned an invalid user id".into());
+        }
         let _ = self.user_id.set(id.clone()); // cache the success; a transient failure isn't sticky
         Ok(id)
     }
@@ -355,6 +383,21 @@ impl JellyfinServer {
         if !resp.status().is_success() {
             return Err(format!("media server: HTTP {} marking watched", resp.status()));
         }
+        // Jellyfin answers PlayedItems with the item's UserItemDataDto, whose `Played`
+        // field is the authoritative outcome — and deployments exist where the route
+        // answers 200 without applying (jellyfin#8168). The optimistic ✓ upstream can
+        // only roll back on an Err, so when the body is parseable, hold the server to
+        // its word; an empty or non-JSON body still counts as success (be lenient with
+        // Emby-lineage servers that answer 204).
+        if let Ok(v) = resp.json::<serde_json::Value>().await {
+            if let Some(got) = v.get("Played").and_then(|p| p.as_bool()) {
+                if got != played {
+                    return Err(format!(
+                        "media server: acknowledged the request but reports Played={got} (expected {played})"
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -444,7 +487,26 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::{items_of, played_request, ticks_to_secs, valid_id, MediaServerConfig};
+    use super::{items_of, played_request, ticks_to_secs, valid_id, JellyfinServer, MediaServerConfig};
+
+    #[test]
+    fn set_played_guards_reject_before_any_network_io() {
+        // base points at a loopback port nothing listens on: if either guard failed to
+        // short-circuit, these would surface "unreachable" instead of the guard's message.
+        let srv = |user: &str| JellyfinServer {
+            base: "http://127.0.0.1:9".into(),
+            token: "t".into(),
+            user_id: std::sync::OnceLock::new(),
+            preknown_user: Some(user.into()),
+        };
+        let bad_id =
+            tauri::async_runtime::block_on(srv("u1").set_played("../etc", true)).unwrap_err();
+        assert_eq!(bad_id, "invalid item id");
+        // The user id reaches the same path interpolation as the item id — same gate.
+        let bad_user =
+            tauri::async_runtime::block_on(srv("u1/../admin").set_played("abc", true)).unwrap_err();
+        assert!(bad_user.contains("user id"), "{bad_user}");
+    }
 
     #[test]
     fn played_request_flips_only_the_verb() {
