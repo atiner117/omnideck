@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BROWSE_KINDS, rowStartSecs, rowSub } from "./mediarow";
+import { BROWSE_KINDS, rowStartSecs, rowSub, rowSubPlain } from "./mediarow";
 import type { MediaItem } from "./bindings/MediaItem";
 
 // ts-rs types u64 fields as bigint; build items the way the IPC layer types them.
@@ -51,6 +51,25 @@ describe("rowSub", () => {
   });
   it("falls back to the plain label when a resumable item has no runtime", () => {
     expect(rowSub(item({ position_secs: 300n }), false)).toBe("movie");
+  });
+});
+
+describe("rowSubPlain", () => {
+  it("strips ALL progress decoration from a half-watched episode (post-toggle label)", () => {
+    const i = item({
+      kind: "Episode", series: "Some Show",
+      played_pct: 43.0, runtime_mins: 45n, position_secs: 1620n,
+    });
+    expect(rowSub(i, false)).toBe("43% · Some Show · 18 min left"); // before the toggle
+    expect(rowSubPlain(i)).toBe("Some Show"); // after: matches rowSub's untouched branch
+  });
+  it("falls back to runtime, then kind — same ladder as rowSub", () => {
+    expect(rowSubPlain(item({ played_pct: 52.4, runtime_mins: 120n, position_secs: 3600n }))).toBe("120 min");
+    expect(rowSubPlain(item({ kind: "Special" }))).toBe("special");
+  });
+  it("treats an empty SeriesName like rowSub does (truthiness, not ??)", () => {
+    // Jellyfin can send SeriesName: "" — the sub-line must not go blank after a toggle.
+    expect(rowSubPlain(item({ series: "", runtime_mins: 45n }))).toBe("45 min");
   });
 });
 

@@ -17,6 +17,10 @@
     startSecs?: number;
     /** Server-side fully-watched flag; renders the ✓ marker. */
     played?: boolean;
+    /** `sub` with the progress decoration stripped — what the row switches to after a
+     *  watched-toggle succeeds, since the server clears the resume point with the flag.
+     *  Playable rows only (browse rows can't be toggled). */
+    subPlain?: string;
   };
 
   let {
@@ -40,6 +44,11 @@
     onactivate: () => void;
     onclose: () => void;
   } = $props();
+
+  // The focused row drives the hint line's verbs. Mark-watched is offered on playable rows
+  // only — the page deliberately refuses it on a series/season (see MediaNav.toggleWatched),
+  // so advertising it there would promise something Enter's neighbour won't do.
+  const cur = $derived(rows[focus]);
 </script>
 
 <Modal labelledby="dlg-media" backdropLabel="Close media library" closeLabel="Close media library" {onclose}>
@@ -56,12 +65,14 @@
         onmouseenter={() => onfocus(i)} onclick={() => { onfocus(i); onactivate(); }}>
         <span class="mposter">{#if posters[r.id]}<img src={posters[r.id]} alt="" loading="lazy" />{:else}{r.browse ? "📁" : "🎬"}{/if}</span>
         <span class="cname">{r.name}</span>
-        {#if r.played}<span class="cstate on" role="img" aria-label="watched">✓</span>{/if}
+        <!-- Always rendered: .cstate reserves min-width 72px, so a conditional span would
+             shift the sub-label ~86px left the moment the ✓ toggles on the focused row. -->
+        {#if r.played}<span class="cstate on" role="img" aria-label="watched">✓</span>{:else}<span class="cstate" aria-hidden="true"></span>{/if}
         <span class="ccat">{r.sub}</span>
       </button>
     {/each}
   </div>
-  <p class="phint">{depth > 1 ? "Esc/◯ back" : "Esc/◯ close"} · ↑↓ select · Enter/✕ {rows[focus]?.browse ? "open" : "play"}</p>
+  <p class="phint">{depth > 1 ? "Esc/◯ back" : "Esc/◯ close"} · ↑↓ select · Enter/✕ {cur?.browse ? "open" : "play"}{#if cur && !cur.browse} · W/□ {cur.played ? "unwatch" : "watched"}{/if}</p>
 </Modal>
 
 <style>

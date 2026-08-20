@@ -5,7 +5,7 @@
 import * as api from "./backend";
 import type { MediaItem } from "./backend";
 import type { MediaRow } from "./MediaModal.svelte";
-import { BROWSE_KINDS, rowStartSecs, rowSub } from "./mediarow";
+import { BROWSE_KINDS, rowStartSecs, rowSub, rowSubPlain } from "./mediarow";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -42,6 +42,7 @@ export class MediaNav {
       browse,
       startSecs: rowStartSecs(i, browse),
       played: i.played ?? false,
+      subPlain: browse ? undefined : rowSubPlain(i),
     };
   }
 
@@ -88,6 +89,56 @@ export class MediaNav {
       this.open = false;
       this.deps.onplay(r.id, r.name, r.startSecs);
     }
+  }
+
+  /** Ids with a mark-watched request in flight. A second press on the same row would race
+   *  its own optimistic flip against the first reply and could settle on the wrong marker. */
+  private marking = new Set<string>();
+
+  /**
+   * Toggle the focused row's server-side watched flag (West / `w`).
+   *
+   * PLAYABLE ROWS ONLY. Jellyfin's PlayedItems happily accepts a series or season, but
+   * marking a whole show watched clears every episode's resume point and un-marking gives
+   * back only the flag — never the positions. That is not an undo, so it is not something a
+   * single un-confirmed button press should be able to do to a 60-episode series.
+   *
+   * The flip is optimistic: from the couch the ✓ has to move with the button, so it moves
+   * first and is put back if the server refuses.
+   */
+  async toggleWatched() {
+    const r = this.view?.rows[this.focus];
+    if (!r || r.browse || this.loading || this.marking.has(r.id)) return;
+    const next = !r.played;
+    this.marking.add(r.id);
+    r.played = next;
+    try {
+      await api.mediaSetPlayed(r.id, next);
+      this.syncToggled(r.id, next);
+    } catch (e) {
+      r.played = !next;
+      this.deps.onerror(next ? "Couldn't mark watched" : "Couldn't mark unwatched", e);
+    } finally {
+      this.marking.delete(r.id);
+    }
+  }
+
+  /**
+   * The server confirmed a watched-flag change, which also cleared the item's resume point
+   * (both directions — un-marking never restores a position). Every cached copy of the row
+   * is now lying about progress: the same id can sit in several retained stack frames (the
+   * root Continue Watching rail AND a drilled-in episode list), and each carries a baked
+   * sub-label and seek target. Sync them all, not just the frame the press happened in —
+   * otherwise Enter on the root row resumes into a position the server no longer has.
+   */
+  private syncToggled(id: string, played: boolean) {
+    for (const frame of this.stack)
+      for (const row of frame.rows)
+        if (row.id === id && !row.browse) {
+          row.played = played;
+          row.startSecs = undefined;
+          if (row.subPlain !== undefined) row.sub = row.subPlain;
+        }
   }
 
   back() {

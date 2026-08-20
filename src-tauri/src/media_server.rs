@@ -210,30 +210,65 @@ fn shim_pairing() -> Option<JellyfinServer> {
 impl JellyfinServer {
     async fn get(&self, path: &str) -> Result<serde_json::Value, String> {
         let url = format!("{}{path}", self.base);
-        let resp = self.send_get(&url).await?;
+        let resp = self.send(reqwest::Method::GET, &url).await?;
         if !resp.status().is_success() {
             return Err(format!("media server: HTTP {} on {path}", resp.status()));
         }
         resp.json().await.map_err(|e| format!("media server: bad JSON: {e}"))
     }
 
-    /// GET with one retry on a *transient* network error (connect/timeout) — a living-room
+    /// A request with one retry on a *transient* network error (connect/timeout) — a living-room
     /// box's wifi/DNS can blip, and a single retry turns a spurious empty section into a normal
     /// load. HTTP status errors are deterministic and are NOT retried.
-    async fn send_get(&self, url: &str) -> Result<reqwest::Response, String> {
-        let once = || crate::http::client().get(url).header("X-Emby-Token", &self.token).send();
-        match once().await {
-            Ok(r) => Ok(r),
+    ///
+    /// Retrying is only safe because every verb this sends is idempotent: GET reads, and
+    /// `PlayedItems` POST/DELETE set an *absolute* watched state rather than incrementing a
+    /// counter, so a replayed request lands on the same result. Keep that true of anything
+    /// added here — a non-idempotent verb would be double-applied by the retry.
+    async fn send(&self, method: reqwest::Method, url: &str) -> Result<reqwest::Response, String> {
+        let once = || {
+            crate::http::client()
+                .request(method.clone(), url)
+                .header("X-Emby-Token", &self.token)
+                .send()
+        };
+        let resp = match once().await {
+            Ok(r) => r,
             Err(e) if e.is_timeout() || e.is_connect() => {
                 tracing::debug!("media server: transient error on {url}, retrying once: {e}");
-                once().await.map_err(|e| format!("media server unreachable: {e}"))
+                once().await.map_err(|e| format!("media server unreachable: {e}"))?
             }
-            Err(e) => Err(format!("media server unreachable: {e}")),
+            Err(e) => return Err(format!("media server unreachable: {e}")),
+        };
+        // The shared client follows redirects, and a 301/302/303 hop rewrites the method
+        // to GET (reqwest's standard redirect behaviour). Reads tolerate that — an
+        // http→https reverse proxy keeps every browse working — but it silently turns a
+        // mutating verb into a no-op read of the redirect target. Fail loudly instead of
+        // letting the read path and the write path diverge exactly where the couch can't
+        // see it: the base URL is a configured known host, so a redirect here means the
+        // config points at the wrong address.
+        if method != reqwest::Method::GET {
+            let requested = reqwest::Url::parse(url)
+                .map_err(|e| format!("media server: bad URL {url}: {e}"))?;
+            if *resp.url() != requested {
+                return Err(format!(
+                    "media server: {method} was redirected to {} (redirects downgrade it to GET, so the change was NOT applied) — point media_server.url at the server's canonical address",
+                    resp.url()
+                ));
+            }
         }
+        Ok(resp)
     }
 
     async fn user(&self) -> Result<String, String> {
+        // The user id is interpolated into request paths exactly like item ids, and it
+        // arrives from outside (config.toml / the shim's cred.json / the server's own
+        // /Users/Me answer) — gate it with the same charset check as valid_id so a value
+        // containing `/` or `?` can't reshape a path, least of all PlayedItems' mutating one.
         if let Some(u) = &self.preknown_user {
+            if !valid_id(u) {
+                return Err("media server: configured user id is not a valid Jellyfin id".into());
+            }
             return Ok(u.clone());
         }
         if let Some(u) = self.user_id.get() {
@@ -245,6 +280,9 @@ impl JellyfinServer {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .ok_or_else(|| "media server: couldn't resolve user".to_string())?;
+        if !valid_id(&id) {
+            return Err("media server: /Users/Me returned an invalid user id".into());
+        }
         let _ = self.user_id.set(id.clone()); // cache the success; a transient failure isn't sticky
         Ok(id)
     }
@@ -326,6 +364,43 @@ impl JellyfinServer {
         Ok(items_of(&v["Items"]))
     }
 
+    /// Mark an item watched (`played = true`) or unwatched on the server — Jellyfin's
+    /// `PlayedItems`: POST sets the flag, DELETE clears it. Both set an absolute state, so
+    /// the transport retry above can't double-apply and a double press from the couch lands
+    /// exactly where the label promised.
+    ///
+    /// Marking watched also clears the item's server-side resume point (this is Jellyfin's
+    /// behaviour, not ours) — that's the expected meaning of "I'm done with this", but it is
+    /// why the caller gates this to a single playable item and not a whole series: un-marking
+    /// restores the flag, never the positions.
+    pub async fn set_played(&self, id: &str, played: bool) -> Result<(), String> {
+        if !valid_id(id) {
+            return Err("invalid item id".into());
+        }
+        let user = self.user().await?;
+        let (method, path) = played_request(&user, id, played);
+        let resp = self.send(method, &format!("{}{path}", self.base)).await?;
+        if !resp.status().is_success() {
+            return Err(format!("media server: HTTP {} marking watched", resp.status()));
+        }
+        // Jellyfin answers PlayedItems with the item's UserItemDataDto, whose `Played`
+        // field is the authoritative outcome — and deployments exist where the route
+        // answers 200 without applying (jellyfin#8168). The optimistic ✓ upstream can
+        // only roll back on an Err, so when the body is parseable, hold the server to
+        // its word; an empty or non-JSON body still counts as success (be lenient with
+        // Emby-lineage servers that answer 204).
+        if let Ok(v) = resp.json::<serde_json::Value>().await {
+            if let Some(got) = v.get("Played").and_then(|p| p.as_bool()) {
+                if got != played {
+                    return Err(format!(
+                        "media server: acknowledged the request but reports Played={got} (expected {played})"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Direct-play URL for mpv. `static=true` asks the server for the untranscoded file —
     /// the whole point: mpv + hwdec does the 4K work, not a server transcode. Carries NO
     /// credential: callers must authenticate with the `X-Emby-Token` header (see `token()`),
@@ -373,6 +448,15 @@ impl JellyfinServer {
     }
 }
 
+/// The verb + path for a watch-state change: Jellyfin's `PlayedItems` uses the SAME path in
+/// both directions and only flips the method (POST sets, DELETE clears). Split out of
+/// `set_played` so that choice is unit-testable without a live server — the same reason
+/// `mpv_start_flag` lives outside the launch path.
+fn played_request(user: &str, id: &str, played: bool) -> (reqwest::Method, String) {
+    let method = if played { reqwest::Method::POST } else { reqwest::Method::DELETE };
+    (method, format!("/Users/{user}/PlayedItems/{id}"))
+}
+
 fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
     v.as_array()
         .map(|a| {
@@ -403,7 +487,38 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::{items_of, ticks_to_secs, valid_id, MediaServerConfig};
+    use super::{items_of, played_request, ticks_to_secs, valid_id, JellyfinServer, MediaServerConfig};
+
+    #[test]
+    fn set_played_guards_reject_before_any_network_io() {
+        // base points at a loopback port nothing listens on: if either guard failed to
+        // short-circuit, these would surface "unreachable" instead of the guard's message.
+        let srv = |user: &str| JellyfinServer {
+            base: "http://127.0.0.1:9".into(),
+            token: "t".into(),
+            user_id: std::sync::OnceLock::new(),
+            preknown_user: Some(user.into()),
+        };
+        let bad_id =
+            tauri::async_runtime::block_on(srv("u1").set_played("../etc", true)).unwrap_err();
+        assert_eq!(bad_id, "invalid item id");
+        // The user id reaches the same path interpolation as the item id — same gate.
+        let bad_user =
+            tauri::async_runtime::block_on(srv("u1/../admin").set_played("abc", true)).unwrap_err();
+        assert!(bad_user.contains("user id"), "{bad_user}");
+    }
+
+    #[test]
+    fn played_request_flips_only_the_verb() {
+        // Same path both ways, and both verbs set an ABSOLUTE state — that's what makes the
+        // transport's blind single retry safe, so pin it.
+        let (set, set_path) = played_request("u1", "abc", true);
+        let (clear, clear_path) = played_request("u1", "abc", false);
+        assert_eq!(set, reqwest::Method::POST);
+        assert_eq!(clear, reqwest::Method::DELETE);
+        assert_eq!(set_path, "/Users/u1/PlayedItems/abc");
+        assert_eq!(clear_path, set_path);
+    }
 
     #[test]
     fn ticks_convert_to_whole_seconds() {

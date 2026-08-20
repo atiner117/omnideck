@@ -213,6 +213,15 @@ pub async fn media_browse(parent: String) -> Result<Vec<crate::media_server::Med
     crate::media_server::server().ok_or("no media server configured")?.browse(&parent).await
 }
 
+/// Toggle an item's server-side watched flag from the media modal (West on the pad).
+#[tauri::command]
+pub async fn media_set_played(id: String, played: bool) -> Result<(), String> {
+    crate::media_server::server()
+        .ok_or("no media server configured")?
+        .set_played(&id, played)
+        .await
+}
+
 /// Fetch+cache an item's poster; returns the on-disk path for an omnideck:// URL.
 #[tauri::command]
 pub async fn media_poster(id: String) -> Option<String> {
