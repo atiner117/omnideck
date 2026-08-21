@@ -699,7 +699,11 @@
   function addLauncher(app: App, collided: boolean) {
     if (!cfg) { formOpen = false; return; }
     const next = [...apps, app];
-    cfg = { ...cfg, apps: next };
+    // Mutate in place like every other cfg writer (patchSettings, setLayout): replacing the
+    // whole object makes a FRESH $state proxy, so any in-flight closure holding the old
+    // cfg.settings (a pending patchSettings .catch) would write to a detached object and
+    // silently lose the setting — and the wholesale swap re-runs every cfg-derived.
+    cfg.apps = next;
     api.saveApps(next).catch((e) => reportError("Couldn't save apps", e));
     if (collided) { status = `Added "${app.name}" (a similar name already existed)`; later(() => (status = ""), 3000); }
     formOpen = false;
@@ -720,7 +724,7 @@
   // ---- global search (games + apps, with a web-search fallback) ----
   let searchOpen = $state(false);
   let searchQuery = $state("");
-  let searchFocus = $state(0);
+  let searchFocusRaw = $state(0); // raw cursor — read via the clamped `searchFocus` $derived below
   let searchResults = $derived.by(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [] as Tile[];
@@ -728,9 +732,13 @@
       .filter((t) => (t.kind === "game" ? t.game.name : t.app.name).toLowerCase().includes(q))
       .slice(0, 40);
   });
-  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocus = 0; oskFocus = 0; oskDim = false; }
+  // Clamped like `focus` and `catFocus`: typing narrows searchResults under the cursor, and an
+  // unclamped stale index made A fall through to the web-search row (launching a browser)
+  // instead of the game visibly highlighted. length (not length-1) is valid: the web-search row.
+  let searchFocus = $derived(Math.min(searchFocusRaw, searchResults.length));
+  function openSearch() { holdStop(); searchOpen = true; searchQuery = ""; searchFocusRaw = 0; oskFocus = 0; oskDim = false; }
   function searchMove(d: number) {
-    searchFocus = clamp(searchFocus + d, 0, searchResults.length); // last index = web-search row
+    searchFocusRaw = clamp(searchFocus + d, 0, searchResults.length); // last index = web-search row
     queueMicrotask(() => document.querySelector(`[data-sr="${searchFocus}"]`)?.scrollIntoView({ block: "nearest" }));
   }
   function webSearch() {
@@ -769,7 +777,7 @@
   async function catToggle(i: number) {
     const e = displayedCatalog[i]; if (!e || !cfg) return;
     const next = isAdded(e.id) ? apps.filter((a) => a.id !== e.id) : [...apps, e];
-    cfg = { ...cfg, apps: next };
+    cfg.apps = next; // in place — see addLauncher for why cfg is never wholesale-replaced
     try { await api.saveApps(next); } catch (e) { reportError("Couldn't save apps", e); }
   }
 
@@ -787,6 +795,7 @@
   let overscanOpen = $state(false);
   let overscanPreview = $state<number | null>(null);
   let overscanCal = $state<ReturnType<typeof OverscanCalibration> | null>(null); // bind:this — roster forwards input into it
+  let launcherForm = $state<ReturnType<typeof LauncherForm> | null>(null); // bind:this — roster forwards pad input into the form
   let overscanPct = $derived(overscanPreview ?? cfg?.settings?.overscan_pct ?? 0);
   function overscanDone(pct: number | null) { // null = cancel
     overscanOpen = false;
@@ -891,10 +900,18 @@
       pad: (c) => { if (c === "East" || c === "South") helpOpen = false; },
     },
     {
-      // Custom-launcher form: native inputs handle typing; only back-out is routed
+      // Custom-launcher form: native inputs handle typing (keyboard); the pad moves
+      // between fields, activates the buttons / cycles the category, and backs out with
+      // East — the form is reachable FROM the pad, so it must be drivable BY one.
       open: () => formOpen,
       key: (e) => { if (e.key === "Escape") formOpen = false; },
-      pad: (c) => { if (c === "East") formOpen = false; },
+      pad: (c) => {
+        if (c === "East") formOpen = false;
+        else if (c === "DPadUp") launcherForm?.padMove(-1);
+        else if (c === "DPadDown") launcherForm?.padMove(1);
+        else if (c === "South") launcherForm?.padActivate();
+      },
+      stickY: (d) => launcherForm?.padMove(d),
       allowHelp: true,
     },
     {
@@ -1324,7 +1341,7 @@
       {appIcons}
       {iconBg}
       engineIcon={searchEngineIcon}
-      onfocus={(i) => (searchFocus = i)}
+      onfocus={(i) => (searchFocusRaw = i)}
       onactivate={searchActivate}
       onwebsearch={webSearch}
       onoskfocus={(i) => (oskFocus = i)}
@@ -1451,7 +1468,7 @@
   {/if}
 
   {#if formOpen}
-    <LauncherForm {apps} onadd={addLauncher} onerror={reportError} onclose={() => (formOpen = false)} />
+    <LauncherForm bind:this={launcherForm} {apps} onadd={addLauncher} onerror={reportError} onclose={() => (formOpen = false)} />
   {/if}
 
   {#if wizardActive && cfg}

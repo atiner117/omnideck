@@ -498,6 +498,13 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     if let Ok(meta) = fs::metadata(&dest) {
         let _ = fs::set_permissions(&tmp, meta.permissions());
+    } else {
+        // First creation: there is no existing mode to preserve, so the file would land at
+        // the process umask (usually 0644) — but config.toml can hold the media-server
+        // token, the phone-remote token, and the SteamGridDB key. Start private; the
+        // preserve branch above keeps whatever the user later chooses.
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
     }
     fs::rename(&tmp, &dest)?;
     // Best-effort: fsync the directory so the rename itself survives power loss.

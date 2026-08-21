@@ -40,6 +40,42 @@ async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
 }
 
+/// Steam appids are decimal numbers. Everything that feeds one into a filesystem path
+/// (the steamgriddb art cache joins `{appid}_box.jpg`) or the `steam://` URI dispatcher
+/// validates here first, so a webview-supplied string can't traverse (`..`) out of the
+/// cache dir or reshape the URI (`/`, `?`) into a different steam:// verb.
+fn valid_appid(appid: &str) -> bool {
+    !appid.is_empty() && appid.len() <= 12 && appid.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Path gate for config backup/restore — the only IPC surface that takes a caller-chosen
+/// filesystem path. Absolute, no `.`/`..` components, no hidden (dot-prefixed) path
+/// segments, and a `.toml` extension: a compromised webview must not be able to turn
+/// "back up my config" into an arbitrary write (`~/.config/autostart`, `~/.ssh`) or use
+/// the restore parse error as a dotfile-content oracle. Visible user folders (Documents,
+/// a USB mount under /run/media) all pass.
+fn valid_backup_path(p: &std::path::Path) -> Result<(), String> {
+    use std::path::Component;
+    if !p.is_absolute() {
+        return Err("backup path must be absolute".into());
+    }
+    for c in p.components() {
+        match c {
+            Component::ParentDir | Component::CurDir => {
+                return Err("backup path must not contain '.' or '..' components".into())
+            }
+            Component::Normal(s) if s.to_string_lossy().starts_with('.') => {
+                return Err("backup path must not touch hidden files or directories".into())
+            }
+            _ => {}
+        }
+    }
+    if p.extension().and_then(|e| e.to_str()) != Some("toml") {
+        return Err("backup path must end in .toml".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_capability() -> capability::Capability {
     capability::probe()
@@ -100,6 +136,9 @@ fn sniff_matches(mime: &str, bytes: &[u8]) -> bool {
 #[tauri::command]
 pub fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, id: Option<String>) -> Result<(), String> {
     use tauri::Emitter;
+    if !valid_appid(&appid) {
+        return Err("invalid appid".into());
+    }
     // Steam's URI handler returns immediately, so the running game has no child handle
     // here; watch_steam_game polls Steam's registry to detect start/exit instead.
     std::process::Command::new("steam")
@@ -139,6 +178,7 @@ pub fn get_config() -> config::Config {
 /// written so the UI can toast it.
 #[tauri::command]
 pub async fn backup_config(dest: String, include_credentials: bool) -> Result<String, String> {
+    valid_backup_path(std::path::Path::new(&dest))?;
     // blocking: write_atomic fsyncs the file and its directory.
     blocking(move || config::backup_to(std::path::Path::new(&dest), include_credentials)).await?
 }
@@ -149,6 +189,7 @@ pub async fn backup_config(dest: String, include_credentials: bool) -> Result<St
 /// same as `get_config`) so the UI can re-render without a restart.
 #[tauri::command]
 pub async fn restore_config(src: String) -> Result<config::Config, String> {
+    valid_backup_path(std::path::Path::new(&src))?;
     // blocking: fsync via write_atomic, and SAVE_LOCK can wait behind another saver.
     blocking(move || {
         let mut cfg = config::restore_from(std::path::Path::new(&src))?;
@@ -576,6 +617,9 @@ pub async fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
 /// Open Steam's per-game Properties dialog for the focused game.
 #[tauri::command]
 pub fn game_properties(appid: String) -> Result<(), String> {
+    if !valid_appid(&appid) {
+        return Err("invalid appid".into());
+    }
     std::process::Command::new("steam")
         .arg(format!("steam://gameproperties/{appid}"))
         .spawn()
@@ -636,6 +680,9 @@ pub fn in_gamescope_session() -> bool {
 /// Fetch missing vertical box art from SteamGridDB (no-op without a configured key). Cached.
 #[tauri::command]
 pub async fn grid_art(appid: String) -> Option<String> {
+    if !valid_appid(&appid) {
+        return None;
+    }
     let key = config::load_or_create().settings.steamgriddb_key;
     steamgriddb::box_art(&appid, &key).await
 }

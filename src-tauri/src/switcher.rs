@@ -77,24 +77,17 @@ fn pgid_of(pid: u32) -> u32 {
     parent_and_pgid(pid).1
 }
 
-/// Signal an entire process group (`kill <sig> -<pgid>`). True when the kill succeeded.
-/// Every freeze/thaw path goes through these — one place to change the mechanism.
-fn signal_pgroup(group: u32, sig: &str) -> bool {
-    std::process::Command::new("kill")
-        .args([sig, &format!("-{group}")])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// SIGCONT a frozen process group (dead groups just fail the kill — harmless).
+/// SIGCONT a frozen process group (dead/recycled groups are refused by the identity
+/// check — harmless). Every freeze/thaw path goes through the watchdog's verified
+/// chokepoint: it re-checks the leader's recorded start time immediately before kill(2),
+/// so a recycled pgid (stale _NET_WM_PID, minutes-old freeze list) is never signalled.
 fn cont_group(group: u32) -> bool {
-    signal_pgroup(group, "-CONT")
+    crate::watchdog::signal_group_verified(group, libc::SIGCONT)
 }
 
 /// SIGSTOP a process group. True only when the freeze actually landed.
 fn stop_group(group: u32) -> bool {
-    signal_pgroup(group, "-STOP")
+    crate::watchdog::signal_group_verified(group, libc::SIGSTOP)
 }
 
 /// Forget a group we froze (it was closed/killed): a dead pgid must not linger in STOPPED,

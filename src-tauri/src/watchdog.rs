@@ -15,6 +15,12 @@ pub struct LiveApp {
     pub name: String,
     #[cfg_attr(test, ts(optional = nullable))]
     pub id: Option<String>,
+    /// Kernel start time of the group leader at launch (/proc/<pid>/stat field 22) — the
+    /// identity every later signal is verified against, so a recycled pid/pgid can never
+    /// be signalled (see group_verified). Internal bookkeeping: not part of the IPC shape.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub starttime: u64,
 }
 
 /// ALL still-running launched apps. The switcher matches session windows to these groups
@@ -75,15 +81,58 @@ pub fn close_group(group: u32) -> bool {
     ok
 }
 
+/// Kernel start time (clock ticks since boot) of `pid` from /proc/<pid>/stat field 22.
+/// None when the process is gone or unreadable.
+pub(crate) fn proc_start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // comm (field 2) can contain spaces/parens — parse after the LAST ')'. The remaining
+    // whitespace fields start at state (field 3), so starttime (field 22) is index 19.
+    let rest = stat.rsplit_once(')')?.1;
+    rest.split_whitespace().nth(19)?.parse().ok()
+}
+
+/// True while `group` is still the process group we launched: it is in LIVE_GROUPS and the
+/// leader's kernel start time matches the one recorded at launch. This is the pid-recycling
+/// guard — a window's stale _NET_WM_PID or a check-then-signal gap must never end in a
+/// signal to a recycled pgid (that freezes/kills an unrelated process).
+fn group_verified(group: u32) -> bool {
+    if group == 0 {
+        return false; // pgid 0 means "our own group" to kill(2) — never a valid target
+    }
+    let Some(recorded) = crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS")
+        .iter()
+        .find(|a| a.group == group)
+        .map(|a| a.starttime)
+    else {
+        return false;
+    };
+    match proc_start_time(group) {
+        // 0 = start time was unreadable at launch (leader raced away) — fall back to liveness.
+        Some(now) => recorded == 0 || now == recorded,
+        None => false, // leader gone: the group is dead (or the pid recycled) — never signal blind
+    }
+}
+
+/// Send `sig` to the whole process group iff it still verifies as ours. Direct kill(2) —
+/// no fork+exec (this runs on the Guide-button path, which must not jank) — and
+/// errno-accurate: only actual delivery counts as success (ESRCH = already gone,
+/// EPERM = not ours; both report false).
+pub(crate) fn signal_group_verified(group: u32, sig: i32) -> bool {
+    if !group_verified(group) {
+        return false;
+    }
+    // The verify-to-kill window is now microseconds and crosses no await/lock. Closing it
+    // completely needs pidfd_send_signal, which has no process-GROUP form — accepted.
+    unsafe { libc::kill(-(group as i32), sig) == 0 }
+}
+
 /// SIGTERM a whole process group (CONT first so a switcher-frozen group can act on it).
 /// Browsers fork a persistent main process, so signalling the GROUP (-pid) reaches every
-/// helper; fall back to the bare pid.
+/// helper — and the leader IS the group (spawns use process_group(0)), so no bare-pid
+/// fallback is needed. Both signals are identity-verified against the launch start time.
 fn signal_group(pid: u32) -> bool {
-    let grp = format!("-{pid}");
-    let _ = std::process::Command::new("kill").args(["-CONT", &grp]).status();
-    let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
-    let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
-    grp_ok || pid_ok
+    let _ = signal_group_verified(pid, libc::SIGCONT);
+    signal_group_verified(pid, libc::SIGTERM)
 }
 
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
@@ -94,6 +143,9 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
         group: pid,
         name: name.clone(),
         id: id.clone(),
+        // Recorded before the child can exit-and-recycle: the identity every later
+        // STOP/CONT/TERM is checked against (group_verified).
+        starttime: proc_start_time(pid).unwrap_or(0),
     });
     // The frontend correlates Now Playing entries by this launch id (the tile id), falling back
     // to the name for any legacy caller, so two same-named launchables don't clobber on exit.
