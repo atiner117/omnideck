@@ -20,6 +20,63 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-21 — 0.2.0 changelog top-off: the 30 PRs merged since 2026-07-26
+- **Vision tie:** not a feature — the release blocker. The last two iterations both named
+  "changelog top-off for 0.2.0 (docs-only)" as the next candidate, and it gates the tag.
+- **Branch / PR:** `loop/night-20260821` — see PR (opened as draft this iteration).
+- **Open-PR inventory:** **1 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `1`: **#85** (`fix/review-20260821`, "close the P0/P1 findings from the
+  2026-08-21 five-angle review"). That is the whole list, not a subset. Searched it for
+  changelog/release keywords before building — #85 is review fixes to #83's transport and resume
+  state, nothing touching CHANGELOG.md or RELEASING.md, so this is not a duplicate. Note #85 is
+  **unmerged**, so its fixes are deliberately *not* in the changelog: the notes describe `main`.
+- **The finding:** the `[0.2.0]` section was last edited 2026-07-26 by #51. Thirty PRs merged
+  after that (**#54–#84**, plus docs #52/#53/#65) and **none** were documented — the release notes
+  described a version two months of work out of date. Separately the heading read
+  `## [0.2.0] — 2026-07-27`, but **v0.2.0 is not tagged** (`git tag` → only `v0.1.0`), so it
+  claimed a release date for a release that never happened. `RELEASING.md:28` is explicit that the
+  heading stays `## [Unreleased] — X.Y.Z` until the bump PR stamps the date, so #50 retitled it
+  early. Retitled back to `## [Unreleased] — 0.2.0`; the release step now works as written.
+- **Changed:** `CHANGELOG.md` only, +150/−1. New bullets in all four subsections, in the
+  section's existing voice (user-facing, no PR numbers — the mapping lives here and in the PR
+  body). *Added* (16): resume + mark-watched (#81/#83), artwork disk cache (#84), library view
+  modes (#79), themes (#80), overscan calibration (#78), screensaver (#59), audio output switcher
+  (#58), sleep timer (#68), phone remote (#69), parental PIN (#56+#61), update check (#67),
+  config backup/restore (#64), `[launch_overrides]` (#62), `[input]` (#66), `doctor`/`logs`
+  (#54/#55), `docs/ARCHITECTURE.md` (#57). *Changed* (5): the `OVERLAYS` input-router
+  unification + `+page.svelte` decomposition (#77/#74/#75/#76), table-driven settings (#60), icon
+  windowing + derived clamps + quote-aware argv (#72), pooled X11 connection (#71), Jellyfin
+  server re-resolve + `config_version` (#70). *Fixed* (1): spawn-error mapping (#63). *Security*
+  (6): `X-Emby-Token` header instead of `api_key` query param (#70), PIN IPC mask +
+  `set_locked_categories` (#61), `get_artwork` gated by `url_within_base` (#84), enumerated-sink
+  validation (#58), credentials excluded from backups + the remote's constant-time token
+  (#64/#69), and the `argon2` dependency note (#61).
+- **Verification discipline (docs can be wrong silently — grep, don't recall):** every config key,
+  command and module name asserted in the new text was checked against the tree before it shipped
+  — `art_cache_mb`, `guide_hold_ms`, `session_hotkeys`, `launch_overrides`, `overscan_pct`,
+  `check_updates`, `locked_categories`, `config_version`, `[appearance]`, `set_locked_categories`,
+  `has_pin`, `url_within_base`, `get_artwork`, `X-Emby-Token`, `--http-header-fields`, and the
+  `src/lib/components/` + `src/lib/themes/` files (#78/#79/#80 put them in subdirectories, not
+  `src/lib/` — the PR bodies' paths would have been wrong if copied). The "only new runtime
+  dependency" claim was verified by diffing the manifests over the window
+  (`git diff 43d7c45..HEAD -- src-tauri/Cargo.toml package.json`) → `argon2` alone.
+- **Verify:** bun run check (**pass**, 369 files, 0 errors / 0 warnings) · bun run build
+  (**pass**) · bun run test (**47 pass**, 6 files). Rust untouched, so clippy/cargo test don't
+  apply — the branch is at main's tip (`487bd4d`) otherwise. No CI job reads `CHANGELOG.md`
+  (checked `ci.yml`; the version-sync job compares only the five version *sources*), so the
+  `[Unreleased]` retitle can't break a gate. No new deps, no version change, no bindings churn.
+- **Outcome:** shipped to draft PR. Docs-only, zero runtime risk.
+- **Next candidate:** **the couch pass** is now the only thing between here and a 0.2.0 tag —
+  everything else is written. It is the one thing an agent cannot do: the `needs-hardware` items
+  have stacked up (#77 input layer, #78 overscan on the actual TV, #79 view modes, #81 resume
+  landing on the right frame, #83 the ✓ surviving a reopen against a live Jellyfin, #84 the
+  second-launch art pop-in disappearing). Capture it in a dated `NOTES-COUCHTEST-*.md`. Then
+  RELEASING.md §1 (retitle `[Unreleased]` → `[0.2.0] — <date>`, `.SRCINFO`) and §2 (tag).
+  If another agent-shippable increment is wanted first: #81's five review follow-ups, cheapest
+  first (`parse_backup`'s remaining normalize gap), or #83's logged follow-ups (an
+  `omnideck watched <id> [--un]` CLI subcommand would make the #85 transport fixes observable
+  headlessly). Still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware).
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
