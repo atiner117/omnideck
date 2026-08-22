@@ -23,7 +23,7 @@ Entry template:
 ## 2026-08-21 — 0.2.0 changelog top-off: the 30 PRs merged since 2026-07-26
 - **Vision tie:** not a feature — the release blocker. The last two iterations both named
   "changelog top-off for 0.2.0 (docs-only)" as the next candidate, and it gates the tag.
-- **Branch / PR:** `loop/night-20260821` — see PR (opened as draft this iteration).
+- **Branch / PR:** `loop/night-20260821` — https://github.com/atiner117/omnideck/pull/86
 - **Open-PR inventory:** **1 open, total** — `gh pr list --state open --limit 200 --json number
   --jq 'length'` → `1`: **#85** (`fix/review-20260821`, "close the P0/P1 findings from the
   2026-08-21 five-angle review"). That is the whole list, not a subset. Searched it for
