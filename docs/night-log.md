@@ -20,6 +20,59 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-22 — `omnideck watched <id> [--un]`: the mark-watched path, headless + verified
+- **Vision tie:** not a feature — the *verification* surface. CLAUDE.md §Verify §3 exists so an
+  agent can exercise real backend logic without a TV; `set_played` was the one couch action with
+  no headless entry point, so #83's transport fixes could only be checked from the sofa. #83's
+  follow-up list and the 2026-08-21 log both named this exact command as the cheapest
+  agent-shippable item.
+- **Branch / PR:** `loop/night-20260822` — https://github.com/atiner117/omnideck/pull/87
+- **Open-PR inventory:** **2 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `2`: **#85** (`fix/review-20260821`, P0/P1 fixes from the five-angle review)
+  and **#86** (`loop/night-20260821`, the 0.2.0 changelog top-off). That is the whole list, not a
+  subset. Checked both file lists before building: #85 touches `media_server.rs` (poison-tolerant
+  lock) and 22 other files but **not** `cli.rs` and **not** `set_played`; #86 is `CHANGELOG.md` +
+  `docs/night-log.md` only. No open PR adds a CLI subcommand, so this isn't a duplicate.
+- **Changed:** `media_server.rs` — new `item(&self, id)` reads one item by id
+  (`/Users/{user}/Items/{id}`, a bare `BaseItemDto`), wrapped into a one-element array so
+  `items_of` stays the single field mapping; same two `valid_id` gates as `set_played` (item id
+  *and* user id), pinned by a no-IO test against a dead loopback port. `cli.rs` — `watched <id>
+  [--un]`: read state → flip through the same `PlayedItems` transport → **re-read**. The re-read
+  is the entire value: a redirect that downgrades POST→GET and a jellyfin#8168 server that
+  answers 200 without applying both look like success in the response body, and only a second
+  read separates them. A `set_played` error deliberately does *not* short-circuit the re-read —
+  "refused, nothing changed" vs "errored after applying" are different bugs. Prints
+  `before:` / `set_played -> OK|FAILED` / `after:` / `VERIFIED|MISMATCH|UNKNOWN`.
+  Two new tests (the first in `cli.rs`): the argv contract, and `watch_state` rendering a missing
+  `UserData` as `played=(none)` rather than guessing "unwatched". Docs: CLAUDE.md §Verify §3
+  gains the command **with an explicit "this WRITES to the server, and marking watched clears
+  that item's resume point" caveat**; README's helper list was also missing `bgprep`/`logs`/
+  `doctor`, filled in.
+- **Verify:** `cargo clippy --all-targets -- -D warnings` **clean** in debug *and* `--release` ·
+  `cargo test` **112 pass / 1 ignored** (110 before, +2), identical under `--release` ·
+  `bun run check` **369 files, 0 errors / 0 warnings** · `bun run build` **pass** ·
+  `bun run test` **47/47**. No new deps; no `#[ts(export)]` type changed, so `git status` stayed
+  clean after the release test run (no bindings churn).
+- **Deliberately NOT run:** the command against Andrew's live Jellyfin. It mutates real watch
+  state, and marking watched destroys that item's resume point — an unattended loop should not
+  pick one of his titles and flip it. `cargo run` also needs an approval this session didn't
+  have. So: guards and argv are test-covered, the network path is one `cargo run -- watched <id>`
+  away whenever Andrew wants it.
+- **Merge-order note:** branched off `main` (`487bd4d`), so it does not contain #86. Both PRs
+  prepend to this file → **expect a trivial conflict here if #86 merges first; keep both
+  entries.** No `CHANGELOG.md` bullet was added for the same reason (#86 owns that file right
+  now) — this command wants one line under `[Unreleased]` → *Added* once #86 lands.
+- **Outcome:** shipped to draft PR #87. Additive, backend-only, zero frontend risk.
+- **Next candidate:** still **the couch pass** — it is the only thing between here and the 0.2.0
+  tag and the only thing an agent cannot do (`needs-hardware` has stacked up across #77/#78/#79/
+  #81/#83/#84; capture it in a dated `NOTES-COUCHTEST-*.md`). This increment makes one slice of
+  it cheaper: the mark-watched half can now be checked from a terminal before the TV is on.
+  Agent-shippable alternatives if another is wanted first: #81's `parse_backup` normalize gap
+  (cheapest of its five review follow-ups); making the shared-retry idempotency a mechanism
+  rather than prose (opt-in per call site) before anything non-idempotent is added to `send()`;
+  or the `BROWSE_KINDS` allowlist gap from #83's review. Still loose: #39's `0dabfea` (L2/R2
+  synthesis, needs-hardware).
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
