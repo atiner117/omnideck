@@ -9,4 +9,13 @@ position_secs: bigint | null,
 /**
  * UserData.Played — the server's fully-watched flag, for the ✓ marker on browse rows.
  */
-played: boolean | null, };
+played: boolean | null, 
+/**
+ * BaseItemDto.IsFolder — the server's OWN answer to "is this a container". The frontend
+ * used to infer that from a hard-coded `Type` allowlist, which is the wrong shape: an
+ * unlisted container kind (MusicAlbum, Playlist, UserView, …) fell through as playable,
+ * so Enter handed a folder id to mpv and W offered to mark a whole container watched —
+ * the exact thing `toggleWatched` documents it must never do. None = the server didn't
+ * say, and the frontend falls back to the name list.
+ */
+is_folder: boolean | null, };

@@ -45,6 +45,13 @@ pub struct MediaItem {
     pub position_secs: Option<u64>,
     /// UserData.Played — the server's fully-watched flag, for the ✓ marker on browse rows.
     pub played: Option<bool>,
+    /// BaseItemDto.IsFolder — the server's OWN answer to "is this a container". The frontend
+    /// used to infer that from a hard-coded `Type` allowlist, which is the wrong shape: an
+    /// unlisted container kind (MusicAlbum, Playlist, UserView, …) fell through as playable,
+    /// so Enter handed a folder id to mpv and W offered to mark a whole container watched —
+    /// the exact thing `toggleWatched` documents it must never do. None = the server didn't
+    /// say, and the frontend falls back to the name list.
+    pub is_folder: Option<bool>,
 }
 
 /// Jellyfin ticks (100 ns each) → whole seconds, rounding down. Sub-second precision is
@@ -478,6 +485,7 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
                             .map(ticks_to_secs)
                             .filter(|s| *s > 0),
                         played: ud["Played"].as_bool(),
+                        is_folder: i["IsFolder"].as_bool(),
                     })
                 })
                 .collect()
@@ -545,10 +553,15 @@ mod tests {
                 "SeriesName": "Some Show",
                 "UserData": { "PlaybackPositionTicks": 0, "Played": true }
             },
-            { "Id": "ccc", "Name": "Untouched", "Type": "Movie" }
+            { "Id": "ccc", "Name": "Untouched", "Type": "Movie" },
+            {
+                // A container kind the frontend's name list never heard of. The point of
+                // carrying IsFolder is that this classifies correctly anyway.
+                "Id": "ddd", "Name": "Some Album", "Type": "MusicAlbum", "IsFolder": true
+            }
         ]);
         let items = items_of(&v);
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert_eq!(items[0].position_secs, Some(3600));
         assert_eq!(items[0].runtime_mins, Some(120));
         assert_eq!(items[0].played, Some(false));
@@ -559,6 +572,10 @@ mod tests {
         assert_eq!(items[2].position_secs, None);
         assert_eq!(items[2].played, None);
         assert_eq!(items[2].played_pct, None);
+        // A server that omits IsFolder leaves it None — the frontend then falls back to the
+        // kind list rather than guessing "playable", so this must NOT default to false.
+        assert_eq!(items[0].is_folder, None);
+        assert_eq!(items[3].is_folder, Some(true));
     }
 
     #[test]

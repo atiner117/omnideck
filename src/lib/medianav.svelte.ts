@@ -5,7 +5,7 @@
 import * as api from "./backend";
 import type { MediaItem } from "./backend";
 import type { MediaRow } from "./MediaModal.svelte";
-import { BROWSE_KINDS, rowStartSecs, rowSub, rowSubPlain } from "./mediarow";
+import { isBrowse, rowStartSecs, rowSub, rowSubPlain } from "./mediarow";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -33,7 +33,7 @@ export class MediaNav {
   private row(i: MediaItem, group?: string): MediaRow {
     // The label + resume rules are pure and unit-tested in mediarow.ts — one place
     // decides both what the sub-line says and whether activating seeks.
-    const browse = BROWSE_KINDS.has(i.kind);
+    const browse = isBrowse(i);
     return {
       id: i.id,
       name: i.name,
