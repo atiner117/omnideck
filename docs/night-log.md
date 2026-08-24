@@ -20,6 +20,68 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-23 — Browse rows classified by the server's `IsFolder`, not a five-name allowlist
+- **Vision tie:** VISION §3 (polish on already-shipped surfaces) and the media-server track.
+  Not a new feature — closing a **latent correctness gap** #83's five-angle review found and
+  logged rather than fixed, and which the 2026-08-22 entry listed as an agent-shippable
+  alternative to the couch pass.
+- **Branch / PR:** `loop/night-20260823` — https://github.com/atiner117/omnideck/pull/88
+- **Open-PR inventory:** **3 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `3`. That is the complete list, not a subset: **#85** `fix/review-20260821`
+  (P0/P1 fixes from the five-angle review), **#86** `loop/night-20260821` (0.2.0 changelog
+  top-off), **#87** `loop/night-20260822` (`omnideck watched <id>`). Checked all three file
+  lists before choosing: **none touches `src/lib/mediarow.ts` or `src/lib/medianav.svelte.ts`**,
+  so this is not a duplicate and not a collision on the frontend half.
+- **The bug:** `BROWSE_KINDS` was an allowlist of five `Type` names, so any container kind
+  Jellyfin returns that isn't in it — `MusicAlbum`, `Playlist`, `UserView`, `AggregateFolder`,
+  anything upstream adds later — fell through as **playable**. Two consequences: Enter handed a
+  folder id to the play path instead of drilling in, and the row passed `toggleWatched`'s
+  `!r.browse` gate, so **W offered to mark a whole container watched** — which clears every
+  child's resume point with no undo. That is exactly what `toggleWatched`'s own doc comment
+  says must never be reachable from one un-confirmed press. Latent today only because v1
+  filters library views to `movies|tvshows|homevideos`; nothing structural was holding it.
+- **Changed:** `media_server.rs` — `MediaItem.is_folder: Option<bool>` from
+  `BaseItemDto.IsFolder`, mapped in `items_of`. `mediarow.ts` — new `isBrowse(i)`:
+  `i.is_folder ?? BROWSE_KINDS.has(i.kind)`. **`??` not `||` on purpose** — `false` is a real
+  server answer and must survive, `null` is the unknown one. `medianav.svelte.ts` calls it in
+  `row()`. `BROWSE_KINDS` stays, demoted to the fallback and widened to the container kinds
+  Jellyfin can actually return. Bindings regenerated (`MediaItem.ts`).
+- **Why this can't regress:** if the server sends `IsFolder` we use its own answer; if it
+  doesn't, `None` → the name-list path, i.e. **today's exact behaviour**. Worst case is the
+  status quo, never worse. The widened fallback then narrows the gap even on a response with
+  no `IsFolder`.
+- **Verify:** `bun run check` **369 files, 0 errors / 0 warnings** · `bun run build` **pass** ·
+  `bun run test` **50/50** (47 before, +3) · `cargo clippy --release --all-targets -D warnings`
+  **clean** · `cargo test --release` **109 pass / 1 ignored**. Bindings: re-exported and
+  `diff -rq` against `src/lib/bindings` is identical, so CI's clean-diff check passes. No new
+  deps. No a11y/perf/security surface touched (one `??` in an existing pure function).
+- **Not verified — be honest about this:** `IsFolder` was **not** confirmed against Andrew's
+  live Jellyfin. Web search (searxng) and the live-config/`cargo run` probes were both
+  unavailable in this session's permission set, so the claim "Jellyfin populates IsFolder" rests
+  on the API shape, not on an observed response. This is why the fallback exists and why the
+  field is `Option<bool>` — **if the assumption is wrong the code degrades to the old
+  behaviour instead of misclassifying.** One `cargo run -- mediasrv` against the real server
+  would upgrade this from "safe either way" to "confirmed working".
+- **Merge-order note:** branched off `main` (`487bd4d`), so it contains neither #86 nor #87.
+  Two things to expect: (1) this file — #86 and #87 also prepend here, so a trivial conflict is
+  likely; **keep all entries**. (2) **A semantic, non-textual conflict with #87:** that branch
+  adds two `MediaItem { … }` literals in `cli.rs` (~427 and ~442) for its `watched` tests. They
+  predate `is_folder`, so whichever of #87/#88 merges second, `cargo check` will fail with
+  "missing field `is_folder`" until each literal gets `is_folder: None`. Git will not flag it —
+  the two branches touch different files. Two lines, but it will not show up until build.
+- **Outcome:** shipped to draft PR #88. Additive; the only behaviour change is that containers
+  the old list missed now drill down instead of being offered as playable.
+- **Next candidate:** still **the couch pass** — unchanged as the top item and still the one
+  thing an agent cannot do (`needs-hardware` stacked across #77/#78/#79/#81/#83/#84; capture in
+  a dated `NOTES-COUCHTEST-*.md`), and still the only thing between here and the 0.2.0 tag.
+  Agent-shippable alternatives, now one shorter: #81's `parse_backup` normalize gap (**note it
+  collides with #85, which touches `config.rs` — check that diff first**); making shared-retry
+  idempotency a mechanism rather than prose (opt-in per call site) before anything
+  non-idempotent joins `send()`; or the *server-side* half of tonight's fix — `set_played` still
+  trusts its caller not to hand it a container id, so a Rust-side `Type`/`IsFolder` check would
+  make the playable-only rule real instead of TS-only. Still loose: #39's `0dabfea` (L2/R2
+  synthesis, needs-hardware).
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
