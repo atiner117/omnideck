@@ -20,6 +20,76 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-24 — The playable-only watch-state rule becomes a rule: enforced in `set_played`
+- **Vision tie:** VISION §3 (polish on already-shipped surfaces) and the media-server track.
+  Not a new feature — closing the **last unfixed correctness follow-up** from #83's five-angle
+  review, which logged it rather than fixing it, and which the 2026-08-23 entry named as the
+  best agent-shippable item after the couch pass.
+- **Branch / PR:** `loop/night-20260824` — https://github.com/atiner117/omnideck/pull/89
+- **Open-PR inventory:** **4 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `4`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821` (0.2.0 changelog), **#87** `loop/night-20260822` (`omnideck watched
+  <id>`), **#88** `loop/night-20260823` (browse rows by `IsFolder`). All four report
+  `baseRefOid=487bd4d3`, which is also main's tip — **main has not moved since 2026-08-19**, so
+  nothing has merged and every draft is still outstanding. Checked all four file lists before
+  choosing; none touches `set_played`'s body or `played_request`.
+- **Roadmap doc is stale — don't pick from it cold.** `NOTES-DEEPDIVE-ROADMAP.md` (dated
+  2026-07-05) still lists parental controls (#2), the audio switcher (#3) and the update manager
+  (#4) as unbuilt. #85's file list contains `pin.rs`, `audio.rs` and `update.rs`. All three are
+  **done**; the doc is gitignored and was never refreshed. This is the exact trap the loop
+  contract warns about, now confirmed a second time — treat open-PR titles as outranking it.
+- **The gap:** the "only a single playable item may be marked watched" rule lived **only in the
+  frontend row model**. So it was a convention, not a rule — `cli.rs` (and #87 adds exactly such
+  a caller), a new Tauri command, or any future Rust code could hand a series/season/library-view
+  id straight to `PlayedItems`. Jellyfin then clears the server-side resume point of **every
+  child**; un-marking restores the `Played` flag but never the positions. That is the only
+  irreversible operation in the whole media client, and its guard was one layer away from the
+  code that performs it.
+- **Changed:** `media_server.rs` only. New pure `is_container(&Value)` beside `played_request` —
+  split out for the same reason that one was, so the rule is unit-testable without a live
+  server. It reads the server's own `IsFolder` and falls back to a `CONTAINER_KINDS` `Type`
+  name-list **only when the field is absent**: a nested `match`, deliberately **not an `||`**
+  over both sources, because `IsFolder: false` is a real answer that must beat a stale list
+  entry. `set_played` probes `GET /Users/{user}/Items/{id}` and refuses a container before
+  issuing the mutating verb, naming the `Type` in the error.
+- **Trade-offs, stated rather than buried:** (1) **one extra LAN round-trip per toggle** — paid
+  deliberately for the only irreversible call we make; it is not on the rAF/input path, so
+  NOTES-PERFORMANCE is unaffected. (2) **Fails closed** if the probe errors — costs no behaviour
+  we would otherwise have had, since a server that can't answer the GET wouldn't have applied
+  the POST. (3) **Unknown → allow**, so a server sending neither field keeps today's behaviour
+  instead of losing a legitimate toggle.
+- **Verify:** `cargo clippy --all-targets -D warnings` **clean** · `cargo test --release`
+  **110 pass / 0 fail / 1 ignored** (+1 new) · `bun run check` **369 files, 0 errors / 0
+  warnings** · `bun run build` **pass** · `bun run test` **47/47**. No new deps. No
+  `#[ts(export)]` struct changed, so `src/lib/bindings/` is untouched and CI's clean-diff check
+  is unaffected. `git status` showed exactly one modified file before the commit.
+- **Not verified — be honest about this:** not exercised against the live Jellyfin (no
+  `cargo run -- mediasrv` or network probe in this session's permission set), so
+  `/Users/{userId}/Items/{itemId}` and `IsFolder` rest on the documented API shape, not an
+  observed response. Note the failure direction: because this **fails closed**, a wrong route
+  would make toggles *stop working*, not misfire — visible immediately, never silently
+  destructive. One `omnideck watched <id>` run (#87) against the real server settles it.
+- **Merge-order note:** branched off `main` (`487bd4d`) — contains none of #85–#88. Expect a
+  trivial conflict in **this file** (#86/#87/#88 all prepend here too); **keep all entries**.
+  The `media_server.rs` overlap should be textually clean — this touches only `set_played`'s
+  body and adds a helper after `played_request`. **#88 overlaps semantically, not textually:**
+  it applies the same `IsFolder`-first idea to the frontend row model. Complementary — TS stops
+  the UI offering the action, this stops the backend performing it — but if both land,
+  `BROWSE_KINDS` (TS) and `CONTAINER_KINDS` (Rust) become two copies of the same fallback
+  knowledge.
+- **Outcome:** shipped to draft PR #89. Additive; the only behaviour change is that a container
+  id now returns an error instead of silently wiping child resume points.
+- **Next candidate:** still **the couch pass** — unchanged as the top item, still the only thing
+  an agent cannot do (`needs-hardware` now stacked across #77/#78/#79/#81/#83/#84/#88/#89), and
+  still the only thing between here and the 0.2.0 tag. **Worth flagging plainly: four green
+  drafts are now queued behind a review that hasn't happened, and main hasn't moved in five
+  days — the bottleneck is merging, not building.** Agent-shippable alternatives if that stays
+  blocked: #81's `parse_backup` normalize gap (**collides with #85's `config.rs` — read that
+  diff first**); making shared-retry idempotency a mechanism rather than prose (opt-in per call
+  site) before anything non-idempotent joins `send()`; de-duplicating the two container-kind
+  lists once #88 and #89 have both landed. Still loose: #39's `0dabfea` (L2/R2 synthesis,
+  needs-hardware).
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
