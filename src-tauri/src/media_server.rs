@@ -371,13 +371,31 @@ impl JellyfinServer {
     ///
     /// Marking watched also clears the item's server-side resume point (this is Jellyfin's
     /// behaviour, not ours) — that's the expected meaning of "I'm done with this", but it is
-    /// why the caller gates this to a single playable item and not a whole series: un-marking
+    /// why this is gated to a single playable item and not a whole series: un-marking
     /// restores the flag, never the positions.
+    ///
+    /// That gate used to live only in the frontend row model, which made it a *convention*
+    /// rather than a rule — the CLI, a new Tauri command, or any future Rust caller could
+    /// hand a series/season id straight to `PlayedItems` and silently wipe the resume point
+    /// of every episode under it. So the rule is enforced here, on the one code path every
+    /// caller shares: ask the server what the item actually is before mutating it.
     pub async fn set_played(&self, id: &str, played: bool) -> Result<(), String> {
         if !valid_id(id) {
             return Err("invalid item id".into());
         }
         let user = self.user().await?;
+        // One extra LAN round-trip per toggle, deliberately: this is the only destructive
+        // shape this API has, and it is *irreversible* (un-marking restores the Played flag,
+        // never the positions it cleared). Fail closed if the probe fails — a server that
+        // can't answer a GET wouldn't have applied the POST either, so this costs no
+        // behaviour we would otherwise have had. Not on the rAF/input path (NOTES-PERFORMANCE).
+        let item = self.get(&format!("/Users/{user}/Items/{id}")).await?;
+        if is_container(&item) {
+            let kind = item.get("Type").and_then(|t| t.as_str()).unwrap_or("folder");
+            return Err(format!(
+                "media server: refusing to change watch state on a {kind} — marking a container watched clears the resume point of everything inside it, and that can't be undone. Mark the individual episode/movie instead."
+            ));
+        }
         let (method, path) = played_request(&user, id, played);
         let resp = self.send(method, &format!("{}{path}", self.base)).await?;
         if !resp.status().is_success() {
@@ -457,6 +475,40 @@ fn played_request(user: &str, id: &str, played: bool) -> (reqwest::Method, Strin
     (method, format!("/Users/{user}/PlayedItems/{id}"))
 }
 
+/// Container `Type` names — the fallback for servers whose response omits `IsFolder`. Only
+/// consulted when the server didn't answer the question itself, so it never has to be
+/// exhaustive; it just has to cover the kinds that would do real damage.
+const CONTAINER_KINDS: &[&str] = &[
+    "Series",
+    "Season",
+    "BoxSet",
+    "Folder",
+    "CollectionFolder",
+    "UserView",
+    "AggregateFolder",
+    "MusicAlbum",
+    "MusicArtist",
+    "Playlist",
+];
+
+/// Whether a `BaseItemDto` describes a **container** (series, season, library view, album…)
+/// rather than something playable. Split out of `set_played` for the same reason
+/// `played_request` is: it makes the rule unit-testable without a live server.
+///
+/// `IsFolder` is the server's own answer and wins outright — including when it is `false`,
+/// which is why this is a nested lookup and not an `||` over both sources. A name-list
+/// fallback ORed in would let a stale entry override a server that explicitly said
+/// "playable". The list only runs when `IsFolder` is absent.
+fn is_container(item: &serde_json::Value) -> bool {
+    match item.get("IsFolder").and_then(|f| f.as_bool()) {
+        Some(is_folder) => is_folder,
+        None => item
+            .get("Type")
+            .and_then(|t| t.as_str())
+            .is_some_and(|t| CONTAINER_KINDS.contains(&t)),
+    }
+}
+
 fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
     v.as_array()
         .map(|a| {
@@ -487,7 +539,10 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::{items_of, played_request, ticks_to_secs, valid_id, JellyfinServer, MediaServerConfig};
+    use super::{
+        is_container, items_of, played_request, ticks_to_secs, valid_id, JellyfinServer,
+        MediaServerConfig,
+    };
 
     #[test]
     fn set_played_guards_reject_before_any_network_io() {
@@ -506,6 +561,26 @@ mod tests {
         let bad_user =
             tauri::async_runtime::block_on(srv("u1/../admin").set_played("abc", true)).unwrap_err();
         assert!(bad_user.contains("user id"), "{bad_user}");
+    }
+
+    #[test]
+    fn containers_are_refused_a_watch_state_change() {
+        // The server's own IsFolder wins in BOTH directions.
+        assert!(is_container(&serde_json::json!({ "Type": "Series", "IsFolder": true })));
+        assert!(!is_container(&serde_json::json!({ "Type": "Movie", "IsFolder": false })));
+        // IsFolder:false beats a container-looking name — the fallback must not be ORed in,
+        // or a stale list entry would override a server that explicitly said "playable".
+        assert!(!is_container(&serde_json::json!({ "Type": "Playlist", "IsFolder": false })));
+
+        // No IsFolder at all → fall back to the Type name.
+        assert!(is_container(&serde_json::json!({ "Type": "Season" })));
+        assert!(is_container(&serde_json::json!({ "Type": "BoxSet" })));
+        assert!(!is_container(&serde_json::json!({ "Type": "Episode" })));
+        assert!(!is_container(&serde_json::json!({ "Type": "Movie" })));
+
+        // Neither field: unknown, and the old behaviour was to allow — stay there rather
+        // than blocking a legitimate toggle on a server that answers with neither.
+        assert!(!is_container(&serde_json::json!({})));
     }
 
     #[test]
