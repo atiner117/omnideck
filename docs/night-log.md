@@ -20,6 +20,75 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-26 — Close the two fail-open gaps in the shared HTTP fetch path (`icons.rs` + `http.rs`)
+- **Vision tie:** VISION §3 (quality bars) and `NOTES-SECURITY.md`. Not a new feature — the last
+  two *security-shaped* leftovers of the 2026-08-21 five-angle review, whose P0/P1 set #85
+  landed and whose P2/P3 set nobody has touched since.
+- **Branch / PR:** `loop/night-20260826` — https://github.com/atiner117/omnideck/pull/90
+- **Open-PR inventory:** **5 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `5`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`. All five report `baseRefOid=487bd4d3` — **main has not moved since
+  2026-08-19, now seven days.** Pulled all five *file lists* (23+6+5+2+2) before choosing and
+  keyword-searched the full inventory for `ssrf` / `icons` / `favicon` / `http`: only #86 matched
+  (changelog prose). **No open PR touches `http.rs` or `icons.rs`** — that absence claim rests on
+  the complete set, both ways.
+- **Local `main` was stale again** (`dfdfa32`, PR #48 era) — the documented trap. Branched from
+  the *fetched* main SHA `487bd4d3` taken from the PRs' `baseRefOid`, not from `refs/heads/main`.
+  Note for the next agent: `git fetch origin` fails here (SSH wants a yubikey touch); use
+  `gh pr list --json baseRefOid` or the gh-token HTTPS remote to learn where main actually is.
+- **Why this and not the roadmap:** `NOTES-DEEPDIVE-ROADMAP.md` is gitignored and stale (third
+  confirmation). `NOTES-CODE-REVIEW-2026-08-21.md` is *committed, dated, and cross-verified*, and
+  its P2/P3/test-gap sections are a far better backlog for a cold agent. **Next iterations should
+  pick from it.** Ranked leftovers there, all still open: lock hygiene (`media_server.rs:150-168`,
+  `update.rs:103,125` raw `.unwrap()` where the tree uses `sync::lock_or_recover`); TOCTOU
+  triple-resolution in `asset.rs`/`get_art`; the `remote.rs` header-cap parser trap; `AudioSink`
+  is the one ts-rs source-of-truth violation; `Modal.svelte:63` `.osk` is the single animated
+  surface without a reduced-motion rule; test gaps ranked `npActions.ts` → `settings-defs.ts` →
+  `themes.ts`/`SleepTimer` → `MediaNav.marking`.
+- **Changed:** two files, one concern — *the SSRF guard must hold on every host we actually fetch,
+  and must not be silently droppable.*
+  1. **`icons.rs`** — `favicon()` gates `host`, then quietly builds candidates for a **second**
+     host, `root_domain(host)`, including a direct `https://{root}/favicon.ico` **fetch** that was
+     never checked. `--app=https://foo.127.1` clears the entry gate (the `foo` label makes the
+     host non-numeric; it also doesn't resolve) and derives `127.1` — an `inet_aton` short form
+     for `127.0.0.1`, so an icon fetch becomes a loopback probe. Needs no crafting either: a
+     public `sub.example.com` whose bare `example.com` resolves internally under split-horizon
+     DNS. The derived domain now gets its own `is_blocked_host_resolved`; a blocked root is never
+     a legitimate icon source, so the **whole** domain is dropped rather than only its direct
+     fetch — no reason to hand an internal hostname to DDG/Google as a query parameter either.
+     (Redirect *hops* were already covered by the client's redirect policy; this is the
+     initial-URL side, for the candidate that never had one.)
+  2. **`http.rs`** — `.build().unwrap_or_default()` failed open on **two** controls at once: a
+     default `reqwest::Client` carries neither the timeout policy nor the SSRF redirect policy.
+     The fallback bought nothing — the only realistic failure is TLS-backend init, where every
+     HTTPS fetch errors anyway, so there was no usable degraded mode being preserved. Now
+     `.expect` with a message naming what it refuses to hand back.
+- **Verify:** `cargo clippy --release --all-targets -- -D warnings` **clean** (debug too) ·
+  `cargo test --release` **110 pass / 0 fail / 1 ignored** (+1 new) · `bun run check` **369 files,
+  0 errors / 0 warnings** · `bun run build` **pass** · `bun run test` **47/47**. `git status`
+  showed exactly the two intended files before the commit. No new deps. No `#[ts(export)]` struct
+  changed, so `src/lib/bindings/` is untouched and CI's clean-diff check is unaffected.
+- **Not verified — be honest about this:** the loopback-probe vector was reasoned from the code
+  plus `inet_aton` short-form semantics and pinned with a **no-IO** unit test
+  (`derived_root_domain_can_escape_the_entry_gate`); it was *not* demonstrated end-to-end against
+  a live listener, which would mean a network fetch inside a test. Failure direction is safe: the
+  fix is fail-closed, so a wrongly-blocked root domain costs one fallback icon candidate, never a
+  wrong fetch.
+- **Outcome:** shipped to draft PR #90. Additive and contained; the only behaviour change is that
+  a root domain resolving somewhere internal stops being fetched.
+- **Next candidate:** **the couch pass is still the top item and still the only thing an agent
+  cannot do** — `needs-hardware` now stacked across #77/#78/#79/#81/#83/#84/#88/#89, and it is
+  still the only thing between here and the 0.2.0 tag. **Say the real bottleneck plainly: six
+  green drafts are queued behind a review that hasn't happened, and main has not moved in seven
+  days. The constraint is merging, not building** — and note that #85/#87/#88/#89 all touch
+  `media_server.rs`, so the conflict cost of the queue grows with every media increment. Tonight
+  deliberately avoided that file for exactly this reason. If the queue stays blocked, the best
+  agent-shippable work is the `NOTES-CODE-REVIEW-2026-08-21.md` P2 list above, preferring items in
+  files no open PR touches: `asset.rs` TOCTOU, `remote.rs` parser, or the `npActions.ts` /
+  `settings-defs.ts` test gaps (pure modules, zero conflict risk). Avoid `media_server.rs`,
+  `config.rs`, `commands.rs`, `+page.svelte` and `Modal.svelte` until the queue drains.
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
