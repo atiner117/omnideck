@@ -20,6 +20,71 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-27 — Close the TOCTOU triple-resolution in the `omnideck://` asset chokepoint
+- **Vision tie:** VISION §3 (quality bars) / `NOTES-SECURITY.md`, via `NOTES-CODE-REVIEW-2026-08-21.md`
+  **P2 — "TOCTOU triple-resolution"**. Continues the previous iteration's explicit instruction:
+  with the merge queue blocked, work the committed review's P2 list, preferring files no open PR
+  touches.
+- **Branch / PR:** `loop/night-20260827` — https://github.com/atiner117/omnideck/pull/91
+- **Open-PR inventory:** **6 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `6`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`. Pulled the full file list of all six
+  before choosing (`gh pr list --json number,files`); the union is `media_server.rs`,
+  `commands.rs`, `remote.rs`, `config.rs`, `switcher.rs`, `watchdog.rs`, `update.rs`, `audio.rs`,
+  `pin.rs`, `http.rs`, `icons.rs`, `+page.svelte`, `Modal.svelte`, `LauncherForm.svelte`,
+  `AudioOutputModal.svelte`, `medianav.svelte.ts`, `mediarow.ts`, `CHANGELOG.md`, packaging, and
+  the NOTES-*. **`asset.rs` is in none of the six** — that absence claim rests on the complete
+  set, checked file-by-file, not on a keyword search.
+- **Main still has not moved.** All six PRs report `baseRefOid=487bd4d3`, unchanged since
+  2026-08-19 — now **eight days**. Local `refs/heads/main` is still stale (`dfdfa32`, PR #48 era);
+  branched from the fetched `487bd4d` taken from `baseRefOid`, per the documented trap. `git fetch
+  origin` still can't run here (SSH wants a yubikey touch).
+- **Why this one:** #90's next-candidate note ranked the remaining P2 items by conflict risk and
+  named exactly three safe picks — `asset.rs` TOCTOU, the `remote.rs` parser, and the
+  `npActions.ts`/`settings-defs.ts` test gaps. `remote.rs` turned out to be in #85's diff, so it
+  was out. Between the `asset.rs` fix and the test gaps, the fix is the higher-value one: it's a
+  real security-shaped defect in the single chokepoint for every art request, and it's one file.
+- **Changed:** one file, one concern — `src-tauri/src/asset.rs`.
+  `resolve_and_read()` resolved the requested path **three separate times**: `canonicalize()`,
+  then `metadata()`, then `read()`. Every allowlisted root is a user-writable cache dir
+  (SteamGridDB art, artwork cache, downscaled wallpapers), so the inode that cleared the root /
+  extension / size gates was not necessarily the inode whose bytes got served. Now the open
+  happens first and each check interrogates that descriptor: new `fd_path()` reads
+  `readlink("/proc/self/fd/N")` for the path the kernel actually resolved (`..`/symlinks already
+  collapsed) and feeds the root-allowlist + MIME gates; `f.metadata()` is an `fstat(2)` on the
+  same handle and **now also rejects non-regular files**, which the path-based check never did;
+  the bytes come off that fd, `take(MAX_BYTES)`-capped so an append after the fstat can't overrun
+  the cap. Linux-only via `/proc`, matching `proc.rs`/`switcher.rs`. No new deps. No
+  `#[ts(export)]` struct touched → `src/lib/bindings/` untouched, CI's clean-diff check
+  unaffected. `git status` showed exactly the one intended file before the commit.
+- **Deliberately half-done, and why:** the same P2 item also names `commands.rs:63-86` (`get_art`),
+  which has the identical canonicalize→metadata→read shape. `commands.rs` is in **#85**'s diff, so
+  fixing it tonight would put a conflict into the queue. Deferred until #85 lands — it is the
+  natural follow-up and the fix is a copy of this one.
+- **Verify:** `cargo clippy --release --all-targets -- -D warnings` **clean** (debug profile too) ·
+  `cargo test --release` **111 pass / 0 fail / 1 ignored** (+2 new) · `bun run check` **369 files,
+  0 errors / 0 warnings** · `bun run build` **pass** · `bun run test` **47/47**.
+- **Not verified — be honest:** the swap window was reasoned from the code and closed
+  structurally; it was *not* demonstrated with a live racing writer against a cache dir. Failure
+  direction is safe — every new check is fail-closed, so a wrongly-rejected file costs one 404'd
+  art request, never a wrong read.
+- **Residual, logged not fixed:** `File::open` on a FIFO planted in a cache dir blocks until a
+  writer appears. Pre-existing (the old code hit it inside `fs::read`) and unchanged here; closing
+  it needs `O_NONBLOCK` via `libc`/`rustix` — a new dependency, out of scope for one increment.
+- **Outcome:** shipped to draft PR #91.
+- **Next candidate:** **the bottleneck is still merging, not building — say it plainly.** Seven
+  green drafts are now queued behind a review that hasn't happened, and main is eight days cold;
+  the couch pass (`needs-hardware`, stacked across #77/#78/#79/#81/#83/#84/#88/#89) remains the
+  only thing an agent cannot do and the only thing between here and the 0.2.0 tag. Every media
+  increment raises the conflict cost of the queue, so keep avoiding `media_server.rs`,
+  `commands.rs`, `config.rs`, `remote.rs`, `+page.svelte`, `Modal.svelte`. Remaining zero-conflict
+  work from `NOTES-CODE-REVIEW-2026-08-21.md`: the **`npActions.ts` test gap** (ranked #1, pure and
+  branchy, feeds two surfaces whose drift is its reason to exist) then **`settings-defs.ts`** (282
+  lines, zero tests), then `themes.ts` cycle-wrap / `SleepTimer`'s `formatRemaining`/`endsAt`.
+  Lock hygiene (`sync::lock_or_recover` in `media_server.rs`/`update.rs`) and the `AudioSink`
+  ts-rs violation both sit in queued files — **don't**.
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
