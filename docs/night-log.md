@@ -20,6 +20,65 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-28 — Cover `npActions.ts`: the #1-ranked test gap, and zero conflict with the queue
+- **Vision tie:** VISION §3 (quality bars) via `NOTES-CODE-REVIEW-2026-08-21.md` →
+  **Test-coverage gaps, item 1**: "`npActions.ts` — pure, branchy, feeds two surfaces whose drift
+  is its stated reason to exist." This is the exact pick the 2026-08-27 entry left as its
+  next candidate, and it still made sense, so it was taken unchanged.
+- **Branch / PR:** `loop/night-20260828` — https://github.com/atiner117/omnideck/pull/92
+- **Open-PR inventory:** **7 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `7`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827` (last
+  night's asset.rs TOCTOU fix). Pulled the full file list of all seven (`gh pr list --json
+  number,files`) before choosing. **`npActions.ts` is in none of the seven** — that absence claim
+  rests on the complete set, checked file-by-file, not on a keyword search.
+- **Main still has not moved.** All seven PRs report `baseRefOid=487bd4d3` — unchanged since
+  2026-08-19, now **nine days**. Branched from that fetched SHA per the documented stale-local-ref
+  trap. Two caveats, stated honestly: `git fetch origin` still can't run here (SSH wants a yubikey
+  touch), and the `gh api .../commits/main` cross-check was **denied by the permission prompt**,
+  so main's tip is corroborated *indirectly* — by seven independent PRs agreeing on the same base
+  — rather than read directly.
+- **Changed:** one new file, `src/lib/npActions.test.ts` (18 tests). `npActions.ts` itself is
+  **byte-identical to main** — `git diff` against it is empty; this increment is test-only.
+  Pinned: the gating (transport only with MPRIS metadata; ⇄ only for `kind === "app"` **and**
+  `inSession`; close only for `"app"`; ✕ suppressed on the synthetic unlaunched-media card, which
+  owns no launch id to dismiss), the render order both surfaces depend on, the `run()` call
+  arguments incl. `switchApp` receiving *this* card's id (the original drift), the `after` hook
+  (fires on the three terminal actions, never on transport, fires even when the IPC **rejects** so
+  the overlay can't stick open on a backend error, and is optional — the card stack omits it), and
+  per-path error routing to `onerror`. Backend mocked with `vi.mock("./backend")`, so no Tauri
+  runtime is needed and the node vitest env stays as-is. No new deps.
+- **Mutation-checked, not just green.** A passing new test file proves nothing on its own, so two
+  deliberate mutations were applied and reverted: `api.switchApp(c.id)` → `api.switchApp()`, and
+  replacing the `c.kind !== "media"` dismiss guard with `if (true)`. Each failed **exactly one**
+  intended test (`2 failed | 63 passed`), then the source was restored and confirmed clean.
+- **One real snag, worth remembering:** the first draft was green on `bun run test` but **failed
+  `bun run check` with 19 errors** — `ReturnType<typeof vi.fn>` erases the callback signature, so
+  the mocks didn't satisfy `cardActions`' options parameter. Fixed by deriving the types from the
+  function under test (`type Opts = Parameters<typeof cardActions>[1]`, then `Mock<Opts["onerror"]>`
+  / `vi.fn<Opts["onerror"]>()`). **`bun run test` passing is not the gate — CI runs `check` too.**
+- **Verify:** `bun run check` **pass** (370 files, 0 errors / 0 warnings) · `bun run build`
+  **pass** · `bun run test` **pass, 65/65** (was 47; +18) · `cargo check` / `cargo clippy` **n/a**,
+  no Rust touched · ts-rs bindings **n/a**, no `#[ts(export)]` struct touched, so CI's
+  clean-`src/lib/bindings` diff check is unaffected.
+- **Outcome:** shipped to draft PR #92.
+- **Next candidate:** **the bottleneck is the merge queue, not the build — this is now the third
+  night in a row saying so.** Eight green drafts (#85–#92) are stacked behind a review that hasn't
+  happened and a couch pass (`needs-hardware`, across #77/#78/#79/#81/#83/#84/#88/#89) that no
+  agent can do; main is nine days cold and that couch pass is the only thing between here and the
+  0.2.0 tag. If the next iteration finds main *still* at `487bd4d`, consider stopping the loop and
+  saying so plainly rather than deepening the stack — each increment raises the queue's conflict
+  cost. If it continues: keep avoiding `media_server.rs`, `commands.rs`, `config.rs`, `remote.rs`,
+  `http.rs`, `icons.rs`, `asset.rs`, `+page.svelte`, `Modal.svelte`. Remaining zero-conflict work
+  from the committed review, in order: **`settings-defs.ts`** (282 lines of cycle/normalize/visible
+  predicates, zero tests — same shape as tonight, and the next-largest untested pure module), then
+  `themes.ts` cycle-wrap / unknown-id restart, then `SleepTimer`'s `formatRemaining`/`endsAt`, then
+  the `MediaNav.marking` re-entrancy guard. Still **don't** touch lock hygiene
+  (`sync::lock_or_recover`) or the `AudioSink` ts-rs violation — both sit in queued files. The
+  `commands.rs:63-86` `get_art` TOCTOU twin of last night's `asset.rs` fix remains deferred behind
+  #85 for the same reason.
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
