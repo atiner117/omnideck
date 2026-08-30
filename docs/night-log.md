@@ -20,6 +20,54 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-29 — Playwright screenshot harness; self-hosted Inter; contain-intrinsic-size corrections
+- **Not a loop iteration** — interactive session with Andrew. Logged here anyway because the
+  two findings below are traps the next cold agent would otherwise re-discover the hard way.
+- **Vision tie:** "I haven't had time to test" — CLAUDE.md §Verify. This adds the missing rung
+  between the vitest unit tests and `packaging/test-session.sh`: the whole frontend, driven in a
+  real browser, no TV/controller/Rust build.
+- **Branch / PR:** `feat/e2e-screenshot-harness` — see PR link in the commit trailer / gh.
+- **Changed:**
+  - `e2e/` + `playwright.config.ts` — mock Tauri IPC (`window.__TAURI_INTERNALS__` installed via
+    `addInitScript`, so no production code changes), fixtures typed against the ts-rs bindings via
+    a `Wire<T>` mapped type (bigint→number), and a 16-shot tour of the grid/rail/list/modals.
+    Runs chromium + webkit; `e2e/install-webkit-deps.sh` makes webkit start on Arch.
+  - `static/fonts/` + `src/lib/fonts.css` — Inter was named in the CSS but never shipped.
+  - `ListView.svelte` / `GridView.svelte` — `contain-intrinsic-size` corrections (below).
+- **Verify:** `bun run check` pass (0 errors / 370 files) · `bun run test` pass · `bun run build`
+  pass · `bun run check:e2e` pass · 16/16 screenshots on both engines. Rust untouched.
+
+### Trap 1 — `contain-intrinsic-size` is a CONTENT box, not a border box
+Measuring a row with `getBoundingClientRect()` and pasting that number in **over-states it by the
+element's padding**, which the UA then adds on top again. I shipped exactly that mistake on `.lrow`
+(`calc((2.6rem + 0.7rem) * scale)`, padding included) and made the scroll extent **+17.8%** wrong —
+four times worse than the flat `64px` it replaced (−4.3%). Correct value is the content box alone —
+the thumbnail, `calc(2.6rem * var(--scale, 1))` — now −0.9%..−1.6% across all four UI scales in both
+engines. If you touch this property, the number you want is *not* the one dev-tools shows you.
+
+### Trap 2 — a 15-row fixture cannot test `content-visibility` at all
+`content-visibility: auto` only skips content outside the viewport **plus a generous margin**, so
+with the default fixture library (15 rows) nothing is ever skipped and the intrinsic size is never
+consulted. Every variant then measures identical, which reads as "my change is fine" — it is
+measuring nothing. **Verification method: rebuild the fixture with ~500 games and compare
+`.lwrap`/`.gwrap` `scrollHeight` against a control that forces `content-visibility: visible`.**
+That is the only way the property engages. This is also how `.gtile` was settled: at 500 tiles,
+ground truth / no declaration / a deliberately wrong value all produce an identical scroll extent,
+because a `1fr` grid track gives a definite width and `aspect-ratio` derives the height — so its
+`240px` was inert, and was removed rather than "corrected".
+
+### Also found, not fixed
+- **Buttons never inherited the app's font.** UA stylesheets hard-set a font on form controls, and
+  nearly every surface here is a `<button>` (rail tiles, grid tiles, list rows, deck cards). Only
+  `Modal.svelte`/`PinModal` set `font: inherit` locally. Fixed globally in `fonts.css` — but note
+  this means every screenshot taken before today shows the *wrong typeface*.
+- `ScreensaverOverlay` renders outside `<main>`, so it still doesn't get the font stack (the
+  `font-family` lives on `main`, not `:root`). Untouched — no screenshot covers it.
+- `03-games-rail-scrolled` has ~0.002% run-to-run pixel noise (rail transform still settling).
+  Harmless for review shots, but it must be fixed before these become `toHaveScreenshot()` baselines.
+- **Next candidate:** move `font-family` from `main` to `:root`, then wire the e2e run into
+  `ci.yml` as its own job (Ubuntu runners need no ICU workaround, so webkit works there natively).
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
