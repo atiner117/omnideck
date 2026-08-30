@@ -9,6 +9,12 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+# Playwright harness output (regenerate with `bun run screenshots`)
+/e2e/screenshots
+/e2e/.results
+/playwright-report
+/test-results
+
 # Rust / Tauri build output
 /src-tauri/target
 /src-tauri/gen
