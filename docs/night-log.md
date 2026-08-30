@@ -20,6 +20,76 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-29 — Pin the Settings table: `settings-defs.ts` coverage (review gap #2)
+- **Vision tie:** VISION §3 (quality bars) via `NOTES-CODE-REVIEW-2026-08-21.md` →
+  **test-coverage gaps, item 2**: "`settings-defs.ts` — 282 lines of cycle/normalize/visible
+  predicates, zero tests." Exactly the candidate the 2026-08-28 entry left behind, taken unchanged.
+- **Branch / PR:** `loop/night-20260829` — https://github.com/atiner117/omnideck/pull/94
+- **Open-PR inventory:** **9 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `9`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827`, **#92**
+  `loop/night-20260828`, **#93** `feat/e2e-screenshot-harness`. Pulled the full file list of all
+  nine (`gh pr list --json number,files`) before choosing; `settings-defs.ts` is in **none** of
+  them — that absence claim rests on the complete set, checked file-by-file.
+- **#93 is new and is not this loop's work.** Opened 2026-08-30T01:38Z under `atiner117`: a
+  Playwright e2e screenshot harness (`e2e/`, 16 screenshots over a mocked `__TAURI_INTERNALS__`),
+  self-hosted Inter, and `contain-intrinsic-size` fixes. It touches `GridView`/`ListView`/
+  `+layout.svelte`/`fonts.css` — **add those to the avoid-list** alongside the queued Rust files.
+  It is the missing rung between vitest and `packaging/test-session.sh`, so it is worth reviewing
+  before more frontend work stacks on top of it.
+- **Main is still `487bd4d` — ten days cold, and now nine drafts deep.** All nine PRs report the
+  same `baseRefOid=487bd4d3`, which is how main's tip was corroborated (`git fetch origin` needs a
+  yubikey touch and can't run here). The 08-28 entry said to consider stopping if main hadn't
+  moved. Judgement call, stated plainly: this increment was taken anyway because it is **test-only
+  and touches zero files in any open PR**, so it adds ~no conflict cost to the queue — but the
+  bottleneck is unchanged and is now the fourth night running. **The queue, not the build, is what
+  needs Andrew.**
+- **Changed:** one new file, `src/lib/settings-defs.test.ts` (38 tests). `settings-defs.ts` is
+  **byte-identical to main** — `git diff` against it is empty. Pinned: the structure the page
+  assumes but never checks (unique keys; **no orphaned section header** — headers are never
+  filtered by `visibleSettings`, so a section whose rows are all conditional would render as a
+  lone header; action rows == the two keys `doAction` dispatches, so a new action row that isn't
+  wired fails here instead of becoming a dead button); `normalizeNum` clamping/rounding plus two
+  properties over *every* numeric row — its default is already in range (else the first nudge
+  jumps) and one D-pad step actually moves it (else it's a dead knob); a generic **no-dead-end**
+  cycle property (feed each row's own patch back in, return to start within a lap); the
+  hand-edited-value fallbacks incl. the deliberate asymmetry (off-list accent → `ACCENTS[1]`,
+  off-list bg colour → `[0]`); the search-provider branch that clears `search_provider` **only**
+  when it still holds a preset URL, so a typed SearXNG URL survives; the sound preset ladder,
+  its float epsilon, Custom→Off, the preview blip firing only when switching *on*, and volume 0
+  clearing `sound`; and every visibility predicate. `./sfx` mocked (blip swallows its own errors,
+  so it would pass unmocked and prove nothing); node env unchanged; no new deps.
+- **Mutation-checked, not just green.** Four mutations applied together — bgcolor fallback index
+  `-1 → 0`, dropping the `SEARCH_MODES.some(...)` guard, unconditional blip, and dropping
+  `sound: v > 0` from the volume setter — gave **exactly four failures, one per mutation, each the
+  intended test** (`4 failed | 81 passed`). Source restored and re-verified clean.
+- **One documented wart, pinned rather than silently blessed:** a `background_image` path ending in
+  `/` renders blank instead of `(none)` — `split("/").pop()` returns `""`, which isn't nullish so
+  the `??` never fires. Cosmetic; left as-is because this increment is test-only.
+- **Harness note for the next agent:** the sandbox refuses `perl -0pi` in-place rewrites and
+  refuses to run a repo-local shell script, so mutation checks have to be driven with the Edit tool
+  (batch the mutations, run once, read the failing test names, revert). Also `bun run test` passing
+  is *not* the gate — CI runs `check` too.
+- **Verify:** `bun run check` **pass** (370 files, 0 errors / 0 warnings) · `bun run build`
+  **pass** · `bun run test` **pass, 85/85** (was 47 on this base; +38) · `cargo check` /
+  `cargo clippy` **n/a**, no Rust touched · ts-rs bindings **n/a**, no `#[ts(export)]` struct
+  touched.
+- **Outcome:** shipped to draft PR #94.
+- **Next candidate:** **review the queue before adding to it.** If it's still nine deep and main is
+  still `487bd4d`, the honest move is to stop rather than ship a tenth. If work continues, the
+  remaining zero-conflict items from the committed review, in order: `themes.ts` cycle-wrap /
+  unknown-id restart (small — `nextTheme`/`normalizeTheme`/`themeLabel`, and the Rust
+  `theme_ids_match_frontend` test already guards the registry, so this is the frontend half), then
+  `SleepTimer`'s exported `formatRemaining`/`endsAt`, then the `MediaNav.marking` re-entrancy
+  guard. Avoid-list, now ten files: `media_server.rs`, `commands.rs`, `config.rs`, `remote.rs`,
+  `http.rs`, `icons.rs`, `asset.rs`, `+page.svelte`, `Modal.svelte`, and (new, via #93)
+  `GridView.svelte` / `ListView.svelte` / `+layout.svelte`. Still don't touch lock hygiene
+  (`sync::lock_or_recover`) or the `AudioSink` ts-rs violation, and the `commands.rs:63-86`
+  `get_art` TOCTOU twin stays deferred behind #85. **Note:** every night branch prepends to this
+  file at the same anchor, so #86–#94 all conflict here on merge — resolve by keeping all entries,
+  newest first.
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
