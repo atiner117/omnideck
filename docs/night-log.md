@@ -20,6 +20,99 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-30 — STOP: the queue is the bottleneck. No code tonight; landing-order analysis instead.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* Taking that literally, and taking the 08-29 entry's own
+  next-candidate literally: *"review the queue before adding to it. If it's still nine deep and main
+  is still `487bd4d`, the honest move is to stop rather than ship a tenth."* It is now **ten** deep.
+- **Branch / PR:** `loop/night-20260830` — log-only, no source change.
+- **Open-PR inventory: 10 open, total.** `gh pr list --state open --limit 200 --json number --jq
+  'length'` → `10`. The complete set, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827`, **#92**
+  `loop/night-20260828`, **#93** `feat/e2e-screenshot-harness`, **#94** `loop/night-20260829`.
+- **Main has not moved: `487bd4d`, now ten days cold** (merge of #83, 2026-08-20). Corroborated two
+  ways — `gh api repos/atiner117/omnideck/commits/main` returns `487bd4d`, and all ten PRs report
+  `baseRefOid=487bd4d`. Fifth night running.
+
+### The good news, and it is better than it looks
+**All ten PRs are `MERGEABLE` / `mergeStateStatus=CLEAN` against main right now** (checked for all
+10/10, not a sample). Nothing has rotted. Total queue: **+3396 / −83 across 63 file-paths.**
+
+**But that CLEAN status is a snapshot that dies on the first merge.** Nine of the ten touch
+`docs/night-log.md`, all prepending at the same anchor. The moment any one of them lands, the other
+eight flip to CONFLICTING — on the log file alone, not on code. **That is expected and benign.**
+Resolution rule, every time: keep all entries, newest first. Do not let eight scary-looking red
+"conflicting" badges suggest the queue has gone bad; it hasn't.
+
+### Complete overlap map (all 63 paths across all 10 PRs)
+Exactly **three** paths are shared by more than one PR. Every other file in the queue is touched by
+exactly one PR:
+
+| Path | PRs | Nature |
+|---|---|---|
+| `docs/night-log.md` | 86, 87, 88, 89, 90, 91, 92, 93, 94 (9) | Mechanical. Same anchor. Keep all, newest first. |
+| `src-tauri/src/media_server.rs` | 85, 87, 88, 89 (4) | **The only real code cluster.** |
+| `.gitignore` | 85, 93 (2) | Two unrelated additions; almost certainly both-keep. |
+
+### Recommended landing order
+**Tier 1 — six PRs that collide with nothing but the log file.** Land these in any order; each is a
+single-concern change whose only conflict is the mechanical night-log prepend:
+- **#92** `npActions.test.ts` and **#94** `settings-defs.test.ts` — test-only, zero production code.
+  Cheapest possible merges; they cannot break the app.
+- **#91** `asset.rs` (TOCTOU fix) · **#90** `http.rs` + `icons.rs` (fail-open fixes) — security
+  hardening, one file-set each, nothing else in the queue touches those files.
+- **#86** `CHANGELOG.md` (0.2.0 top-off) — pairs with #85 for the release; see below.
+- **#93** the Playwright harness — 16 files but all new (`e2e/`, `static/fonts/`) plus
+  `GridView`/`ListView`/`+layout.svelte`/`fonts.css`, which **no other open PR touches**. Only
+  overlap is `.gitignore` with #85.
+
+**Tier 2 — the `media_server.rs` cluster (85, 87, 88, 89).** Land deliberately, rebasing each on the
+previous and re-running the Rust gate between. Suggested order **#85 → #89 → #88 → #87**, on these
+grounds: #85 is the oldest (2026-08-21), the largest (23 files), and is the *security* PR closing
+P0/P1 review findings against code already on main — fixes outrank features, and landing it first
+means the three feature PRs rebase onto the fixed baseline rather than the other way round. Order
+among #89/#88/#87 is low-stakes.
+
+**Honest limit on that recommendation:** I could establish that those four touch the same *file*,
+but **not whether they touch the same hunks** — `gh pr diff` and `gh api .../pulls/N/files` both
+require interactive approval in this sandbox, and `git fetch` of the PR branches does too (SSH
+`origin` wants a yubikey touch; the HTTPS-helper fetch needs approval). So Tier 2's ordering is
+argued from priority and size, **not** from a verified hunk-overlap analysis. A human with the
+branches fetched can settle it in one `git merge-tree` run.
+
+### Two other things worth knowing before merging
+- **#85 carries the version-sync files** — `src-tauri/Cargo.toml`, `Cargo.lock`,
+  `packaging/PKGBUILD`, `packaging/.SRCINFO`. CI enforces the five-way version sync, so #85 must
+  land internally self-consistent. Nothing else in the queue touches `Cargo.lock`, so there is no
+  cross-PR version hazard — but #85 + #86 (CHANGELOG) are effectively **the 0.2.0 release pair** and
+  are the natural thing to land together.
+- **Two PRs regenerate ts-rs bindings** — #88 (`bindings/MediaItem.ts`) and #85
+  (`bindings/AudioSink.ts`). Different files, so no conflict, but both need
+  `cargo test --release export_bindings` re-run after any rebase or CI will fail on drift.
+
+- **Changed:** `docs/night-log.md` only. No source file touched anywhere in the tree.
+- **Verify:** `bun run check` / `bun run build` / `bun run test` / `cargo check` / `cargo clippy`
+  — **all n/a, and deliberately not run.** This increment changes one markdown file; running the
+  suite would prove nothing about it. The branch is `487bd4d` plus a single docs commit, so it is
+  green by construction.
+- **Outcome:** **stopped, by design.** No eleventh code PR. The loop is not blocked on ideas — the
+  08-29 entry left three good zero-conflict candidates ready to go (`themes.ts` cycle-wrap,
+  `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard). It is
+  blocked on **review throughput**, which only Andrew can supply. Shipping more drafts against a
+  ten-day-cold `main` adds rebase debt to a queue that is currently, unusually, 100% clean — the
+  best moment to drain it is now, before anything rots.
+- **Stated tension, not hidden:** this entry is itself an eleventh PR, which is mildly ironic. It is
+  log-only (one file, no code), it is the one PR in the queue that costs a minute rather than a
+  review, and it carries the landing order — so it should be read *first* and merged or simply
+  closed after reading. If Andrew would rather the loop write nothing at all while the queue is
+  deep, say so in `VISION.md` and the next iteration will honour it.
+- **Next candidate:** **none until `main` moves.** The next iteration should re-check
+  `gh api repos/atiner117/omnideck/commits/main`. If it is still `487bd4d`, stop again immediately
+  and do not re-derive this analysis — it is above, and nothing about it changes until the queue
+  drains. If main *has* moved, resume from the 08-29 list (`themes.ts` first), and rebuild the
+  avoid-list from the then-current open PRs rather than reusing the stale one.
+
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
   Five parallel review agents (line-by-line, Rust transport, frontend races, input gating,
