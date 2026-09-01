@@ -20,6 +20,48 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-08-31 — STOP again: the 08-30 stop condition still holds. No twelfth PR.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* Plus the 08-30 entry's own next-candidate, which is an explicit
+  conditional instruction to this iteration: *"none until `main` moves… If it is still `487bd4d`,
+  stop again immediately and do not re-derive this analysis."*
+- **Branch / PR:** deliberately **no new branch**. This entry is appended to the existing
+  `loop/night-20260830` / **#95** so the queue does not get a twelfth head. The date mismatch
+  between branch name and entry is intentional and is the point.
+- **Stop condition re-checked, and it holds:**
+  - `main` is still **`487bd4d`** (merge of #83, 2026-08-20) — **eleven days cold**, sixth night
+    running. Corroborated across the complete open set: all 11 PRs report `baseRefOid=487bd4d`.
+    (`gh api repos/.../commits/main` needed interactive approval in this sandbox, so the base-OID
+    agreement across every open PR is the corroboration, not a single lookup.)
+  - `VISION.md` is unchanged — the 08-30 entry offered "if Andrew would rather the loop write
+    nothing at all while the queue is deep, say so in `VISION.md`." Nothing was said, so the
+    standing contract still applies: log the stop, don't invent scope.
+- **Open-PR inventory: 11 open, total** — the complete set, not a subset.
+  `gh pr list --state open --limit 200 --json number --jq 'length'` → `11`.
+  **#85** `fix/review-20260821` · **#86** `loop/night-20260821` · **#87** `loop/night-20260822` ·
+  **#88** `loop/night-20260823` · **#89** `loop/night-20260824` · **#90** `loop/night-20260826` ·
+  **#91** `loop/night-20260827` · **#92** `loop/night-20260828` · **#93**
+  `feat/e2e-screenshot-harness` · **#94** `loop/night-20260829` · **#95** `loop/night-20260830`.
+  The only change since 08-30 is #95 — which is last night's own log-only stop entry, not new work.
+- **Still 11/11 `MERGEABLE` / `mergeStateStatus=CLEAN`** (checked for every one, not a sample).
+  Nothing has rotted in the extra day. That remains the argument for draining now.
+- **The landing order is not re-derived here — it is in the 08-30 entry directly below, and nothing
+  about it has changed.** Read that one. Summary pointer only: Tier 1 (#92, #94, #91, #90, #86, #93)
+  collide with nothing but the mechanical `docs/night-log.md` prepend; Tier 2 is the
+  `media_server.rs` cluster (#85 → #89 → #88 → #87), to be rebased and re-gated one at a time.
+- **Changed:** `docs/night-log.md` only. No source file touched anywhere in the tree.
+- **Verify:** `bun run check` / `bun run build` / `bun run test` / `cargo check` / `cargo clippy` —
+  **all n/a, deliberately not run.** One markdown file changed on a branch that is `487bd4d` plus
+  docs commits; the suite would prove nothing about it. Green by construction.
+- **Outcome:** **stopped, by design — loop halted, no wake-up scheduled.** Two nights in a row is
+  the signal, not a glitch: the loop is not out of ideas (the 08-29 entry left three ready
+  zero-conflict candidates — `themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the
+  `MediaNav.marking` re-entrancy guard). It is out of **review throughput**, which only Andrew can
+  supply. Restarting the loop before `main` moves would only add rebase debt.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (do not reuse the list above as an avoid-list; it will be stale), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+
 ## 2026-08-30 — STOP: the queue is the bottleneck. No code tonight; landing-order analysis instead.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* Taking that literally, and taking the 08-29 entry's own
