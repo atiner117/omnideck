@@ -20,6 +20,36 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-09-01 — STOP (third night). Condition re-checked in four calls; analysis deliberately not re-derived.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 08-31 entry's next-candidate is a direct instruction to this
+  iteration: *"none until `main` moves… If it is still `487bd4d`, stop again immediately and do not
+  re-derive this analysis."* Honoured literally — this entry is four checks and a pointer, nothing more.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, same as 08-31, so the
+  queue stays at eleven heads.
+- **The four checks:**
+  1. `git rev-parse origin/main` → **`487bd4d`**. Unmoved; **twelve days cold** (merge of #83,
+     2026-08-20). Seventh night running.
+  2. Complete open set: `gh pr list --state open --limit 200 --json number --jq 'length'` → **11**.
+     Unchanged from 08-31 — same eleven (#85–#95). No new PRs, none closed, none merged.
+  3. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`, checked for every one, not a sample.
+     Twelve days and nothing has rotted. Still the argument for draining now.
+  4. `VISION.md` last modified **2026-07-12** (`02ba782`). The 08-30 entry's offer — *"if Andrew
+     would rather the loop write nothing at all while the queue is deep, say so in `VISION.md`"* —
+     went unanswered, so the standing contract holds: log the stop, don't invent scope.
+- **Landing order: not re-derived.** It is in the 08-30 entry and nothing has changed. Read that one.
+- **Changed:** `docs/night-log.md` only. No source file touched anywhere in the tree.
+- **Verify:** all **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d`
+  plus docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Three consecutive nights is not the
+  loop running dry: the 08-29 entry still has three ready zero-conflict candidates sitting unstarted
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking`
+  re-entrancy guard). The bottleneck is **review throughput**, which only Andrew can supply. A
+  twelfth head would only add rebase debt to eleven PRs that are currently all clean.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+
 ## 2026-08-31 — STOP again: the 08-30 stop condition still holds. No twelfth PR.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* Plus the 08-30 entry's own next-candidate, which is an explicit
