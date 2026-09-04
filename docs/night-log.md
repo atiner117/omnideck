@@ -20,6 +20,41 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-09-03 22:55 — STOP (fourth night). One new fact: the SSH fetch path is gone, so `main` was verified a different way.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-01 next-candidate is a conditional instruction to this
+  iteration: *"none until `main` moves… If it is still `487bd4d`, stop again immediately and do not
+  re-derive this analysis."* Honoured — no analysis re-derived, no candidate re-ranked.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31 and 09-01.
+  The queue stays at eleven heads.
+- **`main` verification changed, and this is the part worth recording.** `git fetch origin main`
+  **failed**: `origin` is SSH and every FIDO2 key errored (`ssh-askpass` missing, `device not found`
+  / `invalid format` for all three yubikeys) → `Permission denied (publickey)`. The local
+  `refs/remotes/origin/main` therefore proves nothing — it is a cached ref, and this repo has been
+  bitten by stale worktree-local `main` refs before. `ls-remote` over the gh-token HTTPS helper and
+  a direct `gh api …/commits/main` were both unavailable this session (permission-gated).
+  **Substitute check that did work:** `gh pr list --state merged --limit 5` → newest merge is
+  **#84 (2026-08-20) and #83 → merge commit `487bd4d` (2026-08-20)**; nothing merged after.
+  So `main` is still **`487bd4d`**, now **fourteen days** cold. Ninth night running.
+- **Queue:** complete open set, `--limit 200`, count first → **11** (#85–#95), unchanged from 09-01.
+  All **11/11** re-checked individually: `MERGEABLE` / `mergeStateStatus=CLEAN`. Fourteen days and
+  still zero rebase debt — which remains the whole argument for draining the queue now.
+- **Landing order: not re-derived.** It is in the 08-30 entry. Read that one.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** The blocker is unchanged and is not
+  the loop running dry: the 08-29 entry still holds three ready zero-conflict candidates
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking`
+  re-entrancy guard). The bottleneck is **review throughput**, which only Andrew can supply.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew, one operational note:** if you want the loop to keep verifying `main` unattended,
+  either allow the gh-token HTTPS `ls-remote`/`git fetch` or the `gh api` commits read. Tonight the
+  merged-PR list was a sound substitute, but it is indirect — it proves no PR merged, not that no
+  one pushed to `main` directly.
+
 ## 2026-09-01 — STOP (third night). Condition re-checked in four calls; analysis deliberately not re-derived.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* The 08-31 entry's next-candidate is a direct instruction to this
