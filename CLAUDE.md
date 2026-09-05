@@ -106,6 +106,12 @@ Beyond §1–2, CI also runs `bun run tauri build --no-bundle`, `cargo deny chec
 `cargo audit`, and the five-way version-sync. Run these when the change could plausibly affect them
 (new deps, bundling, version bumps).
 
+CI also has an **`e2e` job** running `bun run check:e2e` then the screenshot tour on *both* engines
+(`bunx playwright test`). `check:e2e` is the guard that matters most: the fixtures are typed off
+`src/lib/bindings/`, so **changing a `#[ts(export)]` struct without updating `e2e/mock/fixtures.ts`
+fails there** — and it fails before the browser download, in seconds. If you touched a Rust type,
+run `bun run check:e2e` locally.
+
 ## Architecture / module map
 
 **Frontend** (`src/lib/`): `+page.svelte` (the grid) · `*Modal.svelte` (Catalog/Media/Search/Help) ·
