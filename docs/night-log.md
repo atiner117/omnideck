@@ -20,6 +20,46 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-09-04 — STOP (fifth night). Condition re-checked in three calls; nothing moved, analysis not re-derived.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-03 next-candidate is a direct instruction to this iteration:
+  *"none until `main` moves… If it is still `487bd4d`, stop again immediately and do not re-derive
+  this analysis."* Honoured — nothing re-derived, no candidate re-ranked, no landing order restated.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31, 09-01
+  and 09-03. The queue stays at eleven heads.
+- **`main` still `487bd4d`, now fifteen days cold — tenth night running.** Verified the same
+  indirect way as 09-03, because the direct paths are still closed: `git ls-remote` over the
+  gh-token HTTPS helper and `gh api …/commits/main` were **both permission-gated again** this
+  session. Substitute that did work: `gh pr list --state merged` → newest merge is still **#83 →
+  `487bd4d` (2026-08-20T21:53Z)**, with #84 (2026-08-20T11:25Z) behind it. Nothing merged since.
+  Same caveat as last night, restated because it has not been fixed: this proves *no PR merged*,
+  not that nobody pushed to `main` directly.
+- **Queue:** complete open set, `--limit 200`, count first → **11** (#85–#95), unchanged for the
+  fourth consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`. Fifteen days
+  and still zero rebase debt.
+- **One new datum, and it is the only thing this entry adds.** I pulled `updatedAt` alongside
+  mergeability this time. Every open PR's `updatedAt` is **still its original creation night**
+  (#85 08-21, #86 08-22, … #94 08-30) — the sole exception is #95, whose 09-04 timestamp is this
+  loop's own night-log commits. So there has been **no review activity of any kind on any of the
+  eleven**: no merge, no comment, no review, no push. Previous nights inferred the review-throughput
+  bottleneck from `main` not moving; this measures it directly on the PRs themselves.
+- **Landing order: not re-derived.** It is in the 08-30 entry. Read that one.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** The blocker is unchanged and is not
+  that the loop has run dry: the 08-29 entry still holds three ready zero-conflict candidates
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking`
+  re-entrancy guard). Adding a twelfth PR to an eleven-deep queue that has received zero review
+  events in fifteen days would add review burden, not value.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** the ask is the same as last night and is now the only thing gating the loop —
+  review and merge from the queue (start with the 08-30 landing order). Optionally, allowing either
+  the gh-token HTTPS `ls-remote`/`git fetch` or the `gh api` commits read would let the loop verify
+  `main` directly instead of inferring it from the merged-PR list.
+
 ## 2026-09-03 22:55 — STOP (fourth night). One new fact: the SSH fetch path is gone, so `main` was verified a different way.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* The 09-01 next-candidate is a conditional instruction to this
