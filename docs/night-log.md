@@ -20,6 +20,85 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-09-06 02:55 — STOP (sixth night) — but the queue moved for the first time in 15 days: #93 got a human commit today.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-04 next-candidate is a conditional instruction to this
+  iteration: *"none until `main` moves… If it is still `487bd4d`, stop again immediately."* `main` is
+  still `487bd4d`, so the stop holds — but the condition around it changed, and that is what this
+  entry is for. **Reverses the 09-04 headline claim**, which said there had been "no review activity
+  of any kind on any of the eleven." That is now false.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31, 09-01,
+  09-03 and 09-04. The queue stays at eleven heads.
+- **`main` still `487bd4d`** — sixteen days cold, eleventh night running. Verified the same indirect
+  way as the last two nights, because the direct paths are *still* permission-gated (`git ls-remote`
+  over the gh-token HTTPS helper, and `gh api …/commits/main`). Substitute that worked:
+  `gh pr list --state merged` → newest merge is still **#83 → `487bd4d` (2026-08-20T21:53Z)**, with
+  #84 behind it. Same standing caveat: this proves *no PR merged*, not that nobody pushed directly.
+- **Queue:** complete open set, `--limit 200`, count first → **11** (#85–#95), unchanged for the
+  fifth consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`. Sixteen days,
+  still zero rebase debt.
+
+### The new fact: #93 was touched today, by hand
+`updatedAt` on **#93** is **2026-09-05T14:34Z** — today, and *not* this loop (the loop's only writes
+are the night-log commits on #95, timestamped 02:49Z). The cause is a new commit on the branch:
+
+- **`5dfef88` — "ci: run the e2e harness as its own job" (2026-09-05T14:33Z)**, sitting on top of
+  #93's four original 08-30 commits.
+
+Attribution caveat, stated plainly: every commit on #93 shows author `atiner117`, which is also the
+loop's identity, so the author field does not by itself prove a human wrote it. What does: the loop
+never ran at 14:33Z, and no night-log entry claims this work. So this is Andrew (or another manual
+session) working the queue — **the first non-loop activity on any PR in fifteen days.**
+
+**#93 is now green on all five checks**, including the new job:
+`lint · test · build (linux)` · `e2e (screenshot tour · chromium + webkit)` · `cargo-deny` ·
+`cargo-audit` · `version sync` — all `SUCCESS`.
+
+### A landing-order consequence the 08-30 analysis does not cover
+The 08-30 overlap map put #93 in Tier 1 — "collides with nothing but the `docs/night-log.md`
+prepend." **That is still true textually, and I re-verified it against the complete open set** (not a
+subset): searching all 11 PRs for `.github/` paths returns exactly two, touching *different* files —
+
+| PR | `.github/` path |
+|---|---|
+| #93 | `.github/workflows/ci.yml` (+58/−0) |
+| #85 | `.github/workflows/packaging.yml` |
+
+So there is no CI merge conflict. **But the semantic consequence is new:** once #93 lands, the e2e
+screenshot job becomes part of CI for every PR merged after it — and **none of the other ten have
+ever run it.** A queue that is currently 11/11 clean could acquire a failing check on the first
+merge, which would look like rot but would be an untested gate, not a regression.
+
+Which of the remaining ten are actually exposed, by what they touch in the frontend:
+
+- **#85** — `+page.svelte` plus `Modal`/`LauncherForm`/`AudioOutputModal`. This is the grid page the
+  screenshot tour walks. **Highest exposure; re-gate this one first.**
+- **#88** — `medianav.svelte.ts` / `mediarow.ts`, which feed list rows. Moderate exposure.
+- **#92, #94** — frontend paths are `*.test.ts` only. No render surface; no exposure.
+- **#86, #87, #89, #90, #91, #95** — Rust, CLI and docs only. No exposure.
+
+I could not read the spec to say whether it does baseline image comparison (`toHaveScreenshot`) or
+just render assertions — `gh pr diff` and the branch-protection read were both permission-gated this
+session. Nor could I confirm whether the new job is a *required* check on `main`. Both would sharpen
+the risk estimate; neither changes the recommendation.
+
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Andrew being mid-flight on #93 is a
+  reason to stay out of the way, not a reason to ship: a twelfth head while he is actively working
+  the queue would add review burden at exactly the wrong moment. The loop is still not dry — the
+  08-29 entry's three zero-conflict candidates (`themes.ts` cycle-wrap, `SleepTimer`'s
+  `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard) remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** #93 is green and self-contained — landing it first is a good call. Two asks after
+  that: (1) re-gate **#85** and then **#88** against the new e2e job before merging them, since they
+  are the only queued PRs with real render surface; (2) the loop still cannot verify `main` directly
+  — allowing either the gh-token HTTPS `ls-remote`/`fetch` or the `gh api` commits read would fix
+  that, and allowing `gh pr diff` would let it read queued changes instead of inferring from paths.
+
 ## 2026-09-04 — STOP (fifth night). Condition re-checked in three calls; nothing moved, analysis not re-derived.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* The 09-03 next-candidate is a direct instruction to this iteration:
