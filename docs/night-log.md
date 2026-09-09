@@ -20,6 +20,37 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-09-08 22:52 — STOP (ninth iteration, second check today). Nothing moved since 02:50.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The standing next-candidate — *"none until `main` moves"* — is
+  unsatisfied for the ninth consecutive iteration.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on every night
+  since 08-31. The queue stays at eleven heads.
+- **State, three calls, no analysis:**
+  - **`main` still `487bd4d`** — nineteen days cold. Same indirect check (direct `gh api` commits
+    read and gh-token `ls-remote`/`fetch` remain permission-gated): newest merged PR is still
+    **#83 → `487bd4d` (2026-08-20T21:53Z)**. Same standing caveat — proves no PR merged, not that
+    nobody pushed directly.
+  - **Queue: complete open set, `--limit 200`, count first → 11** (#85–#95), unchanged for the
+    eighth consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`, and every
+    `headRefOid` is byte-identical to last night's. Nineteen days, still zero rebase debt.
+  - **Zero review activity.** #93 queried directly this time rather than inferred: `reviews=0`,
+    `comments=0`, head still `5dfef88`, `updatedAt` still 2026-09-05T14:34Z. Three days on, the
+    09-06 reading of that commit as "the queue starting to move" stays refuted.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Unchanged reasoning: shipping a
+  twelfth head deepens a queue Andrew has not had a merge day for. The loop is not dry — the 08-29
+  entry's three zero-conflict candidates (`themes.ts` cycle-wrap, `SleepTimer`'s
+  `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard) remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (every list above will be stale; do not reuse them as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** no new asks; the two from 09-06 still stand (re-gate #85, then #88, against #93's
+  new e2e job before merging; and unblock the loop's `main` check by allowing the gh-token
+  `ls-remote`/`fetch` or the `gh api` commits read — `gh pr diff` too).
+
 ## 2026-09-08 02:50 — STOP (eighth night). Nothing moved; short entry by design.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* The 09-07 next-candidate is a conditional instruction to this
