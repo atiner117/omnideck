@@ -155,19 +155,22 @@ static SERVER: RwLock<Option<Option<Arc<JellyfinServer>>>> = RwLock::new(None);
 /// The currently-resolved server (config first, then shim pairing), or None. Re-resolves
 /// lazily after `invalidate()`.
 pub fn server() -> Option<Arc<JellyfinServer>> {
-    if let Some(cached) = SERVER.read().unwrap().clone() {
+    // Poison-tolerant (`into_inner`), like every other lock in the codebase: one panic
+    // inside a holder must degrade to a re-resolve, not wedge the media subsystem with
+    // a poisoned-lock panic for the rest of the process lifetime.
+    if let Some(cached) = SERVER.read().unwrap_or_else(|e| e.into_inner()).clone() {
         return cached;
     }
     // Resolve outside the lock (config + shim file I/O); a racing thread may resolve too —
     // get_or_insert keeps whichever landed first, both read the same config.
     let resolved = resolve();
-    SERVER.write().unwrap().get_or_insert(resolved).clone()
+    SERVER.write().unwrap_or_else(|e| e.into_inner()).get_or_insert(resolved).clone()
 }
 
 /// Drop the cached resolution so the next `server()` call re-reads config.toml / the shim
 /// pairing. Called after every config save (config::mutate_and_save).
 pub fn invalidate() {
-    *SERVER.write().unwrap() = None;
+    *SERVER.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 fn resolve() -> Option<Arc<JellyfinServer>> {
