@@ -116,7 +116,13 @@
     transition: opacity 0.12s, transform 0.12s, box-shadow 0.12s;
     /* skip layout/paint for offscreen rows in big libraries */
     content-visibility: auto;
-    contain-intrinsic-size: auto 240px;
+    /* Deliberately no contain-intrinsic-size: a tile's width is definite (a 1fr grid track,
+       independent of its contents) and `aspect-ratio` derives the height from it, so a
+       skipped tile is already sized exactly — the placeholder is never consulted. Verified
+       over a 500-tile library in both engines: ground truth, no declaration, and a
+       deliberately wrong value all produce the identical scroll extent. The 240px that used
+       to sit here was inert, and read as a real constraint that a reader would try to keep
+       accurate. .lrow in ListView.svelte genuinely needs one; this doesn't. */
   }
   .compact .gtile { border-radius: 9px; }
   .gtile.focused {

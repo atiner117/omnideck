@@ -8,7 +8,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test --project=chromium",
+    "screenshots": "playwright test --project=chromium",
+    "screenshots:webkit": "playwright test --project=webkit",
+    "e2e:webkit-deps": "./e2e/install-webkit-deps.sh",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri"
   },
@@ -17,6 +22,7 @@
     "@tauri-apps/api": "^2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@sveltejs/adapter-static": "^3.0.6",
     "@sveltejs/kit": "^2.9.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
