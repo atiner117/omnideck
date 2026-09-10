@@ -25,7 +25,13 @@ optdepends=('gamescope: 10-foot gamescope session mode (run packaging/install-se
 makedepends=('rust' 'cargo' 'bun-bin' 'pkgconf')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::https://github.com/atiner117/omnideck/archive/refs/tags/v$pkgver.tar.gz")
-b2sums=('8fb7937af3ab4487ab1beb5d063a85e5fb99fb4b4b6706ddaee4fa938891395db178d67dfc514417c0dc0c78f96b351561bc16488353b424379b5511e7528a05')
+# SKIP is a deliberate pre-release placeholder, NOT laziness: v$pkgver's tarball does not
+# exist until the tag is pushed, so a "real" hash here can only be a stale copy of the
+# PREVIOUS release's (exactly the 0.1.0-hash-on-0.2.0 trap caught in review 2026-08-21 —
+# every AUR build would fail the moment the tag landed). RELEASING.md §3: after tagging,
+# run updpkgsums + regenerate .SRCINFO; packaging CI refuses to validate a real release
+# while this still says SKIP, and refuses a pre-release hash that matches an old tarball.
+b2sums=('SKIP')
 
 build() {
   cd "$pkgname-$pkgver"

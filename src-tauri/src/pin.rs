@@ -13,8 +13,65 @@
 // UI/gamepad thread.
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, SaltString};
 use argon2::{Argon2, PasswordHasher, PasswordVerifier};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::config;
+
+/// Anti-hammering state shared by every PIN-checking command. Without it, argon2's cost is
+/// the only brake and a scripted caller walks all 10,000 4-digit candidates in minutes —
+/// "deterrence" (the module's stated bar) requires throttling automated guessing too.
+/// In-memory only: a restart clears it, which matches the couch threat model.
+static ATTEMPTS: Mutex<AttemptState> = Mutex::new(AttemptState { failures: 0, locked_until: None });
+
+struct AttemptState {
+    failures: u32,
+    locked_until: Option<Instant>,
+}
+
+const LOCKOUT_AFTER: u32 = 5;
+
+/// How long attempt N locks out for: nothing before LOCKOUT_AFTER consecutive failures,
+/// then 30 s doubling per further failure, capped at 15 min. Pure for testability.
+fn lockout_duration(failures: u32) -> Option<Duration> {
+    if failures < LOCKOUT_AFTER {
+        return None;
+    }
+    let exp = (failures - LOCKOUT_AFTER).min(5);
+    Some((Duration::from_secs(30) * 2u32.pow(exp)).min(Duration::from_secs(15 * 60)))
+}
+
+/// Err while a lockout window is active (message includes the remaining seconds).
+fn check_locked() -> Result<(), String> {
+    let st = crate::sync::lock_or_recover(&ATTEMPTS, "pin.ATTEMPTS");
+    if let Some(t) = st.locked_until {
+        let now = Instant::now();
+        if now < t {
+            let secs = (t - now).as_secs() + 1;
+            return Err(format!("too many wrong PINs — try again in {secs}s"));
+        }
+    }
+    Ok(())
+}
+
+/// Record a verification outcome: success resets the counter, failure advances it and
+/// (past the threshold) arms the next lockout window.
+fn record_outcome(ok: bool) {
+    let mut st = crate::sync::lock_or_recover(&ATTEMPTS, "pin.ATTEMPTS");
+    if ok {
+        st.failures = 0;
+        st.locked_until = None;
+        return;
+    }
+    st.failures += 1;
+    if let Some(d) = lockout_duration(st.failures) {
+        st.locked_until = Some(Instant::now() + d);
+    }
+}
+
+/// The one wrong-PIN message — commands match on it to know a failure was a bad PIN
+/// (throttle-relevant) rather than some other error.
+const WRONG_PIN: &str = "current PIN is incorrect";
 
 /// Hash a PIN with argon2id and a fresh random salt (PHC string format).
 fn hash_pin(pin: &str) -> Result<String, String> {
@@ -41,7 +98,7 @@ fn require_pin(stored_hash: &str, pin: Option<&str>) -> Result<(), String> {
     }
     match pin {
         Some(p) if pin_matches(stored_hash, p) => Ok(()),
-        _ => Err("current PIN is incorrect".into()),
+        _ => Err(WRONG_PIN.into()),
     }
 }
 
@@ -63,8 +120,23 @@ fn next_pin_hash(stored_hash: &str, current: Option<&str>, new: &str) -> Result<
 #[tauri::command]
 pub async fn set_pin(current: Option<String>, new: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        check_locked()?;
         let stored = config::load_or_create().settings.pin_hash;
-        let next = next_pin_hash(&stored, current.as_deref(), &new)?;
+        let gated = !stored.is_empty(); // no PIN configured = nothing to hammer
+        let next = match next_pin_hash(&stored, current.as_deref(), &new) {
+            Ok(n) => {
+                if gated {
+                    record_outcome(true);
+                }
+                n
+            }
+            Err(e) => {
+                if gated && e == WRONG_PIN {
+                    record_outcome(false);
+                }
+                return Err(e);
+            }
+        };
         config::save_pin_hash(next)
     })
     .await
@@ -77,8 +149,13 @@ pub async fn set_pin(current: Option<String>, new: String) -> Result<(), String>
 #[tauri::command]
 pub async fn set_locked_categories(pin: Option<String>, categories: Vec<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        check_locked()?;
         let stored = config::load_or_create().settings.pin_hash;
-        require_pin(&stored, pin.as_deref())?;
+        let r = require_pin(&stored, pin.as_deref());
+        if !stored.is_empty() {
+            record_outcome(r.is_ok());
+        }
+        r?;
         config::save_locked_categories(categories)
     })
     .await
@@ -89,8 +166,16 @@ pub async fn set_locked_categories(pin: Option<String>, categories: Vec<String>)
 #[tauri::command]
 pub async fn verify_pin(pin: String) -> bool {
     tauri::async_runtime::spawn_blocking(move || {
+        if check_locked().is_err() {
+            return false; // locked out — don't even run the verify (no oracle while locked)
+        }
         let stored = config::load_or_create().settings.pin_hash;
-        pin_matches(&stored, &pin)
+        if stored.is_empty() {
+            return false; // no PIN configured: not a guess, don't count it
+        }
+        let ok = pin_matches(&stored, &pin);
+        record_outcome(ok);
+        ok
     })
     .await
     .unwrap_or(false)
@@ -98,7 +183,21 @@ pub async fn verify_pin(pin: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_pin, next_pin_hash, pin_matches, require_pin};
+    use super::{hash_pin, lockout_duration, next_pin_hash, pin_matches, require_pin};
+    use std::time::Duration;
+
+    #[test]
+    fn lockout_schedule_arms_after_threshold_and_caps() {
+        // Below the threshold: no lockout (a fat-fingered couch PIN shouldn't punish).
+        for f in 0..5 {
+            assert_eq!(lockout_duration(f), None);
+        }
+        // At and past the threshold: 30 s doubling per failure, capped at 15 min.
+        assert_eq!(lockout_duration(5), Some(Duration::from_secs(30)));
+        assert_eq!(lockout_duration(6), Some(Duration::from_secs(60)));
+        assert_eq!(lockout_duration(10), Some(Duration::from_secs(900))); // 30*32=960 → cap
+        assert_eq!(lockout_duration(1000), Some(Duration::from_secs(900)));
+    }
 
     #[test]
     fn require_pin_gates_mutations() {
