@@ -12,6 +12,7 @@
 // path, so nothing can be swapped underneath them between a check and the read.
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -89,7 +90,19 @@ fn fd_path(f: &std::fs::File) -> Option<PathBuf> {
 /// fd. Swapping the path afterwards changes nothing we already hold.
 fn resolve_and_read(raw_path: &str) -> Option<(Vec<u8>, &'static str)> {
     let decoded = percent_decode(raw_path);
-    let mut f = std::fs::File::open(&decoded).ok()?;
+    // O_NONBLOCK because the open now happens BEFORE the root/extension/type gates — the whole
+    // point of holding a descriptor — and `open(2)` is not neutral on every inode. On a FIFO,
+    // O_RDONLY blocks until a writer appears, i.e. forever; the `is_file()` check below would
+    // reject it, but it never gets to run. The flag makes the open return immediately for FIFOs
+    // and devices so that check can do its job, and is a no-op for the regular files this
+    // actually serves (reads are unaffected). Without it a single request for a FIFO — at ANY
+    // path, since this runs before the root gate — parks a thread from the shared
+    // `spawn_blocking` pool forever, and that pool is what every Tauri command uses too.
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&decoded)
+        .ok()?;
 
     let canonical = fd_path(&f)?;
     if !roots().iter().any(|root| canonical.starts_with(root)) {
@@ -202,6 +215,40 @@ mod tests {
         assert!(resolve_and_read("/etc/../etc/hostname").is_none());
         assert!(resolve_and_read("/nonexistent-omnideck-asset.png").is_none());
         assert_eq!(respond("/etc/hostname").status(), 404);
+    }
+
+    /// Regression (review of #91, 2026-09-10): `resolve_and_read` opens before it validates, so
+    /// the open must not be able to block. A FIFO with no writer is the cheap proof — plain
+    /// `File::open` on one never returns, and because the open precedes the root gate the path
+    /// does not even have to be somewhere we would ever serve from.
+    ///
+    /// Asserted on a worker thread with a deadline rather than inline: against the unfixed code
+    /// this has to FAIL, and a test that simply hangs fails by wedging the whole suite instead
+    /// of naming the bug.
+    #[test]
+    fn a_blocking_special_file_cannot_stall_the_open() {
+        let dir = std::env::temp_dir().join(format!("omnideck-asset-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("stall.png"); // image extension: nothing here rejects it early
+
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo failed");
+        // The point of the finding: no root gate stands between a request and this open.
+        assert!(!roots().iter().any(|r| fifo.starts_with(r)), "fixture must be outside every root");
+
+        let probe = fifo.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(resolve_and_read(probe.to_str().unwrap()).is_some());
+        });
+
+        let served = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("resolve_and_read blocked on a FIFO — the open is not O_NONBLOCK");
+        assert!(!served, "a FIFO is not a regular file and must never be served");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
