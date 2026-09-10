@@ -107,10 +107,33 @@ fn group_verified(group: u32) -> bool {
         return false;
     };
     match proc_start_time(group) {
-        // 0 = start time was unreadable at launch (leader raced away) — fall back to liveness.
+        // 0 = start time was unreadable at launch (the leader raced away between spawn and the
+        // /proc read). This one case degrades to a liveness check, so it is NOT recycle-proof;
+        // the alternative — refusing every later signal — would leave that app un-closable by
+        // the Guide button. Rare and deliberately chosen, not a gap the rest of the path shares.
         Some(now) => recorded == 0 || now == recorded,
         None => false, // leader gone: the group is dead (or the pid recycled) — never signal blind
     }
+}
+
+/// Signal ONE recorded process, verified against the kernel start time captured when we last
+/// saw it. This is the per-member counterpart to `signal_group_verified`, and it exists for a
+/// lifecycle the group-level check cannot serve: a process group outlives its leader. If the
+/// switcher froze a group and the leader then exited and was reaped, `group_verified` fails
+/// (no LIVE_GROUPS record, no readable leader) and every surviving member stays SIGSTOPped
+/// forever — the launcher's own space-heater fix, stranded.
+///
+/// `(pid, starttime)` pairs recorded at freeze time are exactly as trustworthy as the leader's:
+/// a recycled pid gets a different start time and is refused here, so this is a verified
+/// signal, never a blind one.
+pub(crate) fn signal_pid_verified(pid: u32, starttime: u64, sig: i32) -> bool {
+    if pid <= 1 {
+        return false; // 0 = our own group to kill(2), 1 = init — never valid targets
+    }
+    if proc_start_time(pid) != Some(starttime) {
+        return false; // gone, or a different process wearing the same pid
+    }
+    unsafe { libc::kill(pid as i32, sig) == 0 }
 }
 
 /// Send `sig` to the whole process group iff it still verifies as ours. Direct kill(2) —
@@ -133,6 +156,24 @@ pub(crate) fn signal_group_verified(group: u32, sig: i32) -> bool {
 fn signal_group(pid: u32) -> bool {
     let _ = signal_group_verified(pid, libc::SIGCONT);
     signal_group_verified(pid, libc::SIGTERM)
+}
+
+/// Test-only stand-ins for the two halves of `watch_child`'s bookkeeping — registering a
+/// launched group, and the reaper thread dropping it once the leader exits. They let the
+/// freeze/thaw lifecycle be exercised against real processes without a `tauri::AppHandle`.
+#[cfg(test)]
+pub(crate) fn track_group_for_test(group: u32) {
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").push(LiveApp {
+        group,
+        name: "test".into(),
+        id: None,
+        starttime: proc_start_time(group).unwrap_or(0),
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn forget_group_for_test(group: u32) {
+    crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|a| a.group != group);
 }
 
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
