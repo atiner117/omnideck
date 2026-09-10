@@ -108,7 +108,17 @@
     color: var(--text, #c2cbdb); opacity: 0.72;
     transition: opacity 0.12s, background 0.12s, transform 0.12s;
     content-visibility: auto;
-    contain-intrinsic-size: auto 64px;
+    /* Placeholder for the rows content-visibility skips. NOTE this is a CONTENT-box height —
+       the padding above is added on top of it, so measuring a row with getBoundingClientRect
+       (a border box) and pasting that number here over-states it by the full 17.92px of
+       padding. The content box is the thumb, which is also what governs an unfocused row.
+       Tracking --scale matters: a flat value is only ever right at the scale it was measured
+       at, and the rows are 1.8x taller at huge than at small.
+       Measured over a 500-row library against a fully-laid-out control, this lands the scroll
+       extent within 1.6% in both engines (the flat 64px it replaced: 4.4%). The residual is
+       the text column out-growing the thumb by a couple of px at TV widths, where its clamps
+       max out — not worth a fitted constant that would drift at other viewport widths. */
+    contain-intrinsic-size: auto calc(2.6rem * var(--scale, 1));
   }
   .lrow.focused {
     opacity: 1; color: var(--text-bright, #eef2f8);
