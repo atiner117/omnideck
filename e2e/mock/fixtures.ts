@@ -137,6 +137,8 @@ const CATALOG: Wire<App>[] = [
 ];
 
 const item = (i: Partial<Wire<MediaItem>> & Pick<Wire<MediaItem>, "id" | "name" | "kind">): Wire<MediaItem> => ({
+  // #88 made this field required. null = "the server didn't say" -> falls back to the kind list.
+  is_folder: null,
   overview: null,
   played_pct: null,
   runtime_mins: null,
