@@ -80,6 +80,28 @@ struct Frozen {
 /// is dropped only once its thaw is known to have landed (or nothing of it survives).
 static STOPPED: Mutex<Vec<Frozen>> = Mutex::new(Vec::new());
 
+/// Groups we thawed back into the foreground AFTER their leader was gone.
+///
+/// `LIVE_GROUPS` is keyed on the launch leader and never gets such a group back, so the moment
+/// we re-show one it is running with no handle on it anywhere: `return_home` cannot see it and
+/// the user is left holding a window that will not close. Keeping the freeze-time roster here
+/// is that handle — the same `(pid, start time)` pairs, so close-all stays a verified signal.
+/// Entries are dropped when the group is closed, or when nothing recorded in it is alive.
+static LEADERLESS: Mutex<Vec<Frozen>> = Mutex::new(Vec::new());
+
+/// Remember a group we just thawed without its leader, replacing any older record for it and
+/// pruning records whose processes have all gone.
+fn remember_leaderless(f: &Frozen) {
+    let mut list = crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS");
+    list.retain(|o| {
+        o.group != f.group
+            && o.members
+                .iter()
+                .any(|&(p, s)| crate::watchdog::proc_start_time(p) == Some(s))
+    });
+    list.push(f.clone());
+}
+
 /// `(ppid, pgid)` for `pid` from /proc/<pid>/stat fields 4 and 5 (0s when gone/unreadable).
 fn parent_and_pgid(pid: u32) -> (u32, u32) {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return (0, 0) };
@@ -118,18 +140,29 @@ fn group_members(group: u32) -> Vec<(u32, u64)> {
     out
 }
 
-/// SIGCONT a frozen group. Returns true when the group is dealt with — either the thaw landed
-/// or nothing of it is left to strand — and false when members are still stopped, so the
-/// caller keeps the record for a later retry instead of forgetting a failed thaw.
+/// What one thaw attempt did. The caller needs all three apart: `Stuck` means keep the record
+/// and retry, and `Leaderless` means the group is running again with nothing in `LIVE_GROUPS`
+/// to manage it — whoever leaves it running owes it a handle (see `remember_leaderless`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Thaw {
+    /// Thawed through the leader, or nothing of the group survives: drop the record.
+    Done,
+    /// Thawed member-by-member because the leader is gone. Droppable, but not forgettable.
+    Leaderless,
+    /// Members are still stopped — keep the record so a later attempt can retry.
+    Stuck,
+}
+
+/// SIGCONT a frozen group.
 ///
 /// Two verified attempts, never a blind one. The group-level signal is preferred (one kill(2)
 /// reaches every member, and it re-checks the leader's launch start time). When it fails
 /// because the LEADER is gone, the members recorded at freeze time are thawed individually,
 /// each verified against its own start time — the case that used to strand a whole app's
 /// worth of processes in state `T`.
-fn cont_frozen(f: &Frozen) -> bool {
+fn cont_frozen(f: &Frozen) -> Thaw {
     if crate::watchdog::signal_group_verified(f.group, libc::SIGCONT) {
-        return true;
+        return Thaw::Done;
     }
     let (mut survivors, mut thawed) = (0u32, 0u32);
     for &(pid, start) in &f.members {
@@ -141,25 +174,35 @@ fn cont_frozen(f: &Frozen) -> bool {
             thawed += 1;
         }
     }
-    if survivors > 0 {
-        tracing::info!(
-            "switcher: group {} lost its leader — thawed {thawed}/{survivors} surviving member(s)",
-            f.group
-        );
+    if survivors == 0 {
+        return Thaw::Done; // nothing left to strand
     }
-    survivors == 0 || thawed > 0
+    tracing::info!(
+        "switcher: group {} lost its leader — thawed {thawed}/{survivors} surviving member(s)",
+        f.group
+    );
+    if thawed > 0 { Thaw::Leaderless } else { Thaw::Stuck }
 }
 
-/// SIGCONT the frozen record for `group`, if we have one. Groups we never froze are trivially
-/// "resumed". Returns whether the record may now be dropped.
+/// SIGCONT the frozen record for `group`, if we have one, KEEPING it running. Groups we never
+/// froze are trivially "resumed". Returns whether the record may now be dropped.
+///
+/// This is the re-show path (deck dismiss / card picked), so a leaderless thaw here puts a
+/// window back on screen that `LIVE_GROUPS` cannot account for — record it, or the user gets a
+/// window the Guide button can neither hide nor close.
 fn cont_group(group: u32) -> bool {
     let record = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
         .iter()
         .find(|f| f.group == group)
         .cloned();
-    match record {
-        Some(f) => cont_frozen(&f),
-        None => true,
+    let Some(f) = record else { return true };
+    match cont_frozen(&f) {
+        Thaw::Done => true,
+        Thaw::Leaderless => {
+            remember_leaderless(&f);
+            true
+        }
+        Thaw::Stuck => false,
     }
 }
 
@@ -182,12 +225,58 @@ pub(crate) fn forget_stopped(group: u32) {
         .find(|f| f.group == group)
         .cloned();
     if let Some(f) = record {
-        cont_frozen(&f);
-        for &(pid, start) in &f.members {
-            crate::watchdog::signal_pid_verified(pid, start, libc::SIGTERM);
-        }
+        thaw_and_term(&f);
     }
     crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+    // A group closed from a card may also be one we re-showed leaderless earlier.
+    let leaderless = crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS")
+        .iter()
+        .find(|f| f.group == group)
+        .cloned();
+    if let Some(f) = leaderless {
+        thaw_and_term(&f);
+    }
+    crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS").retain(|f| f.group != group);
+}
+
+/// Close one frozen record: thaw first (a SIGSTOPped process cannot act on SIGTERM, so
+/// TERM-only would "close" it on paper and leave it frozen on the machine), then TERM each
+/// member against its own recorded start time. Returns whether a TERM actually reached
+/// something still alive.
+fn thaw_and_term(f: &Frozen) -> bool {
+    cont_frozen(f);
+    let mut any = false;
+    for &(pid, start) in &f.members {
+        any |= crate::watchdog::signal_pid_verified(pid, start, libc::SIGTERM);
+    }
+    any
+}
+
+/// Close EVERY group we froze, and forget them all — the close-all counterpart to
+/// `forget_stopped`.
+///
+/// `watchdog::return_home` closes what LIVE_GROUPS lists, and that list is keyed on the launch
+/// leader: once the leader exits, `watch_child`'s reaper drops the entry while the group's
+/// members live on, SIGSTOPped behind an unmapped window. Those are precisely the processes a
+/// Guide hold most needs to reach, and they were the ones it could not see — the hold logged
+/// nothing and left the machine exactly as it found it. Signalling them is safe for the same
+/// reason the thaw fallback is: the roster carries each member's own start time, so a recycled
+/// pid is refused rather than TERMed blind.
+pub(crate) fn close_stopped_groups() -> bool {
+    let mut records: Vec<Frozen> =
+        std::mem::take(&mut *crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED"));
+    // Plus the ones already thawed back into the foreground without a leader — same blind spot,
+    // and after a re-show this is the ONLY list that still knows about them.
+    records
+        .extend(std::mem::take(&mut *crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS")));
+    let mut any = false;
+    for f in &records {
+        any |= thaw_and_term(f);
+    }
+    if any {
+        tracing::info!("switcher: close-all reached {} leaderless group(s)", records.len());
+    }
+    any
 }
 
 /// Which of `groups` owns `pid`, matching its process group OR any ANCESTOR's — Electron
@@ -513,7 +602,15 @@ pub(crate) fn resume_stopped_groups() {
     // Put back anything that could NOT be thawed rather than dropping it: on the toggle path a
     // retained record means the next Guide press tries again, and on the exit path it is at
     // least visible in the log instead of silently stranded.
-    let stuck: Vec<Frozen> = stopped.into_iter().filter(|f| !cont_frozen(f)).collect();
+    let mut stuck = Vec::new();
+    for f in stopped {
+        match cont_frozen(&f) {
+            Thaw::Done => {}
+            // Left running with no LIVE_GROUPS entry — keep a handle so close-all can reach it.
+            Thaw::Leaderless => remember_leaderless(&f),
+            Thaw::Stuck => stuck.push(f),
+        }
+    }
     if !stuck.is_empty() {
         tracing::warn!("switcher: {} frozen group(s) would not thaw — kept for retry", stuck.len());
         crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").extend(stuck);
@@ -606,7 +703,16 @@ fn set_mapped(
 
 #[cfg(test)]
 mod tests {
-    use super::{cont_frozen, group_members, pgid_of, stop_group};
+    use super::{
+        cont_frozen, cont_group, group_members, pgid_of, stop_group, Thaw, LEADERLESS, STOPPED,
+    };
+
+    /// Held by every test that touches the process-wide registries (`STOPPED`, watchdog's
+    /// `LIVE_GROUPS`). Cargo runs tests as threads in ONE process, and `return_home` signals
+    /// every group in those registries — so without this, the close-all test would SIGTERM the
+    /// thaw test's leader out from under it. Poison-tolerant like the rest of the codebase: a
+    /// failing test must not turn its neighbour into a second, misleading failure.
+    static REGISTRIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn pgid_of_self_is_nonzero_and_bogus_pid_is_zero() {
@@ -662,6 +768,7 @@ mod tests {
     #[test]
     fn frozen_group_is_thawed_after_its_leader_dies() {
         use std::os::unix::process::CommandExt as _;
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
 
         let mut leader = std::process::Command::new("sh")
             .args(["-c", "sleep 30"])
@@ -708,8 +815,14 @@ mod tests {
             "leader-based verification should fail once the leader is gone"
         );
 
-        // The fix: per-member identity recorded at freeze time thaws the survivor.
-        assert!(cont_frozen(&frozen), "leaderless group reported as un-thawable");
+        // The fix: per-member identity recorded at freeze time thaws the survivor. The outcome
+        // is `Leaderless`, not `Done` — the distinction is what tells the re-show path this
+        // group is now running with nothing in LIVE_GROUPS able to hide or close it.
+        assert_eq!(
+            cont_frozen(&frozen),
+            Thaw::Leaderless,
+            "leaderless group reported as un-thawable"
+        );
         assert!(
             wait_for(|| proc_state(member.0) != Some('T')),
             "surviving member left SIGSTOPped"
@@ -737,10 +850,170 @@ mod tests {
         // ...and a group with nothing verifiable left is reported as settled, not retried
         // forever (there is no one to strand).
         let dead = Frozen { group: u32::MAX, members: vec![(u32::MAX, 1)] };
-        assert!(cont_frozen(&dead));
+        assert_eq!(cont_frozen(&dead), Thaw::Done);
 
         // pid 0 (kill's "our own group") and pid 1 (init) are never valid targets.
         assert!(!crate::watchdog::signal_pid_verified(0, 0, libc::SIGCONT));
         assert!(!crate::watchdog::signal_pid_verified(1, 1, libc::SIGCONT));
+    }
+
+    /// Spawn `sh -c "sleep 30"` as its own group leader plus a second member of that group whose
+    /// parent is THIS test process. That parentage is load-bearing everywhere it is used: a group
+    /// made only of the leader's own children becomes *orphaned* when the leader dies, and POSIX
+    /// then has the kernel SIGHUP+SIGCONT it — which thaws the survivor for us and makes these
+    /// tests pass against unfixed code. A live parent outside the group holds it un-orphaned.
+    fn spawn_group_with_outside_parented_member(
+    ) -> (std::process::Child, std::process::Child, u32, u32) {
+        use std::os::unix::process::CommandExt as _;
+        let leader = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .process_group(0) // its own group, the way every launch spawns
+            .spawn()
+            .expect("spawn test group leader");
+        let group = leader.id();
+        let member = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(group as i32)
+            .spawn()
+            .expect("spawn group member");
+        let member_pid = member.id();
+        assert!(wait_for(|| group_members(group).len() >= 2), "second member never appeared");
+        (leader, member, group, member_pid)
+    }
+
+    /// Regression (leaderless session test, 2026-09-10): re-showing a leaderless survivor must
+    /// not hand the user a window nothing can close.
+    ///
+    /// Dismissing the deck thaws the group and maps its windows back. For a group whose leader
+    /// has been reaped that is a one-way door: `LIVE_GROUPS` will never list it again, so the
+    /// re-shown window is invisible to `return_home` — the Guide hold, the user's last escape
+    /// hatch, would run and reach nothing. Fixing the strand without this just moves it from
+    /// "frozen and invisible" to "running and unclosable".
+    #[test]
+    fn a_leaderless_group_re_shown_from_the_deck_can_still_be_closed() {
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
+        let (mut leader, mut member_child, group, member_pid) =
+            spawn_group_with_outside_parented_member();
+        let _cleanup = KillGroup(group);
+
+        crate::watchdog::track_group_for_test(group);
+        let frozen = stop_group(group).expect("SIGSTOP should land on a live tracked group");
+        let member = *frozen.members.iter().find(|&&(p, _)| p == member_pid).expect("in roster");
+        assert!(wait_for(|| proc_state(member.0) == Some('T')), "member never froze");
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").push(frozen);
+
+        unsafe { libc::kill(group as i32, libc::SIGKILL) };
+        leader.wait().unwrap();
+        crate::watchdog::forget_group_for_test(group);
+        assert!(wait_for(|| proc_state(group).is_none()), "leader was not reaped");
+
+        // Deck dismissed: the thaw lands and the caller drops the STOPPED record (deck_cancel
+        // and show_group both do exactly this on a `true`).
+        assert!(cont_group(group), "leaderless thaw should report the record as droppable");
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+        assert!(wait_for(|| proc_state(member.0) != Some('T')), "survivor left SIGSTOPped");
+        assert!(
+            crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS")
+                .iter()
+                .any(|f| f.group == group),
+            "a re-shown leaderless group must leave a handle behind"
+        );
+
+        // Guide hold. With no LIVE_GROUPS entry and no STOPPED record, this handle is all there is.
+        assert!(crate::watchdog::return_home(), "close-all reported that it reached nothing");
+        assert!(
+            wait_for(|| matches!(proc_state(member.0), None | Some('Z'))),
+            "re-shown survivor was not closed (state {:?})",
+            proc_state(member.0)
+        );
+        let _ = member_child.wait();
+        assert!(
+            crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS")
+                .iter()
+                .all(|f| f.group != group),
+            "closed group left a leaderless handle behind"
+        );
+    }
+
+    /// Regression (leaderless session test, 2026-09-10): the Guide HOLD — "close everything" —
+    /// must reach a frozen group whose leader has already exited.
+    ///
+    /// Same lifecycle as the thaw test above, and the same reason it was broken: `return_home`
+    /// walks `LIVE_GROUPS`, which is keyed on the launch leader, and `watch_child`'s reaper
+    /// drops that entry the moment the leader exits. The group's members keep the pgid and stay
+    /// SIGSTOPped behind an unmapped window — invisible to close-all, so the hold ran, signalled
+    /// nobody, reported false, and the survivor sat in state 'T' behind a window the user could
+    /// neither see nor close. Having the per-group helper (`forget_stopped`) did not cover this:
+    /// nothing on the Guide-hold path called it.
+    ///
+    /// The member is our child `setpgid`'d into the leader's group, NOT a child of the leader —
+    /// see the thaw test for why that topology is load-bearing (a group of the leader's own
+    /// children becomes orphaned on its death and the kernel SIGHUP+SIGCONTs it, which makes
+    /// this test pass against unfixed code).
+    #[test]
+    fn close_all_reaches_a_frozen_group_that_lost_its_leader() {
+        use std::os::unix::process::CommandExt as _;
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
+
+        let mut leader = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .process_group(0)
+            .spawn()
+            .expect("spawn test group leader");
+        let group = leader.id();
+        let _cleanup = KillGroup(group);
+
+        let mut member_child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(group as i32)
+            .spawn()
+            .expect("spawn group member");
+        let member_pid = member_child.id();
+        assert!(wait_for(|| group_members(group).len() >= 2), "second member never appeared");
+
+        // Launch → hide: the group is tracked, then frozen and recorded exactly as hide_all
+        // records it (freeze_silent_groups pushes the roster into STOPPED).
+        crate::watchdog::track_group_for_test(group);
+        let frozen = stop_group(group).expect("SIGSTOP should land on a live tracked group");
+        let member = frozen
+            .members
+            .iter()
+            .find(|&&(p, _)| p == member_pid)
+            .copied()
+            .expect("member not in roster");
+        assert!(wait_for(|| proc_state(member.0) == Some('T')), "member never froze");
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").push(frozen);
+
+        // The leader exits and is reaped — the group leaves LIVE_GROUPS, survivor and all.
+        unsafe { libc::kill(group as i32, libc::SIGKILL) };
+        leader.wait().unwrap();
+        crate::watchdog::forget_group_for_test(group);
+        assert!(wait_for(|| proc_state(group).is_none()), "leader was not reaped");
+        assert!(
+            !crate::watchdog::live_groups().contains(&group),
+            "the reaped group must be invisible to the LIVE_GROUPS close loop"
+        );
+        assert_eq!(proc_state(member.0), Some('T'), "survivor should still be frozen");
+
+        // The Guide hold. Before the fix this walked an empty list and returned false, so the
+        // caller never even logged a close.
+        assert!(crate::watchdog::return_home(), "close-all reported that it reached nothing");
+        // 'Z' counts: TERM landed and the survivor is ours to reap. Anything but 'T' would be a
+        // weaker assertion — it would also pass on a bare thaw that never closed anything.
+        assert!(
+            wait_for(|| matches!(proc_state(member.0), None | Some('Z'))),
+            "surviving member was not closed (state {:?})",
+            proc_state(member.0)
+        );
+        let _ = member_child.wait();
+
+        // Closed means forgotten: a record left behind would have the exit hook blanket-CONT a
+        // pgid that may since have been recycled.
+        assert!(
+            !crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
+                .iter()
+                .any(|f| f.group == group),
+            "closed group left a frozen record behind"
+        );
     }
 }

@@ -66,6 +66,12 @@ pub fn return_home() -> bool {
     for pid in groups {
         any |= signal_group(pid);
     }
+    // ...and then the apps LIVE_GROUPS can no longer see. A process group outlives its leader,
+    // so a frozen app whose leader has been reaped is absent from the loop above while its
+    // members are still SIGSTOPped behind an unmapped window — the loop "closed everything"
+    // and reached nobody. The switcher holds the per-member identity records that make
+    // signalling those survivors verified rather than blind.
+    any |= crate::switcher::close_stopped_groups();
     // Only report success if a signal actually reached something — otherwise the caller would
     // emit "app-closed" / swallow the Guide press while the window is still on screen.
     any

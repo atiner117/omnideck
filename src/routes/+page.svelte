@@ -564,7 +564,11 @@
   }
   async function openDeck() {
     try { deckApps = await api.deckOpen(); } catch (e) { deckApps = []; console.debug("[omnideck] deck open failed", e); }
-    if (deckApps.length === 0) return; // nothing running — don't show an empty deck
+    // Nothing to show — but "no cards" is NOT "nothing to restore". A process group outlives
+    // its leader, so once the last leader is reaped the deck is empty while that app's window
+    // is still unmapped and its surviving members still SIGSTOPped. Returning here was the only
+    // route back, and it dropped it: dismiss instead, which runs deck_cancel's verified thaw.
+    if (deckApps.length === 0) { closeDeck(); return; }
     deckFocus = 0;
     deckOpen = true;
   }
@@ -1137,7 +1141,11 @@
     api.onAppExited((e) => {
       const id = String(e.payload ?? "");
       nowList = nowList.filter((x) => x.id !== id);
-      // Keep the deck honest if an app dies while it's open (e.g. we just closed one).
+      // Keep the deck honest if an app dies while it's open (e.g. we just closed one). Losing
+      // the last card only DISMISSES the overlay — deliberately not closeDeck(). An exiting
+      // leader can leave a live window behind (see openDeck), and restoring it here would yank
+      // the user back into an app they were walking away from, unasked. The restore stays where
+      // the user asks for it: the next Guide tap, through openDeck's empty-deck path.
       if (deckOpen) api.deckList().then((a) => { deckApps = a; if (a.length === 0) deckOpen = false; else deckFocus = clamp(deckFocus, 0, a.length - 1); }).catch(() => {});
     }).then((u) => off.push(u));
     // Guide tap (gamepad) or Ctrl+Alt+Home → toggle the deck switcher.
