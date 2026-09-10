@@ -45,6 +45,13 @@ pub struct MediaItem {
     pub position_secs: Option<u64>,
     /// UserData.Played — the server's fully-watched flag, for the ✓ marker on browse rows.
     pub played: Option<bool>,
+    /// BaseItemDto.IsFolder — the server's OWN answer to "is this a container". The frontend
+    /// used to infer that from a hard-coded `Type` allowlist, which is the wrong shape: an
+    /// unlisted container kind (MusicAlbum, Playlist, UserView, …) fell through as playable,
+    /// so Enter handed a folder id to mpv and W offered to mark a whole container watched —
+    /// the exact thing `toggleWatched` documents it must never do. None = the server didn't
+    /// say, and the frontend falls back to the name list.
+    pub is_folder: Option<bool>,
 }
 
 /// Jellyfin ticks (100 ns each) → whole seconds, rounding down. Sub-second precision is
@@ -155,19 +162,22 @@ static SERVER: RwLock<Option<Option<Arc<JellyfinServer>>>> = RwLock::new(None);
 /// The currently-resolved server (config first, then shim pairing), or None. Re-resolves
 /// lazily after `invalidate()`.
 pub fn server() -> Option<Arc<JellyfinServer>> {
-    if let Some(cached) = SERVER.read().unwrap().clone() {
+    // Poison-tolerant (`into_inner`), like every other lock in the codebase: one panic
+    // inside a holder must degrade to a re-resolve, not wedge the media subsystem with
+    // a poisoned-lock panic for the rest of the process lifetime.
+    if let Some(cached) = SERVER.read().unwrap_or_else(|e| e.into_inner()).clone() {
         return cached;
     }
     // Resolve outside the lock (config + shim file I/O); a racing thread may resolve too —
     // get_or_insert keeps whichever landed first, both read the same config.
     let resolved = resolve();
-    SERVER.write().unwrap().get_or_insert(resolved).clone()
+    SERVER.write().unwrap_or_else(|e| e.into_inner()).get_or_insert(resolved).clone()
 }
 
 /// Drop the cached resolution so the next `server()` call re-reads config.toml / the shim
 /// pairing. Called after every config save (config::mutate_and_save).
 pub fn invalidate() {
-    *SERVER.write().unwrap() = None;
+    *SERVER.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 fn resolve() -> Option<Arc<JellyfinServer>> {
@@ -401,6 +411,23 @@ impl JellyfinServer {
         Ok(())
     }
 
+    /// One item by id, as the server sees it *now* — watched flag and resume point included.
+    /// `set_played` can only report what the response body said; this re-reads the item, which
+    /// is how `omnideck watched` proves a change actually landed (and the only way to observe
+    /// the mark-watched path headlessly — the couch UI is the only other caller of it).
+    pub async fn item(&self, id: &str) -> Result<MediaItem, String> {
+        if !valid_id(id) {
+            return Err("invalid item id".into());
+        }
+        let user = self.user().await?;
+        // This route answers with a bare BaseItemDto, not an `Items` envelope — wrap it in a
+        // one-element array so the field mapping stays in items_of instead of being duplicated.
+        let v = self.get(&format!("/Users/{user}/Items/{id}")).await?;
+        items_of(&serde_json::Value::Array(vec![v]))
+            .pop()
+            .ok_or_else(|| format!("media server: no usable item data for {id}"))
+    }
+
     /// Direct-play URL for mpv. `static=true` asks the server for the untranscoded file —
     /// the whole point: mpv + hwdec does the 4K work, not a server transcode. Carries NO
     /// credential: callers must authenticate with the `X-Emby-Token` header (see `token()`),
@@ -478,6 +505,7 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
                             .map(ticks_to_secs)
                             .filter(|s| *s > 0),
                         played: ud["Played"].as_bool(),
+                        is_folder: i["IsFolder"].as_bool(),
                     })
                 })
                 .collect()
@@ -489,22 +517,41 @@ fn items_of(v: &serde_json::Value) -> Vec<MediaItem> {
 mod tests {
     use super::{items_of, played_request, ticks_to_secs, valid_id, JellyfinServer, MediaServerConfig};
 
-    #[test]
-    fn set_played_guards_reject_before_any_network_io() {
-        // base points at a loopback port nothing listens on: if either guard failed to
-        // short-circuit, these would surface "unreachable" instead of the guard's message.
-        let srv = |user: &str| JellyfinServer {
+    /// A server whose base points at a loopback port nothing listens on: any request that
+    /// escapes a guard surfaces "unreachable" instead of the guard's message.
+    fn srv(user: &str) -> JellyfinServer {
+        JellyfinServer {
             base: "http://127.0.0.1:9".into(),
             token: "t".into(),
             user_id: std::sync::OnceLock::new(),
             preknown_user: Some(user.into()),
-        };
+        }
+    }
+
+    #[test]
+    fn set_played_guards_reject_before_any_network_io() {
         let bad_id =
             tauri::async_runtime::block_on(srv("u1").set_played("../etc", true)).unwrap_err();
         assert_eq!(bad_id, "invalid item id");
         // The user id reaches the same path interpolation as the item id — same gate.
         let bad_user =
             tauri::async_runtime::block_on(srv("u1/../admin").set_played("abc", true)).unwrap_err();
+        assert!(bad_user.contains("user id"), "{bad_user}");
+    }
+
+    #[test]
+    fn item_guards_reject_before_any_network_io() {
+        // item() interpolates both ids into a path exactly like set_played does, and the CLI
+        // hands it an id typed by a human — so it carries the same two gates.
+        // `.err().expect()` rather than `unwrap_err()`: MediaItem has no Debug impl, and the
+        // guard means the Ok arm is unreachable anyway.
+        let bad_id = tauri::async_runtime::block_on(srv("u1").item("../../System/Info"))
+            .err()
+            .expect("path traversal must be rejected");
+        assert_eq!(bad_id, "invalid item id");
+        let bad_user = tauri::async_runtime::block_on(srv("u1/../admin").item("abc"))
+            .err()
+            .expect("an invalid user id must be rejected");
         assert!(bad_user.contains("user id"), "{bad_user}");
     }
 
@@ -545,10 +592,15 @@ mod tests {
                 "SeriesName": "Some Show",
                 "UserData": { "PlaybackPositionTicks": 0, "Played": true }
             },
-            { "Id": "ccc", "Name": "Untouched", "Type": "Movie" }
+            { "Id": "ccc", "Name": "Untouched", "Type": "Movie" },
+            {
+                // A container kind the frontend's name list never heard of. The point of
+                // carrying IsFolder is that this classifies correctly anyway.
+                "Id": "ddd", "Name": "Some Album", "Type": "MusicAlbum", "IsFolder": true
+            }
         ]);
         let items = items_of(&v);
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert_eq!(items[0].position_secs, Some(3600));
         assert_eq!(items[0].runtime_mins, Some(120));
         assert_eq!(items[0].played, Some(false));
@@ -559,6 +611,10 @@ mod tests {
         assert_eq!(items[2].position_secs, None);
         assert_eq!(items[2].played, None);
         assert_eq!(items[2].played_pct, None);
+        // A server that omits IsFolder leaves it None — the frontend then falls back to the
+        // kind list rather than guessing "playable", so this must NOT default to false.
+        assert_eq!(items[0].is_folder, None);
+        assert_eq!(items[3].is_folder, Some(true));
     }
 
     #[test]

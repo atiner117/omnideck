@@ -40,6 +40,95 @@ async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
 }
 
+/// Steam appids are decimal numbers. Everything that feeds one into a filesystem path
+/// (the steamgriddb art cache joins `{appid}_box.jpg`) or the `steam://` URI dispatcher
+/// validates here first, so a webview-supplied string can't traverse (`..`) out of the
+/// cache dir or reshape the URI (`/`, `?`) into a different steam:// verb.
+fn valid_appid(appid: &str) -> bool {
+    !appid.is_empty() && appid.len() <= 12 && appid.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The component policy every backup path must satisfy: no `.`/`..`, and no hidden
+/// (dot-prefixed) segment. Applied twice — once to the pathname the webview supplied, once
+/// to the path with its real (symlink-resolved) ancestry — because a policy that only ever
+/// sees the spelling of a path can be routed around by a link.
+fn plain_visible_components(p: &std::path::Path, what: &str) -> Result<(), String> {
+    use std::path::Component;
+    for c in p.components() {
+        match c {
+            Component::ParentDir | Component::CurDir => {
+                return Err(format!("{what} must not contain '.' or '..' components"))
+            }
+            Component::Normal(s) if s.to_string_lossy().starts_with('.') => {
+                return Err(format!("{what} must not touch hidden files or directories"))
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// `p`'s parent directory with every symlink in it resolved, keeping any trailing components
+/// that don't exist yet (`backup_to` creates them). Only what already exists on disk can be
+/// a link, so resolution stops at the nearest existing ancestor.
+fn real_parent(p: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let parent = p.parent().ok_or("backup path has no parent directory")?;
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = parent;
+    while !cur.exists() {
+        match (cur.file_name(), cur.parent()) {
+            (Some(name), Some(up)) => {
+                missing.push(name.to_owned());
+                cur = up;
+            }
+            // Walked off the top without finding anything that exists.
+            _ => return Err("backup path has no existing parent directory".into()),
+        }
+    }
+    let mut real = std::fs::canonicalize(cur)
+        .map_err(|e| format!("backup path's directory is unreadable: {e}"))?;
+    for name in missing.iter().rev() {
+        real.push(name);
+    }
+    Ok(real)
+}
+
+/// Path gate for config backup/restore — the only IPC surface that takes a caller-chosen
+/// filesystem path. Absolute, no `.`/`..` components, no hidden (dot-prefixed) path
+/// segments, and a `.toml` extension: a compromised webview must not be able to turn
+/// "back up my config" into an arbitrary write (`~/.config/autostart`, `~/.ssh`) or use
+/// the restore parse error as a dotfile-content oracle. Visible user folders (Documents,
+/// a USB mount under /run/media) all pass.
+///
+/// **Symlinks.** Checking the supplied pathname alone was not enough: the writer resolves
+/// the destination and deliberately writes through links, and restore read through them, so
+/// a `Documents/backup.toml` symlink aimed at `~/.ssh/id_ed25519` satisfied every rule above
+/// and then bypassed all of them. The policy is now *no links in backup IPC*, judged on the
+/// real file rather than its spelling: a symlink at the final component is refused outright,
+/// and the ancestry is re-checked after resolution so a symlinked *directory* cannot land the
+/// write somewhere hidden either. Because a check like this is inherently racy against a link
+/// planted a moment later, it is only the friendly half — `WriteMode::Sealed` and
+/// `config::read_no_follow` enforce the same policy at rename/open time, where there is no
+/// window to race.
+fn valid_backup_path(p: &std::path::Path) -> Result<(), String> {
+    if !p.is_absolute() {
+        return Err("backup path must be absolute".into());
+    }
+    plain_visible_components(p, "backup path")?;
+    if p.extension().and_then(|e| e.to_str()) != Some("toml") {
+        return Err("backup path must end in .toml".into());
+    }
+    // A symlink AT the path: `symlink_metadata` deliberately does not follow it.
+    if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("backup path is a symlink — point it at the real file".into());
+    }
+    // A symlink ABOVE the path: re-run the component policy on the resolved ancestry, so
+    // `Documents -> /home/u/.private` can't smuggle the write into a hidden directory.
+    let real = real_parent(p)?;
+    plain_visible_components(&real, "backup path's real location")?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_capability() -> capability::Capability {
     capability::probe()
@@ -100,6 +189,9 @@ fn sniff_matches(mime: &str, bytes: &[u8]) -> bool {
 #[tauri::command]
 pub fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, id: Option<String>) -> Result<(), String> {
     use tauri::Emitter;
+    if !valid_appid(&appid) {
+        return Err("invalid appid".into());
+    }
     // Steam's URI handler returns immediately, so the running game has no child handle
     // here; watch_steam_game polls Steam's registry to detect start/exit instead.
     std::process::Command::new("steam")
@@ -139,6 +231,7 @@ pub fn get_config() -> config::Config {
 /// written so the UI can toast it.
 #[tauri::command]
 pub async fn backup_config(dest: String, include_credentials: bool) -> Result<String, String> {
+    valid_backup_path(std::path::Path::new(&dest))?;
     // blocking: write_atomic fsyncs the file and its directory.
     blocking(move || config::backup_to(std::path::Path::new(&dest), include_credentials)).await?
 }
@@ -149,6 +242,7 @@ pub async fn backup_config(dest: String, include_credentials: bool) -> Result<St
 /// same as `get_config`) so the UI can re-render without a restart.
 #[tauri::command]
 pub async fn restore_config(src: String) -> Result<config::Config, String> {
+    valid_backup_path(std::path::Path::new(&src))?;
     // blocking: fsync via write_atomic, and SAVE_LOCK can wait behind another saver.
     blocking(move || {
         let mut cfg = config::restore_from(std::path::Path::new(&src))?;
@@ -576,6 +670,9 @@ pub async fn save_recent_apps(recent_apps: Vec<String>) -> Result<(), String> {
 /// Open Steam's per-game Properties dialog for the focused game.
 #[tauri::command]
 pub fn game_properties(appid: String) -> Result<(), String> {
+    if !valid_appid(&appid) {
+        return Err("invalid appid".into());
+    }
     std::process::Command::new("steam")
         .arg(format!("steam://gameproperties/{appid}"))
         .spawn()
@@ -636,6 +733,9 @@ pub fn in_gamescope_session() -> bool {
 /// Fetch missing vertical box art from SteamGridDB (no-op without a configured key). Cached.
 #[tauri::command]
 pub async fn grid_art(appid: String) -> Option<String> {
+    if !valid_appid(&appid) {
+        return None;
+    }
     let key = config::load_or_create().settings.steamgriddb_key;
     steamgriddb::box_art(&appid, &key).await
 }
@@ -672,7 +772,58 @@ pub fn get_sleep_timer() -> Option<crate::sleep_timer::SleepTimerStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_safe_browser_arg, mpv_start_flag, spawn_error};
+    use super::{is_safe_browser_arg, mpv_start_flag, spawn_error, valid_backup_path};
+
+    /// Regression (review 2026-09-10, finding 2): the gate used to judge only the SPELLING of
+    /// the path, while the writer resolved symlinks and wrote through them and restore read
+    /// through them. Every rule below could therefore be satisfied by a link whose target
+    /// broke all of them. These cases pin the "no links in backup IPC" policy on the real
+    /// file and its real ancestry.
+    #[test]
+    fn backup_gate_refuses_symlinked_files_and_ancestors() {
+        let dir = std::env::temp_dir().join(format!("omnideck-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The pre-existing spelling rules still hold.
+        assert!(valid_backup_path(std::path::Path::new("relative/backup.toml")).is_err());
+        assert!(valid_backup_path(&dir.join("../backup.toml")).is_err());
+        assert!(valid_backup_path(&dir.join(".hidden.toml")).is_err());
+        assert!(valid_backup_path(&dir.join("backup.txt")).is_err());
+        // ...and an ordinary visible destination in a real folder still passes.
+        assert!(valid_backup_path(&dir.join("backup.toml")).is_ok());
+        // A folder `backup_to` will create on the way is legitimate — only what already
+        // exists can be a symlink.
+        assert!(valid_backup_path(&dir.join("not-yet/backup.toml")).is_ok());
+
+        // 1. A symlink AT the destination — the exact bypass: visible, .toml, non-hidden
+        //    spelling, hidden non-TOML target.
+        std::fs::create_dir_all(dir.join(".private")).unwrap();
+        let secret = dir.join(".private/not-toml");
+        std::fs::write(&secret, b"SECRET").unwrap();
+        let link = dir.join("backup.toml");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        assert!(valid_backup_path(&link).is_err(), "symlinked backup path was accepted");
+        std::fs::remove_file(&link).unwrap();
+
+        // 2. A symlink ABOVE the destination — same escape, one level up.
+        let linked_dir = dir.join("Documents");
+        std::os::unix::fs::symlink(dir.join(".private"), &linked_dir).unwrap();
+        assert!(
+            valid_backup_path(&linked_dir.join("backup.toml")).is_err(),
+            "symlinked ancestor into a hidden directory was accepted"
+        );
+        std::fs::remove_file(&linked_dir).unwrap();
+
+        // 3. A symlinked ancestor that resolves somewhere perfectly ordinary is still fine —
+        //    the policy is about where the write LANDS, not about links as such.
+        std::fs::create_dir_all(dir.join("real-folder")).unwrap();
+        let ok_link = dir.join("Documents");
+        std::os::unix::fs::symlink(dir.join("real-folder"), &ok_link).unwrap();
+        assert!(valid_backup_path(&ok_link.join("backup.toml")).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn start_flag_only_for_real_positive_positions() {

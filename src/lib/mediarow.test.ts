@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BROWSE_KINDS, rowStartSecs, rowSub, rowSubPlain } from "./mediarow";
+import { BROWSE_KINDS, isBrowse, rowStartSecs, rowSub, rowSubPlain } from "./mediarow";
 import type { MediaItem } from "./bindings/MediaItem";
 
 // ts-rs types u64 fields as bigint; build items the way the IPC layer types them.
@@ -7,7 +7,7 @@ function item(over: Partial<MediaItem>): MediaItem {
   return {
     id: "x", name: "X", kind: "Movie", overview: null,
     played_pct: null, runtime_mins: null, series: null,
-    position_secs: null, played: null,
+    position_secs: null, played: null, is_folder: null,
     ...over,
   };
 }
@@ -73,9 +73,38 @@ describe("rowSubPlain", () => {
   });
 });
 
+describe("isBrowse", () => {
+  it("trusts the server's IsFolder over the kind name, in BOTH directions", () => {
+    // The gap this closes: a container kind the name list never heard of. Before, this
+    // read as playable — Enter handed a folder id to mpv and W offered to mark the whole
+    // album watched, clearing every child's resume point with no undo.
+    expect(isBrowse(item({ kind: "MusicAlbum", is_folder: true }))).toBe(true);
+    expect(isBrowse(item({ kind: "SomethingJellyfinAddsIn2027", is_folder: true }))).toBe(true);
+    // And the other way: a server that calls something a Folder-ish name but says it plays.
+    expect(isBrowse(item({ kind: "Folder", is_folder: false }))).toBe(false);
+  });
+
+  it("falls back to the kind list when the server omitted IsFolder", () => {
+    expect(isBrowse(item({ kind: "Series" }))).toBe(true);
+    expect(isBrowse(item({ kind: "Movie" }))).toBe(false);
+    expect(isBrowse(item({ kind: "Episode" }))).toBe(false);
+  });
+
+  it("does not treat a missing IsFolder as false (?? not ||, null is the unknown case)", () => {
+    // is_folder: false is a real answer and must survive; null must NOT.
+    expect(isBrowse(item({ kind: "Series", is_folder: null }))).toBe(true);
+    expect(isBrowse(item({ kind: "Series", is_folder: false }))).toBe(false);
+  });
+});
+
 describe("BROWSE_KINDS", () => {
-  it("contains exactly the drill-down kinds", () => {
-    expect([...BROWSE_KINDS].sort()).toEqual(
-      ["BoxSet", "CollectionFolder", "Folder", "Season", "Series"].sort());
+  it("lists only containers — a playable kind here would break Enter on every server", () => {
+    // The fallback list can never be complete (that's why isBrowse prefers is_folder), but
+    // a FALSE POSITIVE here is the damaging direction: it would make a real movie undrillable.
+    for (const playable of ["Movie", "Episode", "Video", "Audio", "MusicVideo", "Trailer"])
+      expect(BROWSE_KINDS.has(playable)).toBe(false);
+    // The original five must not have been dropped while widening the list.
+    for (const container of ["BoxSet", "CollectionFolder", "Folder", "Season", "Series"])
+      expect(BROWSE_KINDS.has(container)).toBe(true);
   });
 });
