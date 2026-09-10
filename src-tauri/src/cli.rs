@@ -29,6 +29,15 @@ enum CliCommand {
     Media,
     /// Probe the configured media server (sections + first library's items)
     Mediasrv,
+    /// Mark a media-server item watched (or unwatched with --un) and read the result back —
+    /// the headless equivalent of pressing West/W on the couch. Ids come from `mediasrv`.
+    Watched {
+        /// Jellyfin item id (the `id=` values printed by `omnideck mediasrv`)
+        id: String,
+        /// Clear the watched flag instead of setting it
+        #[arg(long = "un")]
+        un: bool,
+    },
     /// Render + report the auto-generated mpv profile set (VapourSynth interpolation)
     Mpvprofiles,
     /// Downscale a wallpaper into the display-sized cache and report the result
@@ -102,6 +111,64 @@ fn logs(lines: usize, path_only: bool) {
             }
         }
         Err(e) => println!("logs: couldn't read {}: {e}", newest.display()),
+    }
+}
+
+/// One line describing an item's watch state: what the ✓ marker and the resume sub-label on
+/// a browse row are drawn from, so a mismatch between them is visible here.
+fn watch_state(i: &crate::media_server::MediaItem) -> String {
+    format!(
+        "{} [{}] played={} resume={}",
+        i.name,
+        i.kind,
+        match i.played {
+            Some(p) => p.to_string(),
+            None => "(none)".into(),
+        },
+        match i.position_secs {
+            Some(s) => format!("{}m{:02}s", s / 60, s % 60),
+            None => "-".into(),
+        },
+    )
+}
+
+/// `omnideck watched <id> [--un]` — the headless mirror of West/W on a browse row. Reads the
+/// item, flips the flag through the same `PlayedItems` transport the couch uses, then reads it
+/// back: the response body can claim success while a redirect downgraded the verb to a GET, so
+/// only the re-read proves the change landed. Marking watched also clears the server-side
+/// resume point (Jellyfin's behaviour), which is why both fields print.
+fn watched(id: &str, un: bool) {
+    let Some(srv) = crate::media_server::server() else {
+        println!("no media server configured (config [media_server] or shim pairing)");
+        return;
+    };
+    let played = !un;
+
+    // Best-effort: a read failure here doesn't say anything about the write, and the write is
+    // the point of the subcommand — report it and carry on.
+    match tauri::async_runtime::block_on(srv.item(id)) {
+        Ok(i) => println!("before: {}", watch_state(&i)),
+        Err(e) => println!("before: unavailable ({e})"),
+    }
+
+    println!("{} {id} …", if played { "marking watched:" } else { "clearing watched:" });
+    match tauri::async_runtime::block_on(srv.set_played(id, played)) {
+        Ok(()) => println!("  set_played -> OK (server acknowledged)"),
+        // Not an early return: the re-read below is exactly what distinguishes "refused, nothing
+        // changed" from "errored after applying".
+        Err(e) => println!("  set_played -> FAILED: {e}"),
+    }
+
+    match tauri::async_runtime::block_on(srv.item(id)) {
+        Ok(i) => {
+            println!("after:  {}", watch_state(&i));
+            match i.played {
+                Some(got) if got == played => println!("VERIFIED: server reports played={got}"),
+                Some(got) => println!("MISMATCH: server reports played={got}, expected {played}"),
+                None => println!("UNKNOWN: server returned no watch state for this item"),
+            }
+        }
+        Err(e) => println!("after:  unavailable ({e}) — could not verify"),
     }
 }
 
@@ -274,6 +341,7 @@ pub fn handle() -> bool {
             }
         }
         CliCommand::Logs { lines, path } => logs(lines, path),
+        CliCommand::Watched { id, un } => watched(&id, un),
         CliCommand::Doctor { clear_art_cache } => doctor(clear_art_cache),
         CliCommand::Mediasrv => {
             let Some(srv) = crate::media_server::server() else {
@@ -330,4 +398,56 @@ pub fn handle() -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, CliCommand};
+    use clap::Parser;
+
+    #[test]
+    fn watched_parses_the_id_and_the_un_flag() {
+        // The argv shape is the whole contract of a debug subcommand — pin it so a rename
+        // can't silently make the couch-test recipe in CLAUDE.md wrong.
+        let set = Cli::try_parse_from(["omnideck", "watched", "abc123"]).expect("id-only form");
+        assert!(matches!(set.command, Some(CliCommand::Watched { ref id, un: false }) if id == "abc123"));
+
+        let clear = Cli::try_parse_from(["omnideck", "watched", "abc123", "--un"]).expect("--un form");
+        assert!(matches!(clear.command, Some(CliCommand::Watched { un: true, .. })));
+
+        // The id is positional and required: a bare `watched` is a usage error, never a
+        // mutating call with an empty id.
+        assert!(Cli::try_parse_from(["omnideck", "watched"]).is_err());
+    }
+
+    #[test]
+    fn watch_state_reports_missing_fields_without_guessing() {
+        // An item the server has no UserData for must not read as "unwatched" — the CLI is a
+        // verification tool, so "the server didn't say" prints as its own thing.
+        let bare = crate::media_server::MediaItem {
+            id: "x".into(),
+            name: "Untouched".into(),
+            kind: "Movie".into(),
+            // #88 made this field required; this literal was written before it existed.
+            is_folder: None,
+            overview: None,
+            played_pct: None,
+            runtime_mins: None,
+            series: None,
+            position_secs: None,
+            played: None,
+        };
+        let line = super::watch_state(&bare);
+        assert!(line.contains("played=(none)"), "{line}");
+        assert!(line.contains("resume=-"), "{line}");
+
+        let watched = crate::media_server::MediaItem {
+            played: Some(true),
+            position_secs: Some(3661),
+            ..bare
+        };
+        let line = super::watch_state(&watched);
+        assert!(line.contains("played=true"), "{line}");
+        assert!(line.contains("resume=61m01s"), "{line}");
+    }
 }

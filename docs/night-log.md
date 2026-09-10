@@ -18,7 +18,491 @@ Entry template:
 
 ---
 
+
+
 <!-- entries below -->
+## 2026-08-22 — `omnideck watched <id> [--un]`: the mark-watched path, headless + verified
+- **Vision tie:** not a feature — the *verification* surface. CLAUDE.md §Verify §3 exists so an
+  agent can exercise real backend logic without a TV; `set_played` was the one couch action with
+  no headless entry point, so #83's transport fixes could only be checked from the sofa. #83's
+  follow-up list and the 2026-08-21 log both named this exact command as the cheapest
+  agent-shippable item.
+- **Branch / PR:** `loop/night-20260822` — https://github.com/atiner117/omnideck/pull/87
+- **Open-PR inventory:** **2 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `2`: **#85** (`fix/review-20260821`, P0/P1 fixes from the five-angle review)
+  and **#86** (`loop/night-20260821`, the 0.2.0 changelog top-off). That is the whole list, not a
+  subset. Checked both file lists before building: #85 touches `media_server.rs` (poison-tolerant
+  lock) and 22 other files but **not** `cli.rs` and **not** `set_played`; #86 is `CHANGELOG.md` +
+  `docs/night-log.md` only. No open PR adds a CLI subcommand, so this isn't a duplicate.
+- **Changed:** `media_server.rs` — new `item(&self, id)` reads one item by id
+  (`/Users/{user}/Items/{id}`, a bare `BaseItemDto`), wrapped into a one-element array so
+  `items_of` stays the single field mapping; same two `valid_id` gates as `set_played` (item id
+  *and* user id), pinned by a no-IO test against a dead loopback port. `cli.rs` — `watched <id>
+  [--un]`: read state → flip through the same `PlayedItems` transport → **re-read**. The re-read
+  is the entire value: a redirect that downgrades POST→GET and a jellyfin#8168 server that
+  answers 200 without applying both look like success in the response body, and only a second
+  read separates them. A `set_played` error deliberately does *not* short-circuit the re-read —
+  "refused, nothing changed" vs "errored after applying" are different bugs. Prints
+  `before:` / `set_played -> OK|FAILED` / `after:` / `VERIFIED|MISMATCH|UNKNOWN`.
+  Two new tests (the first in `cli.rs`): the argv contract, and `watch_state` rendering a missing
+  `UserData` as `played=(none)` rather than guessing "unwatched". Docs: CLAUDE.md §Verify §3
+  gains the command **with an explicit "this WRITES to the server, and marking watched clears
+  that item's resume point" caveat**; README's helper list was also missing `bgprep`/`logs`/
+  `doctor`, filled in.
+- **Verify:** `cargo clippy --all-targets -- -D warnings` **clean** in debug *and* `--release` ·
+  `cargo test` **112 pass / 1 ignored** (110 before, +2), identical under `--release` ·
+  `bun run check` **369 files, 0 errors / 0 warnings** · `bun run build` **pass** ·
+  `bun run test` **47/47**. No new deps; no `#[ts(export)]` type changed, so `git status` stayed
+  clean after the release test run (no bindings churn).
+- **Deliberately NOT run:** the command against Andrew's live Jellyfin. It mutates real watch
+  state, and marking watched destroys that item's resume point — an unattended loop should not
+  pick one of his titles and flip it. `cargo run` also needs an approval this session didn't
+  have. So: guards and argv are test-covered, the network path is one `cargo run -- watched <id>`
+  away whenever Andrew wants it.
+- **Merge-order note:** branched off `main` (`487bd4d`), so it does not contain #86. Both PRs
+  prepend to this file → **expect a trivial conflict here if #86 merges first; keep both
+  entries.** No `CHANGELOG.md` bullet was added for the same reason (#86 owns that file right
+  now) — this command wants one line under `[Unreleased]` → *Added* once #86 lands.
+- **Outcome:** shipped to draft PR #87. Additive, backend-only, zero frontend risk.
+- **Next candidate:** still **the couch pass** — it is the only thing between here and the 0.2.0
+  tag and the only thing an agent cannot do (`needs-hardware` has stacked up across #77/#78/#79/
+  #81/#83/#84; capture it in a dated `NOTES-COUCHTEST-*.md`). This increment makes one slice of
+  it cheaper: the mark-watched half can now be checked from a terminal before the TV is on.
+  Agent-shippable alternatives if another is wanted first: #81's `parse_backup` normalize gap
+  (cheapest of its five review follow-ups); making the shared-retry idempotency a mechanism
+  rather than prose (opt-in per call site) before anything non-idempotent is added to `send()`;
+  or the `BROWSE_KINDS` allowlist gap from #83's review. Still loose: #39's `0dabfea` (L2/R2
+  synthesis, needs-hardware).
+
+## 2026-08-21 — 0.2.0 changelog top-off: the 30 PRs merged since 2026-07-26
+- **Vision tie:** not a feature — the release blocker. The last two iterations both named
+  "changelog top-off for 0.2.0 (docs-only)" as the next candidate, and it gates the tag.
+- **Branch / PR:** `loop/night-20260821` — https://github.com/atiner117/omnideck/pull/86
+- **Open-PR inventory:** **1 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `1`: **#85** (`fix/review-20260821`, "close the P0/P1 findings from the
+  2026-08-21 five-angle review"). That is the whole list, not a subset. Searched it for
+  changelog/release keywords before building — #85 is review fixes to #83's transport and resume
+  state, nothing touching CHANGELOG.md or RELEASING.md, so this is not a duplicate. Note #85 is
+  **unmerged**, so its fixes are deliberately *not* in the changelog: the notes describe `main`.
+- **The finding:** the `[0.2.0]` section was last edited 2026-07-26 by #51. Thirty PRs merged
+  after that (**#54–#84**, plus docs #52/#53/#65) and **none** were documented — the release notes
+  described a version two months of work out of date. Separately the heading read
+  `## [0.2.0] — 2026-07-27`, but **v0.2.0 is not tagged** (`git tag` → only `v0.1.0`), so it
+  claimed a release date for a release that never happened. `RELEASING.md:28` is explicit that the
+  heading stays `## [Unreleased] — X.Y.Z` until the bump PR stamps the date, so #50 retitled it
+  early. Retitled back to `## [Unreleased] — 0.2.0`; the release step now works as written.
+- **Changed:** `CHANGELOG.md` only, +150/−1. New bullets in all four subsections, in the
+  section's existing voice (user-facing, no PR numbers — the mapping lives here and in the PR
+  body). *Added* (16): resume + mark-watched (#81/#83), artwork disk cache (#84), library view
+  modes (#79), themes (#80), overscan calibration (#78), screensaver (#59), audio output switcher
+  (#58), sleep timer (#68), phone remote (#69), parental PIN (#56+#61), update check (#67),
+  config backup/restore (#64), `[launch_overrides]` (#62), `[input]` (#66), `doctor`/`logs`
+  (#54/#55), `docs/ARCHITECTURE.md` (#57). *Changed* (5): the `OVERLAYS` input-router
+  unification + `+page.svelte` decomposition (#77/#74/#75/#76), table-driven settings (#60), icon
+  windowing + derived clamps + quote-aware argv (#72), pooled X11 connection (#71), Jellyfin
+  server re-resolve + `config_version` (#70). *Fixed* (1): spawn-error mapping (#63). *Security*
+  (6): `X-Emby-Token` header instead of `api_key` query param (#70), PIN IPC mask +
+  `set_locked_categories` (#61), `get_artwork` gated by `url_within_base` (#84), enumerated-sink
+  validation (#58), credentials excluded from backups + the remote's constant-time token
+  (#64/#69), and the `argon2` dependency note (#61).
+- **Verification discipline (docs can be wrong silently — grep, don't recall):** every config key,
+  command and module name asserted in the new text was checked against the tree before it shipped
+  — `art_cache_mb`, `guide_hold_ms`, `session_hotkeys`, `launch_overrides`, `overscan_pct`,
+  `check_updates`, `locked_categories`, `config_version`, `[appearance]`, `set_locked_categories`,
+  `has_pin`, `url_within_base`, `get_artwork`, `X-Emby-Token`, `--http-header-fields`, and the
+  `src/lib/components/` + `src/lib/themes/` files (#78/#79/#80 put them in subdirectories, not
+  `src/lib/` — the PR bodies' paths would have been wrong if copied). The "only new runtime
+  dependency" claim was verified by diffing the manifests over the window
+  (`git diff 43d7c45..HEAD -- src-tauri/Cargo.toml package.json`) → `argon2` alone.
+- **Verify:** bun run check (**pass**, 369 files, 0 errors / 0 warnings) · bun run build
+  (**pass**) · bun run test (**47 pass**, 6 files). Rust untouched, so clippy/cargo test don't
+  apply — the branch is at main's tip (`487bd4d`) otherwise. No CI job reads `CHANGELOG.md`
+  (checked `ci.yml`; the version-sync job compares only the five version *sources*), so the
+  `[Unreleased]` retitle can't break a gate. No new deps, no version change, no bindings churn.
+- **Outcome:** shipped to draft PR. Docs-only, zero runtime risk.
+- **Next candidate:** **the couch pass** is now the only thing between here and a 0.2.0 tag —
+  everything else is written. It is the one thing an agent cannot do: the `needs-hardware` items
+  have stacked up (#77 input layer, #78 overscan on the actual TV, #79 view modes, #81 resume
+  landing on the right frame, #83 the ✓ surviving a reopen against a live Jellyfin, #84 the
+  second-launch art pop-in disappearing). Capture it in a dated `NOTES-COUCHTEST-*.md`. Then
+  RELEASING.md §1 (retitle `[Unreleased]` → `[0.2.0] — <date>`, `.SRCINFO`) and §2 (tag).
+  If another agent-shippable increment is wanted first: #81's five review follow-ups, cheapest
+  first (`parse_backup`'s remaining normalize gap), or #83's logged follow-ups (an
+  `omnideck watched <id> [--un]` CLI subcommand would make the #85 transport fixes observable
+  headlessly). Still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware).
+
+## 2026-08-23 — Browse rows classified by the server's `IsFolder`, not a five-name allowlist
+- **Vision tie:** VISION §3 (polish on already-shipped surfaces) and the media-server track.
+  Not a new feature — closing a **latent correctness gap** #83's five-angle review found and
+  logged rather than fixed, and which the 2026-08-22 entry listed as an agent-shippable
+  alternative to the couch pass.
+- **Branch / PR:** `loop/night-20260823` — https://github.com/atiner117/omnideck/pull/88
+- **Open-PR inventory:** **3 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `3`. That is the complete list, not a subset: **#85** `fix/review-20260821`
+  (P0/P1 fixes from the five-angle review), **#86** `loop/night-20260821` (0.2.0 changelog
+  top-off), **#87** `loop/night-20260822` (`omnideck watched <id>`). Checked all three file
+  lists before choosing: **none touches `src/lib/mediarow.ts` or `src/lib/medianav.svelte.ts`**,
+  so this is not a duplicate and not a collision on the frontend half.
+- **The bug:** `BROWSE_KINDS` was an allowlist of five `Type` names, so any container kind
+  Jellyfin returns that isn't in it — `MusicAlbum`, `Playlist`, `UserView`, `AggregateFolder`,
+  anything upstream adds later — fell through as **playable**. Two consequences: Enter handed a
+  folder id to the play path instead of drilling in, and the row passed `toggleWatched`'s
+  `!r.browse` gate, so **W offered to mark a whole container watched** — which clears every
+  child's resume point with no undo. That is exactly what `toggleWatched`'s own doc comment
+  says must never be reachable from one un-confirmed press. Latent today only because v1
+  filters library views to `movies|tvshows|homevideos`; nothing structural was holding it.
+- **Changed:** `media_server.rs` — `MediaItem.is_folder: Option<bool>` from
+  `BaseItemDto.IsFolder`, mapped in `items_of`. `mediarow.ts` — new `isBrowse(i)`:
+  `i.is_folder ?? BROWSE_KINDS.has(i.kind)`. **`??` not `||` on purpose** — `false` is a real
+  server answer and must survive, `null` is the unknown one. `medianav.svelte.ts` calls it in
+  `row()`. `BROWSE_KINDS` stays, demoted to the fallback and widened to the container kinds
+  Jellyfin can actually return. Bindings regenerated (`MediaItem.ts`).
+- **Why this can't regress:** if the server sends `IsFolder` we use its own answer; if it
+  doesn't, `None` → the name-list path, i.e. **today's exact behaviour**. Worst case is the
+  status quo, never worse. The widened fallback then narrows the gap even on a response with
+  no `IsFolder`.
+- **Verify:** `bun run check` **369 files, 0 errors / 0 warnings** · `bun run build` **pass** ·
+  `bun run test` **50/50** (47 before, +3) · `cargo clippy --release --all-targets -D warnings`
+  **clean** · `cargo test --release` **109 pass / 1 ignored**. Bindings: re-exported and
+  `diff -rq` against `src/lib/bindings` is identical, so CI's clean-diff check passes. No new
+  deps. No a11y/perf/security surface touched (one `??` in an existing pure function).
+- **Not verified — be honest about this:** `IsFolder` was **not** confirmed against Andrew's
+  live Jellyfin. Web search (searxng) and the live-config/`cargo run` probes were both
+  unavailable in this session's permission set, so the claim "Jellyfin populates IsFolder" rests
+  on the API shape, not on an observed response. This is why the fallback exists and why the
+  field is `Option<bool>` — **if the assumption is wrong the code degrades to the old
+  behaviour instead of misclassifying.** One `cargo run -- mediasrv` against the real server
+  would upgrade this from "safe either way" to "confirmed working".
+- **Merge-order note:** branched off `main` (`487bd4d`), so it contains neither #86 nor #87.
+  Two things to expect: (1) this file — #86 and #87 also prepend here, so a trivial conflict is
+  likely; **keep all entries**. (2) **A semantic, non-textual conflict with #87:** that branch
+  adds two `MediaItem { … }` literals in `cli.rs` (~427 and ~442) for its `watched` tests. They
+  predate `is_folder`, so whichever of #87/#88 merges second, `cargo check` will fail with
+  "missing field `is_folder`" until each literal gets `is_folder: None`. Git will not flag it —
+  the two branches touch different files. Two lines, but it will not show up until build.
+- **Outcome:** shipped to draft PR #88. Additive; the only behaviour change is that containers
+  the old list missed now drill down instead of being offered as playable.
+- **Next candidate:** still **the couch pass** — unchanged as the top item and still the one
+  thing an agent cannot do (`needs-hardware` stacked across #77/#78/#79/#81/#83/#84; capture in
+  a dated `NOTES-COUCHTEST-*.md`), and still the only thing between here and the 0.2.0 tag.
+  Agent-shippable alternatives, now one shorter: #81's `parse_backup` normalize gap (**note it
+  collides with #85, which touches `config.rs` — check that diff first**); making shared-retry
+  idempotency a mechanism rather than prose (opt-in per call site) before anything
+  non-idempotent joins `send()`; or the *server-side* half of tonight's fix — `set_played` still
+  trusts its caller not to hand it a container id, so a Rust-side `Type`/`IsFolder` check would
+  make the playable-only rule real instead of TS-only. Still loose: #39's `0dabfea` (L2/R2
+  synthesis, needs-hardware).
+
+## 2026-08-24 — The playable-only watch-state rule becomes a rule: enforced in `set_played`
+- **Vision tie:** VISION §3 (polish on already-shipped surfaces) and the media-server track.
+  Not a new feature — closing the **last unfixed correctness follow-up** from #83's five-angle
+  review, which logged it rather than fixing it, and which the 2026-08-23 entry named as the
+  best agent-shippable item after the couch pass.
+- **Branch / PR:** `loop/night-20260824` — https://github.com/atiner117/omnideck/pull/89
+- **Open-PR inventory:** **4 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `4`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821` (0.2.0 changelog), **#87** `loop/night-20260822` (`omnideck watched
+  <id>`), **#88** `loop/night-20260823` (browse rows by `IsFolder`). All four report
+  `baseRefOid=487bd4d3`, which is also main's tip — **main has not moved since 2026-08-19**, so
+  nothing has merged and every draft is still outstanding. Checked all four file lists before
+  choosing; none touches `set_played`'s body or `played_request`.
+- **Roadmap doc is stale — don't pick from it cold.** `NOTES-DEEPDIVE-ROADMAP.md` (dated
+  2026-07-05) still lists parental controls (#2), the audio switcher (#3) and the update manager
+  (#4) as unbuilt. #85's file list contains `pin.rs`, `audio.rs` and `update.rs`. All three are
+  **done**; the doc is gitignored and was never refreshed. This is the exact trap the loop
+  contract warns about, now confirmed a second time — treat open-PR titles as outranking it.
+- **The gap:** the "only a single playable item may be marked watched" rule lived **only in the
+  frontend row model**. So it was a convention, not a rule — `cli.rs` (and #87 adds exactly such
+  a caller), a new Tauri command, or any future Rust code could hand a series/season/library-view
+  id straight to `PlayedItems`. Jellyfin then clears the server-side resume point of **every
+  child**; un-marking restores the `Played` flag but never the positions. That is the only
+  irreversible operation in the whole media client, and its guard was one layer away from the
+  code that performs it.
+- **Changed:** `media_server.rs` only. New pure `is_container(&Value)` beside `played_request` —
+  split out for the same reason that one was, so the rule is unit-testable without a live
+  server. It reads the server's own `IsFolder` and falls back to a `CONTAINER_KINDS` `Type`
+  name-list **only when the field is absent**: a nested `match`, deliberately **not an `||`**
+  over both sources, because `IsFolder: false` is a real answer that must beat a stale list
+  entry. `set_played` probes `GET /Users/{user}/Items/{id}` and refuses a container before
+  issuing the mutating verb, naming the `Type` in the error.
+- **Trade-offs, stated rather than buried:** (1) **one extra LAN round-trip per toggle** — paid
+  deliberately for the only irreversible call we make; it is not on the rAF/input path, so
+  NOTES-PERFORMANCE is unaffected. (2) **Fails closed** if the probe errors — costs no behaviour
+  we would otherwise have had, since a server that can't answer the GET wouldn't have applied
+  the POST. (3) **Unknown → allow**, so a server sending neither field keeps today's behaviour
+  instead of losing a legitimate toggle.
+- **Verify:** `cargo clippy --all-targets -D warnings` **clean** · `cargo test --release`
+  **110 pass / 0 fail / 1 ignored** (+1 new) · `bun run check` **369 files, 0 errors / 0
+  warnings** · `bun run build` **pass** · `bun run test` **47/47**. No new deps. No
+  `#[ts(export)]` struct changed, so `src/lib/bindings/` is untouched and CI's clean-diff check
+  is unaffected. `git status` showed exactly one modified file before the commit.
+- **Not verified — be honest about this:** not exercised against the live Jellyfin (no
+  `cargo run -- mediasrv` or network probe in this session's permission set), so
+  `/Users/{userId}/Items/{itemId}` and `IsFolder` rest on the documented API shape, not an
+  observed response. Note the failure direction: because this **fails closed**, a wrong route
+  would make toggles *stop working*, not misfire — visible immediately, never silently
+  destructive. One `omnideck watched <id>` run (#87) against the real server settles it.
+- **Merge-order note:** branched off `main` (`487bd4d`) — contains none of #85–#88. Expect a
+  trivial conflict in **this file** (#86/#87/#88 all prepend here too); **keep all entries**.
+  The `media_server.rs` overlap should be textually clean — this touches only `set_played`'s
+  body and adds a helper after `played_request`. **#88 overlaps semantically, not textually:**
+  it applies the same `IsFolder`-first idea to the frontend row model. Complementary — TS stops
+  the UI offering the action, this stops the backend performing it — but if both land,
+  `BROWSE_KINDS` (TS) and `CONTAINER_KINDS` (Rust) become two copies of the same fallback
+  knowledge.
+- **Outcome:** shipped to draft PR #89. Additive; the only behaviour change is that a container
+  id now returns an error instead of silently wiping child resume points.
+- **Next candidate:** still **the couch pass** — unchanged as the top item, still the only thing
+  an agent cannot do (`needs-hardware` now stacked across #77/#78/#79/#81/#83/#84/#88/#89), and
+  still the only thing between here and the 0.2.0 tag. **Worth flagging plainly: four green
+  drafts are now queued behind a review that hasn't happened, and main hasn't moved in five
+  days — the bottleneck is merging, not building.** Agent-shippable alternatives if that stays
+  blocked: #81's `parse_backup` normalize gap (**collides with #85's `config.rs` — read that
+  diff first**); making shared-retry idempotency a mechanism rather than prose (opt-in per call
+  site) before anything non-idempotent joins `send()`; de-duplicating the two container-kind
+  lists once #88 and #89 have both landed. Still loose: #39's `0dabfea` (L2/R2 synthesis,
+  needs-hardware).
+
+## 2026-08-26 — Close the two fail-open gaps in the shared HTTP fetch path (`icons.rs` + `http.rs`)
+- **Vision tie:** VISION §3 (quality bars) and `NOTES-SECURITY.md`. Not a new feature — the last
+  two *security-shaped* leftovers of the 2026-08-21 five-angle review, whose P0/P1 set #85
+  landed and whose P2/P3 set nobody has touched since.
+- **Branch / PR:** `loop/night-20260826` — https://github.com/atiner117/omnideck/pull/90
+- **Open-PR inventory:** **5 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `5`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`. All five report `baseRefOid=487bd4d3` — **main has not moved since
+  2026-08-19, now seven days.** Pulled all five *file lists* (23+6+5+2+2) before choosing and
+  keyword-searched the full inventory for `ssrf` / `icons` / `favicon` / `http`: only #86 matched
+  (changelog prose). **No open PR touches `http.rs` or `icons.rs`** — that absence claim rests on
+  the complete set, both ways.
+- **Local `main` was stale again** (`dfdfa32`, PR #48 era) — the documented trap. Branched from
+  the *fetched* main SHA `487bd4d3` taken from the PRs' `baseRefOid`, not from `refs/heads/main`.
+  Note for the next agent: `git fetch origin` fails here (SSH wants a yubikey touch); use
+  `gh pr list --json baseRefOid` or the gh-token HTTPS remote to learn where main actually is.
+- **Why this and not the roadmap:** `NOTES-DEEPDIVE-ROADMAP.md` is gitignored and stale (third
+  confirmation). `NOTES-CODE-REVIEW-2026-08-21.md` is *committed, dated, and cross-verified*, and
+  its P2/P3/test-gap sections are a far better backlog for a cold agent. **Next iterations should
+  pick from it.** Ranked leftovers there, all still open: lock hygiene (`media_server.rs:150-168`,
+  `update.rs:103,125` raw `.unwrap()` where the tree uses `sync::lock_or_recover`); TOCTOU
+  triple-resolution in `asset.rs`/`get_art`; the `remote.rs` header-cap parser trap; `AudioSink`
+  is the one ts-rs source-of-truth violation; `Modal.svelte:63` `.osk` is the single animated
+  surface without a reduced-motion rule; test gaps ranked `npActions.ts` → `settings-defs.ts` →
+  `themes.ts`/`SleepTimer` → `MediaNav.marking`.
+- **Changed:** two files, one concern — *the SSRF guard must hold on every host we actually fetch,
+  and must not be silently droppable.*
+  1. **`icons.rs`** — `favicon()` gates `host`, then quietly builds candidates for a **second**
+     host, `root_domain(host)`, including a direct `https://{root}/favicon.ico` **fetch** that was
+     never checked. `--app=https://foo.127.1` clears the entry gate (the `foo` label makes the
+     host non-numeric; it also doesn't resolve) and derives `127.1` — an `inet_aton` short form
+     for `127.0.0.1`, so an icon fetch becomes a loopback probe. Needs no crafting either: a
+     public `sub.example.com` whose bare `example.com` resolves internally under split-horizon
+     DNS. The derived domain now gets its own `is_blocked_host_resolved`; a blocked root is never
+     a legitimate icon source, so the **whole** domain is dropped rather than only its direct
+     fetch — no reason to hand an internal hostname to DDG/Google as a query parameter either.
+     (Redirect *hops* were already covered by the client's redirect policy; this is the
+     initial-URL side, for the candidate that never had one.)
+  2. **`http.rs`** — `.build().unwrap_or_default()` failed open on **two** controls at once: a
+     default `reqwest::Client` carries neither the timeout policy nor the SSRF redirect policy.
+     The fallback bought nothing — the only realistic failure is TLS-backend init, where every
+     HTTPS fetch errors anyway, so there was no usable degraded mode being preserved. Now
+     `.expect` with a message naming what it refuses to hand back.
+- **Verify:** `cargo clippy --release --all-targets -- -D warnings` **clean** (debug too) ·
+  `cargo test --release` **110 pass / 0 fail / 1 ignored** (+1 new) · `bun run check` **369 files,
+  0 errors / 0 warnings** · `bun run build` **pass** · `bun run test` **47/47**. `git status`
+  showed exactly the two intended files before the commit. No new deps. No `#[ts(export)]` struct
+  changed, so `src/lib/bindings/` is untouched and CI's clean-diff check is unaffected.
+- **Not verified — be honest about this:** the loopback-probe vector was reasoned from the code
+  plus `inet_aton` short-form semantics and pinned with a **no-IO** unit test
+  (`derived_root_domain_can_escape_the_entry_gate`); it was *not* demonstrated end-to-end against
+  a live listener, which would mean a network fetch inside a test. Failure direction is safe: the
+  fix is fail-closed, so a wrongly-blocked root domain costs one fallback icon candidate, never a
+  wrong fetch.
+- **Outcome:** shipped to draft PR #90. Additive and contained; the only behaviour change is that
+  a root domain resolving somewhere internal stops being fetched.
+- **Next candidate:** **the couch pass is still the top item and still the only thing an agent
+  cannot do** — `needs-hardware` now stacked across #77/#78/#79/#81/#83/#84/#88/#89, and it is
+  still the only thing between here and the 0.2.0 tag. **Say the real bottleneck plainly: six
+  green drafts are queued behind a review that hasn't happened, and main has not moved in seven
+  days. The constraint is merging, not building** — and note that #85/#87/#88/#89 all touch
+  `media_server.rs`, so the conflict cost of the queue grows with every media increment. Tonight
+  deliberately avoided that file for exactly this reason. If the queue stays blocked, the best
+  agent-shippable work is the `NOTES-CODE-REVIEW-2026-08-21.md` P2 list above, preferring items in
+  files no open PR touches: `asset.rs` TOCTOU, `remote.rs` parser, or the `npActions.ts` /
+  `settings-defs.ts` test gaps (pure modules, zero conflict risk). Avoid `media_server.rs`,
+  `config.rs`, `commands.rs`, `+page.svelte` and `Modal.svelte` until the queue drains.
+
+## 2026-08-27 — Close the TOCTOU triple-resolution in the `omnideck://` asset chokepoint
+- **Vision tie:** VISION §3 (quality bars) / `NOTES-SECURITY.md`, via `NOTES-CODE-REVIEW-2026-08-21.md`
+  **P2 — "TOCTOU triple-resolution"**. Continues the previous iteration's explicit instruction:
+  with the merge queue blocked, work the committed review's P2 list, preferring files no open PR
+  touches.
+- **Branch / PR:** `loop/night-20260827` — https://github.com/atiner117/omnideck/pull/91
+- **Open-PR inventory:** **6 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `6`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`. Pulled the full file list of all six
+  before choosing (`gh pr list --json number,files`); the union is `media_server.rs`,
+  `commands.rs`, `remote.rs`, `config.rs`, `switcher.rs`, `watchdog.rs`, `update.rs`, `audio.rs`,
+  `pin.rs`, `http.rs`, `icons.rs`, `+page.svelte`, `Modal.svelte`, `LauncherForm.svelte`,
+  `AudioOutputModal.svelte`, `medianav.svelte.ts`, `mediarow.ts`, `CHANGELOG.md`, packaging, and
+  the NOTES-*. **`asset.rs` is in none of the six** — that absence claim rests on the complete
+  set, checked file-by-file, not on a keyword search.
+- **Main still has not moved.** All six PRs report `baseRefOid=487bd4d3`, unchanged since
+  2026-08-19 — now **eight days**. Local `refs/heads/main` is still stale (`dfdfa32`, PR #48 era);
+  branched from the fetched `487bd4d` taken from `baseRefOid`, per the documented trap. `git fetch
+  origin` still can't run here (SSH wants a yubikey touch).
+- **Why this one:** #90's next-candidate note ranked the remaining P2 items by conflict risk and
+  named exactly three safe picks — `asset.rs` TOCTOU, the `remote.rs` parser, and the
+  `npActions.ts`/`settings-defs.ts` test gaps. `remote.rs` turned out to be in #85's diff, so it
+  was out. Between the `asset.rs` fix and the test gaps, the fix is the higher-value one: it's a
+  real security-shaped defect in the single chokepoint for every art request, and it's one file.
+- **Changed:** one file, one concern — `src-tauri/src/asset.rs`.
+  `resolve_and_read()` resolved the requested path **three separate times**: `canonicalize()`,
+  then `metadata()`, then `read()`. Every allowlisted root is a user-writable cache dir
+  (SteamGridDB art, artwork cache, downscaled wallpapers), so the inode that cleared the root /
+  extension / size gates was not necessarily the inode whose bytes got served. Now the open
+  happens first and each check interrogates that descriptor: new `fd_path()` reads
+  `readlink("/proc/self/fd/N")` for the path the kernel actually resolved (`..`/symlinks already
+  collapsed) and feeds the root-allowlist + MIME gates; `f.metadata()` is an `fstat(2)` on the
+  same handle and **now also rejects non-regular files**, which the path-based check never did;
+  the bytes come off that fd, `take(MAX_BYTES)`-capped so an append after the fstat can't overrun
+  the cap. Linux-only via `/proc`, matching `proc.rs`/`switcher.rs`. No new deps. No
+  `#[ts(export)]` struct touched → `src/lib/bindings/` untouched, CI's clean-diff check
+  unaffected. `git status` showed exactly the one intended file before the commit.
+- **Deliberately half-done, and why:** the same P2 item also names `commands.rs:63-86` (`get_art`),
+  which has the identical canonicalize→metadata→read shape. `commands.rs` is in **#85**'s diff, so
+  fixing it tonight would put a conflict into the queue. Deferred until #85 lands — it is the
+  natural follow-up and the fix is a copy of this one.
+- **Verify:** `cargo clippy --release --all-targets -- -D warnings` **clean** (debug profile too) ·
+  `cargo test --release` **111 pass / 0 fail / 1 ignored** (+2 new) · `bun run check` **369 files,
+  0 errors / 0 warnings** · `bun run build` **pass** · `bun run test` **47/47**.
+- **Not verified — be honest:** the swap window was reasoned from the code and closed
+  structurally; it was *not* demonstrated with a live racing writer against a cache dir. Failure
+  direction is safe — every new check is fail-closed, so a wrongly-rejected file costs one 404'd
+  art request, never a wrong read.
+- **Residual, logged not fixed:** `File::open` on a FIFO planted in a cache dir blocks until a
+  writer appears. Pre-existing (the old code hit it inside `fs::read`) and unchanged here; closing
+  it needs `O_NONBLOCK` via `libc`/`rustix` — a new dependency, out of scope for one increment.
+- **Outcome:** shipped to draft PR #91.
+- **Next candidate:** **the bottleneck is still merging, not building — say it plainly.** Seven
+  green drafts are now queued behind a review that hasn't happened, and main is eight days cold;
+  the couch pass (`needs-hardware`, stacked across #77/#78/#79/#81/#83/#84/#88/#89) remains the
+  only thing an agent cannot do and the only thing between here and the 0.2.0 tag. Every media
+  increment raises the conflict cost of the queue, so keep avoiding `media_server.rs`,
+  `commands.rs`, `config.rs`, `remote.rs`, `+page.svelte`, `Modal.svelte`. Remaining zero-conflict
+  work from `NOTES-CODE-REVIEW-2026-08-21.md`: the **`npActions.ts` test gap** (ranked #1, pure and
+  branchy, feeds two surfaces whose drift is its reason to exist) then **`settings-defs.ts`** (282
+  lines, zero tests), then `themes.ts` cycle-wrap / `SleepTimer`'s `formatRemaining`/`endsAt`.
+  Lock hygiene (`sync::lock_or_recover` in `media_server.rs`/`update.rs`) and the `AudioSink`
+  ts-rs violation both sit in queued files — **don't**.
+
+## 2026-08-28 — Cover `npActions.ts`: the #1-ranked test gap, and zero conflict with the queue
+- **Vision tie:** VISION §3 (quality bars) via `NOTES-CODE-REVIEW-2026-08-21.md` →
+  **Test-coverage gaps, item 1**: "`npActions.ts` — pure, branchy, feeds two surfaces whose drift
+  is its stated reason to exist." This is the exact pick the 2026-08-27 entry left as its
+  next candidate, and it still made sense, so it was taken unchanged.
+- **Branch / PR:** `loop/night-20260828` — https://github.com/atiner117/omnideck/pull/92
+- **Open-PR inventory:** **7 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `7`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827` (last
+  night's asset.rs TOCTOU fix). Pulled the full file list of all seven (`gh pr list --json
+  number,files`) before choosing. **`npActions.ts` is in none of the seven** — that absence claim
+  rests on the complete set, checked file-by-file, not on a keyword search.
+- **Main still has not moved.** All seven PRs report `baseRefOid=487bd4d3` — unchanged since
+  2026-08-19, now **nine days**. Branched from that fetched SHA per the documented stale-local-ref
+  trap. Two caveats, stated honestly: `git fetch origin` still can't run here (SSH wants a yubikey
+  touch), and the `gh api .../commits/main` cross-check was **denied by the permission prompt**,
+  so main's tip is corroborated *indirectly* — by seven independent PRs agreeing on the same base
+  — rather than read directly.
+- **Changed:** one new file, `src/lib/npActions.test.ts` (18 tests). `npActions.ts` itself is
+  **byte-identical to main** — `git diff` against it is empty; this increment is test-only.
+  Pinned: the gating (transport only with MPRIS metadata; ⇄ only for `kind === "app"` **and**
+  `inSession`; close only for `"app"`; ✕ suppressed on the synthetic unlaunched-media card, which
+  owns no launch id to dismiss), the render order both surfaces depend on, the `run()` call
+  arguments incl. `switchApp` receiving *this* card's id (the original drift), the `after` hook
+  (fires on the three terminal actions, never on transport, fires even when the IPC **rejects** so
+  the overlay can't stick open on a backend error, and is optional — the card stack omits it), and
+  per-path error routing to `onerror`. Backend mocked with `vi.mock("./backend")`, so no Tauri
+  runtime is needed and the node vitest env stays as-is. No new deps.
+- **Mutation-checked, not just green.** A passing new test file proves nothing on its own, so two
+  deliberate mutations were applied and reverted: `api.switchApp(c.id)` → `api.switchApp()`, and
+  replacing the `c.kind !== "media"` dismiss guard with `if (true)`. Each failed **exactly one**
+  intended test (`2 failed | 63 passed`), then the source was restored and confirmed clean.
+- **One real snag, worth remembering:** the first draft was green on `bun run test` but **failed
+  `bun run check` with 19 errors** — `ReturnType<typeof vi.fn>` erases the callback signature, so
+  the mocks didn't satisfy `cardActions`' options parameter. Fixed by deriving the types from the
+  function under test (`type Opts = Parameters<typeof cardActions>[1]`, then `Mock<Opts["onerror"]>`
+  / `vi.fn<Opts["onerror"]>()`). **`bun run test` passing is not the gate — CI runs `check` too.**
+- **Verify:** `bun run check` **pass** (370 files, 0 errors / 0 warnings) · `bun run build`
+  **pass** · `bun run test` **pass, 65/65** (was 47; +18) · `cargo check` / `cargo clippy` **n/a**,
+  no Rust touched · ts-rs bindings **n/a**, no `#[ts(export)]` struct touched, so CI's
+  clean-`src/lib/bindings` diff check is unaffected.
+- **Outcome:** shipped to draft PR #92.
+- **Next candidate:** **the bottleneck is the merge queue, not the build — this is now the third
+  night in a row saying so.** Eight green drafts (#85–#92) are stacked behind a review that hasn't
+  happened and a couch pass (`needs-hardware`, across #77/#78/#79/#81/#83/#84/#88/#89) that no
+  agent can do; main is nine days cold and that couch pass is the only thing between here and the
+  0.2.0 tag. If the next iteration finds main *still* at `487bd4d`, consider stopping the loop and
+  saying so plainly rather than deepening the stack — each increment raises the queue's conflict
+  cost. If it continues: keep avoiding `media_server.rs`, `commands.rs`, `config.rs`, `remote.rs`,
+  `http.rs`, `icons.rs`, `asset.rs`, `+page.svelte`, `Modal.svelte`. Remaining zero-conflict work
+  from the committed review, in order: **`settings-defs.ts`** (282 lines of cycle/normalize/visible
+  predicates, zero tests — same shape as tonight, and the next-largest untested pure module), then
+  `themes.ts` cycle-wrap / unknown-id restart, then `SleepTimer`'s `formatRemaining`/`endsAt`, then
+  the `MediaNav.marking` re-entrancy guard. Still **don't** touch lock hygiene
+  (`sync::lock_or_recover`) or the `AudioSink` ts-rs violation — both sit in queued files. The
+  `commands.rs:63-86` `get_art` TOCTOU twin of last night's `asset.rs` fix remains deferred behind
+  #85 for the same reason.
+
+## 2026-08-29 — Playwright screenshot harness; self-hosted Inter; contain-intrinsic-size corrections
+- **Not a loop iteration** — interactive session with Andrew. Logged here anyway because the
+  two findings below are traps the next cold agent would otherwise re-discover the hard way.
+- **Vision tie:** "I haven't had time to test" — CLAUDE.md §Verify. This adds the missing rung
+  between the vitest unit tests and `packaging/test-session.sh`: the whole frontend, driven in a
+  real browser, no TV/controller/Rust build.
+- **Branch / PR:** `feat/e2e-screenshot-harness` — see PR link in the commit trailer / gh.
+- **Changed:**
+  - `e2e/` + `playwright.config.ts` — mock Tauri IPC (`window.__TAURI_INTERNALS__` installed via
+    `addInitScript`, so no production code changes), fixtures typed against the ts-rs bindings via
+    a `Wire<T>` mapped type (bigint→number), and a 16-shot tour of the grid/rail/list/modals.
+    Runs chromium + webkit; `e2e/install-webkit-deps.sh` makes webkit start on Arch.
+  - `static/fonts/` + `src/lib/fonts.css` — Inter was named in the CSS but never shipped.
+  - `ListView.svelte` / `GridView.svelte` — `contain-intrinsic-size` corrections (below).
+- **Verify:** `bun run check` pass (0 errors / 370 files) · `bun run test` pass · `bun run build`
+  pass · `bun run check:e2e` pass · 16/16 screenshots on both engines. Rust untouched.
+
+### Trap 1 — `contain-intrinsic-size` is a CONTENT box, not a border box
+Measuring a row with `getBoundingClientRect()` and pasting that number in **over-states it by the
+element's padding**, which the UA then adds on top again. I shipped exactly that mistake on `.lrow`
+(`calc((2.6rem + 0.7rem) * scale)`, padding included) and made the scroll extent **+17.8%** wrong —
+four times worse than the flat `64px` it replaced (−4.3%). Correct value is the content box alone —
+the thumbnail, `calc(2.6rem * var(--scale, 1))` — now −0.9%..−1.6% across all four UI scales in both
+engines. If you touch this property, the number you want is *not* the one dev-tools shows you.
+
+### Trap 2 — a 15-row fixture cannot test `content-visibility` at all
+`content-visibility: auto` only skips content outside the viewport **plus a generous margin**, so
+with the default fixture library (15 rows) nothing is ever skipped and the intrinsic size is never
+consulted. Every variant then measures identical, which reads as "my change is fine" — it is
+measuring nothing. **Verification method: rebuild the fixture with ~500 games and compare
+`.lwrap`/`.gwrap` `scrollHeight` against a control that forces `content-visibility: visible`.**
+That is the only way the property engages. This is also how `.gtile` was settled: at 500 tiles,
+ground truth / no declaration / a deliberately wrong value all produce an identical scroll extent,
+because a `1fr` grid track gives a definite width and `aspect-ratio` derives the height — so its
+`240px` was inert, and was removed rather than "corrected".
+
+### Also found, not fixed
+- **Buttons never inherited the app's font.** UA stylesheets hard-set a font on form controls, and
+  nearly every surface here is a `<button>` (rail tiles, grid tiles, list rows, deck cards). Only
+  `Modal.svelte`/`PinModal` set `font: inherit` locally. Fixed globally in `fonts.css` — but note
+  this means every screenshot taken before today shows the *wrong typeface*.
+- `ScreensaverOverlay` renders outside `<main>`, so it still doesn't get the font stack (the
+  `font-family` lives on `main`, not `:root`). Untouched — no screenshot covers it.
+- `03-games-rail-scrolled` has ~0.002% run-to-run pixel noise (rail transform still settling).
+  Harmless for review shots, but it must be fixed before these become `toHaveScreenshot()` baselines.
+- **Next candidate:** move `font-family` from `main` to `:root`, then wire the e2e run into
+  `ci.yml` as its own job (Ubuntu runners need no ICU workaround, so webkit works there natively).
 
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
@@ -1099,6 +1583,58 @@ Entry template:
   power/quick menu?), routes dpad focus with the exported `SLEEP_PRESETS` clamp, and dims the
   screen on `sleep-timer-fired` — pairs naturally with the #18/#29 screensaver overlay.
 
+## 2026-07-13 01:55 — theme system: 6 built-in themes over the design tokens (round-2 Lane A)
+- **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane A (theme system on the #16 tokens);
+  VISION.md priority 3 (polish on shipped surfaces) + a11y bar (High Contrast theme,
+  motion-free CRT scanlines).
+- **Branch / PR:** `loop/fable-themes-20260712-212059` —
+  https://github.com/atiner117/omnideck/pull/41 (draft, base `loop/fable-integration-page-20260712`)
+- **Changed:** new `src/lib/themes/` (registry + `applyTheme()` in themes.ts; per-theme
+  `:root[data-theme]` token blocks in themes.css — OmniDark default, OLED Black, Light,
+  High Contrast, Retro CRT w/ static scanlines, Deck). Gamepad-cyclable "Theme" row in the
+  table-driven Appearance settings section. `+page.svelte` wiring only: `$effect` applies the
+  theme; page background follows `var(--bg)` unless a custom background_color is set.
+  `config.rs`: additive `settings.theme` (serde default, whitelist-normalized, tests) +
+  regenerated bindings. Accent override = the existing `settings.accent`, untouched.
+  NOTE: cherry-picked #16 tokens commit `9fe9d89` onto this branch — backlog said the tokens
+  were in the page integration branch but they only landed in the backend one.
+- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · cargo check (pass, via
+  clippy) · cargo clippy (pass) · cargo test (pass, 40)
+- **Next candidate:** Lane D (layout/view modes) shares the Appearance section — its
+  `appearance.layout` row should follow the same settings-defs pattern. Also: delete the
+  Light-theme page shim in themes.css once +page.svelte adopts the tokens.
+
+## 2026-07-13 00:00 — audit run: backlog exhausted, tracked VISION.md/night-log.md in git
+- **Vision tie:** loop-continuity infra (VISION.md guardrail: "if nothing is safely shippable,
+  log that and stop rather than inventing scope").
+- **Branch / PR:** `loop/fable-trackdocs-20260712-200008` — draft PR against
+  `feat/media-audio-fps-config` (see PR list for URL).
+- **Changed:** No product code. Audited `gh pr list` (30 open drafts) against
+  `NOTES-REVIEW-DEEP-2026-07-11.md` (26 items) and `NOTES-DEEPDIVE-ROADMAP.md` (5 numbered
+  features): **every named item already has an open draft PR**, including the two
+  "integration" branches (`loop/fable-integration-20260712`,
+  `loop/fable-integration-page-20260712`) that already consolidate the overlapping small
+  branches into two green super-branches (see `NOTES-FABLE-LANDING-2026-07-12.md` for the
+  landing order). Review #26 (consolidate NOTES) is gitignore-moot
+  (`NOTES-*.md`/`NOTES.md` are in `.gitignore`); its only actionable part
+  (`docs/ARCHITECTURE.md`) already shipped in `loop/fable-archdoc-160138`. Remaining
+  parking-lot roadmap items are each blocked or too risky to ship unattended: guide-button
+  chord *remap* was explicitly deferred by `loop/fable-input-153828`'s own commit (hold-ms +
+  kill-switch shipped; full keysym remap needs more plumbing); HDR signaling has no verifiable
+  detection surface on this box (`gpu.rs` only reads RandR mode, not gamescope HDR state);
+  Steam family-view is gated on parental controls (#2), which is drafted but not merged;
+  cloud sync is explicitly "niche, defer" in the roadmap. One real gap found and fixed:
+  `VISION.md` and this file were **never committed on any branch** (pure untracked
+  working-tree files) — now tracked so the loop's compass/journal survive a fresh clone or a
+  worktree reset.
+- **Verify:** bun run check (n/a, docs-only) · bun run build (n/a, docs-only) · cargo check
+  (n/a, docs-only) · cargo clippy (n/a, docs-only) — no source files touched.
+- **Outcome:** shipped to draft PR (docs-only).
+- **Next candidate:** **not more code** — the safely-shippable backlog is exhausted. The
+  bottleneck is now landing debt: 30 open draft PRs need human triage/merge (start with the
+  two integration branches per `NOTES-FABLE-LANDING-2026-07-12.md`'s rebase order). Only after
+  that lands does it make sense to revisit the higher-risk parking-lot items flagged above.
+
 ## 2026-07-12 21:55 — Library view modes: rail / large grid / compact grid / list (round-2 Lane D)
 - **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane D (layout/view options); VISION
   controller-first ergonomics — one presentation was the launcher's biggest visual gap.
@@ -1171,58 +1707,6 @@ Entry template:
 - **Next candidate:** integration pass mounts ContinueWatchingRow on the home screen (+ input-
   router focus), then Lane C (artwork disk cache / startup perf) is the last untouched backend
   lane. Couch-test resume against the real Jellyfin before promoting #42.
-
-## 2026-07-13 01:55 — theme system: 6 built-in themes over the design tokens (round-2 Lane A)
-- **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane A (theme system on the #16 tokens);
-  VISION.md priority 3 (polish on shipped surfaces) + a11y bar (High Contrast theme,
-  motion-free CRT scanlines).
-- **Branch / PR:** `loop/fable-themes-20260712-212059` —
-  https://github.com/atiner117/omnideck/pull/41 (draft, base `loop/fable-integration-page-20260712`)
-- **Changed:** new `src/lib/themes/` (registry + `applyTheme()` in themes.ts; per-theme
-  `:root[data-theme]` token blocks in themes.css — OmniDark default, OLED Black, Light,
-  High Contrast, Retro CRT w/ static scanlines, Deck). Gamepad-cyclable "Theme" row in the
-  table-driven Appearance settings section. `+page.svelte` wiring only: `$effect` applies the
-  theme; page background follows `var(--bg)` unless a custom background_color is set.
-  `config.rs`: additive `settings.theme` (serde default, whitelist-normalized, tests) +
-  regenerated bindings. Accent override = the existing `settings.accent`, untouched.
-  NOTE: cherry-picked #16 tokens commit `9fe9d89` onto this branch — backlog said the tokens
-  were in the page integration branch but they only landed in the backend one.
-- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · cargo check (pass, via
-  clippy) · cargo clippy (pass) · cargo test (pass, 40)
-- **Next candidate:** Lane D (layout/view modes) shares the Appearance section — its
-  `appearance.layout` row should follow the same settings-defs pattern. Also: delete the
-  Light-theme page shim in themes.css once +page.svelte adopts the tokens.
-
-## 2026-07-13 00:00 — audit run: backlog exhausted, tracked VISION.md/night-log.md in git
-- **Vision tie:** loop-continuity infra (VISION.md guardrail: "if nothing is safely shippable,
-  log that and stop rather than inventing scope").
-- **Branch / PR:** `loop/fable-trackdocs-20260712-200008` — draft PR against
-  `feat/media-audio-fps-config` (see PR list for URL).
-- **Changed:** No product code. Audited `gh pr list` (30 open drafts) against
-  `NOTES-REVIEW-DEEP-2026-07-11.md` (26 items) and `NOTES-DEEPDIVE-ROADMAP.md` (5 numbered
-  features): **every named item already has an open draft PR**, including the two
-  "integration" branches (`loop/fable-integration-20260712`,
-  `loop/fable-integration-page-20260712`) that already consolidate the overlapping small
-  branches into two green super-branches (see `NOTES-FABLE-LANDING-2026-07-12.md` for the
-  landing order). Review #26 (consolidate NOTES) is gitignore-moot
-  (`NOTES-*.md`/`NOTES.md` are in `.gitignore`); its only actionable part
-  (`docs/ARCHITECTURE.md`) already shipped in `loop/fable-archdoc-160138`. Remaining
-  parking-lot roadmap items are each blocked or too risky to ship unattended: guide-button
-  chord *remap* was explicitly deferred by `loop/fable-input-153828`'s own commit (hold-ms +
-  kill-switch shipped; full keysym remap needs more plumbing); HDR signaling has no verifiable
-  detection surface on this box (`gpu.rs` only reads RandR mode, not gamescope HDR state);
-  Steam family-view is gated on parental controls (#2), which is drafted but not merged;
-  cloud sync is explicitly "niche, defer" in the roadmap. One real gap found and fixed:
-  `VISION.md` and this file were **never committed on any branch** (pure untracked
-  working-tree files) — now tracked so the loop's compass/journal survive a fresh clone or a
-  worktree reset.
-- **Verify:** bun run check (n/a, docs-only) · bun run build (n/a, docs-only) · cargo check
-  (n/a, docs-only) · cargo clippy (n/a, docs-only) — no source files touched.
-- **Outcome:** shipped to draft PR (docs-only).
-- **Next candidate:** **not more code** — the safely-shippable backlog is exhausted. The
-  bottleneck is now landing debt: 30 open draft PRs need human triage/merge (start with the
-  two integration branches per `NOTES-FABLE-LANDING-2026-07-12.md`'s rebase order). Only after
-  that lands does it make sense to revisit the higher-risk parking-lot items flagged above.
 
 ## 2026-07-11 (session) — autonomous run over GLM-5.2's deep review
 Branch `loop/night-20260711` (branched off `feat/media-audio-fps-config` for this test run).
