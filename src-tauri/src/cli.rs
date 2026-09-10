@@ -428,6 +428,8 @@ mod tests {
             id: "x".into(),
             name: "Untouched".into(),
             kind: "Movie".into(),
+            // #88 made this field required; this literal was written before it existed.
+            is_folder: None,
             overview: None,
             played_pct: None,
             runtime_mins: None,
