@@ -18,8 +18,9 @@ Entry template:
 
 ---
 
-<!-- entries below -->
 
+
+<!-- entries below -->
 ## 2026-08-22 — `omnideck watched <id> [--un]`: the mark-watched path, headless + verified
 - **Vision tie:** not a feature — the *verification* surface. CLAUDE.md §Verify §3 exists so an
   agent can exercise real backend logic without a TV; `set_played` was the one couch action with
@@ -72,6 +73,63 @@ Entry template:
   rather than prose (opt-in per call site) before anything non-idempotent is added to `send()`;
   or the `BROWSE_KINDS` allowlist gap from #83's review. Still loose: #39's `0dabfea` (L2/R2
   synthesis, needs-hardware).
+
+## 2026-08-21 — 0.2.0 changelog top-off: the 30 PRs merged since 2026-07-26
+- **Vision tie:** not a feature — the release blocker. The last two iterations both named
+  "changelog top-off for 0.2.0 (docs-only)" as the next candidate, and it gates the tag.
+- **Branch / PR:** `loop/night-20260821` — https://github.com/atiner117/omnideck/pull/86
+- **Open-PR inventory:** **1 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `1`: **#85** (`fix/review-20260821`, "close the P0/P1 findings from the
+  2026-08-21 five-angle review"). That is the whole list, not a subset. Searched it for
+  changelog/release keywords before building — #85 is review fixes to #83's transport and resume
+  state, nothing touching CHANGELOG.md or RELEASING.md, so this is not a duplicate. Note #85 is
+  **unmerged**, so its fixes are deliberately *not* in the changelog: the notes describe `main`.
+- **The finding:** the `[0.2.0]` section was last edited 2026-07-26 by #51. Thirty PRs merged
+  after that (**#54–#84**, plus docs #52/#53/#65) and **none** were documented — the release notes
+  described a version two months of work out of date. Separately the heading read
+  `## [0.2.0] — 2026-07-27`, but **v0.2.0 is not tagged** (`git tag` → only `v0.1.0`), so it
+  claimed a release date for a release that never happened. `RELEASING.md:28` is explicit that the
+  heading stays `## [Unreleased] — X.Y.Z` until the bump PR stamps the date, so #50 retitled it
+  early. Retitled back to `## [Unreleased] — 0.2.0`; the release step now works as written.
+- **Changed:** `CHANGELOG.md` only, +150/−1. New bullets in all four subsections, in the
+  section's existing voice (user-facing, no PR numbers — the mapping lives here and in the PR
+  body). *Added* (16): resume + mark-watched (#81/#83), artwork disk cache (#84), library view
+  modes (#79), themes (#80), overscan calibration (#78), screensaver (#59), audio output switcher
+  (#58), sleep timer (#68), phone remote (#69), parental PIN (#56+#61), update check (#67),
+  config backup/restore (#64), `[launch_overrides]` (#62), `[input]` (#66), `doctor`/`logs`
+  (#54/#55), `docs/ARCHITECTURE.md` (#57). *Changed* (5): the `OVERLAYS` input-router
+  unification + `+page.svelte` decomposition (#77/#74/#75/#76), table-driven settings (#60), icon
+  windowing + derived clamps + quote-aware argv (#72), pooled X11 connection (#71), Jellyfin
+  server re-resolve + `config_version` (#70). *Fixed* (1): spawn-error mapping (#63). *Security*
+  (6): `X-Emby-Token` header instead of `api_key` query param (#70), PIN IPC mask +
+  `set_locked_categories` (#61), `get_artwork` gated by `url_within_base` (#84), enumerated-sink
+  validation (#58), credentials excluded from backups + the remote's constant-time token
+  (#64/#69), and the `argon2` dependency note (#61).
+- **Verification discipline (docs can be wrong silently — grep, don't recall):** every config key,
+  command and module name asserted in the new text was checked against the tree before it shipped
+  — `art_cache_mb`, `guide_hold_ms`, `session_hotkeys`, `launch_overrides`, `overscan_pct`,
+  `check_updates`, `locked_categories`, `config_version`, `[appearance]`, `set_locked_categories`,
+  `has_pin`, `url_within_base`, `get_artwork`, `X-Emby-Token`, `--http-header-fields`, and the
+  `src/lib/components/` + `src/lib/themes/` files (#78/#79/#80 put them in subdirectories, not
+  `src/lib/` — the PR bodies' paths would have been wrong if copied). The "only new runtime
+  dependency" claim was verified by diffing the manifests over the window
+  (`git diff 43d7c45..HEAD -- src-tauri/Cargo.toml package.json`) → `argon2` alone.
+- **Verify:** bun run check (**pass**, 369 files, 0 errors / 0 warnings) · bun run build
+  (**pass**) · bun run test (**47 pass**, 6 files). Rust untouched, so clippy/cargo test don't
+  apply — the branch is at main's tip (`487bd4d`) otherwise. No CI job reads `CHANGELOG.md`
+  (checked `ci.yml`; the version-sync job compares only the five version *sources*), so the
+  `[Unreleased]` retitle can't break a gate. No new deps, no version change, no bindings churn.
+- **Outcome:** shipped to draft PR. Docs-only, zero runtime risk.
+- **Next candidate:** **the couch pass** is now the only thing between here and a 0.2.0 tag —
+  everything else is written. It is the one thing an agent cannot do: the `needs-hardware` items
+  have stacked up (#77 input layer, #78 overscan on the actual TV, #79 view modes, #81 resume
+  landing on the right frame, #83 the ✓ surviving a reopen against a live Jellyfin, #84 the
+  second-launch art pop-in disappearing). Capture it in a dated `NOTES-COUCHTEST-*.md`. Then
+  RELEASING.md §1 (retitle `[Unreleased]` → `[0.2.0] — <date>`, `.SRCINFO`) and §2 (tag).
+  If another agent-shippable increment is wanted first: #81's five review follow-ups, cheapest
+  first (`parse_backup`'s remaining normalize gap), or #83's logged follow-ups (an
+  `omnideck watched <id> [--un]` CLI subcommand would make the #85 transport fixes observable
+  headlessly). Still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware).
 
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
@@ -1152,6 +1210,58 @@ Entry template:
   power/quick menu?), routes dpad focus with the exported `SLEEP_PRESETS` clamp, and dims the
   screen on `sleep-timer-fired` — pairs naturally with the #18/#29 screensaver overlay.
 
+## 2026-07-13 01:55 — theme system: 6 built-in themes over the design tokens (round-2 Lane A)
+- **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane A (theme system on the #16 tokens);
+  VISION.md priority 3 (polish on shipped surfaces) + a11y bar (High Contrast theme,
+  motion-free CRT scanlines).
+- **Branch / PR:** `loop/fable-themes-20260712-212059` —
+  https://github.com/atiner117/omnideck/pull/41 (draft, base `loop/fable-integration-page-20260712`)
+- **Changed:** new `src/lib/themes/` (registry + `applyTheme()` in themes.ts; per-theme
+  `:root[data-theme]` token blocks in themes.css — OmniDark default, OLED Black, Light,
+  High Contrast, Retro CRT w/ static scanlines, Deck). Gamepad-cyclable "Theme" row in the
+  table-driven Appearance settings section. `+page.svelte` wiring only: `$effect` applies the
+  theme; page background follows `var(--bg)` unless a custom background_color is set.
+  `config.rs`: additive `settings.theme` (serde default, whitelist-normalized, tests) +
+  regenerated bindings. Accent override = the existing `settings.accent`, untouched.
+  NOTE: cherry-picked #16 tokens commit `9fe9d89` onto this branch — backlog said the tokens
+  were in the page integration branch but they only landed in the backend one.
+- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · cargo check (pass, via
+  clippy) · cargo clippy (pass) · cargo test (pass, 40)
+- **Next candidate:** Lane D (layout/view modes) shares the Appearance section — its
+  `appearance.layout` row should follow the same settings-defs pattern. Also: delete the
+  Light-theme page shim in themes.css once +page.svelte adopts the tokens.
+
+## 2026-07-13 00:00 — audit run: backlog exhausted, tracked VISION.md/night-log.md in git
+- **Vision tie:** loop-continuity infra (VISION.md guardrail: "if nothing is safely shippable,
+  log that and stop rather than inventing scope").
+- **Branch / PR:** `loop/fable-trackdocs-20260712-200008` — draft PR against
+  `feat/media-audio-fps-config` (see PR list for URL).
+- **Changed:** No product code. Audited `gh pr list` (30 open drafts) against
+  `NOTES-REVIEW-DEEP-2026-07-11.md` (26 items) and `NOTES-DEEPDIVE-ROADMAP.md` (5 numbered
+  features): **every named item already has an open draft PR**, including the two
+  "integration" branches (`loop/fable-integration-20260712`,
+  `loop/fable-integration-page-20260712`) that already consolidate the overlapping small
+  branches into two green super-branches (see `NOTES-FABLE-LANDING-2026-07-12.md` for the
+  landing order). Review #26 (consolidate NOTES) is gitignore-moot
+  (`NOTES-*.md`/`NOTES.md` are in `.gitignore`); its only actionable part
+  (`docs/ARCHITECTURE.md`) already shipped in `loop/fable-archdoc-160138`. Remaining
+  parking-lot roadmap items are each blocked or too risky to ship unattended: guide-button
+  chord *remap* was explicitly deferred by `loop/fable-input-153828`'s own commit (hold-ms +
+  kill-switch shipped; full keysym remap needs more plumbing); HDR signaling has no verifiable
+  detection surface on this box (`gpu.rs` only reads RandR mode, not gamescope HDR state);
+  Steam family-view is gated on parental controls (#2), which is drafted but not merged;
+  cloud sync is explicitly "niche, defer" in the roadmap. One real gap found and fixed:
+  `VISION.md` and this file were **never committed on any branch** (pure untracked
+  working-tree files) — now tracked so the loop's compass/journal survive a fresh clone or a
+  worktree reset.
+- **Verify:** bun run check (n/a, docs-only) · bun run build (n/a, docs-only) · cargo check
+  (n/a, docs-only) · cargo clippy (n/a, docs-only) — no source files touched.
+- **Outcome:** shipped to draft PR (docs-only).
+- **Next candidate:** **not more code** — the safely-shippable backlog is exhausted. The
+  bottleneck is now landing debt: 30 open draft PRs need human triage/merge (start with the
+  two integration branches per `NOTES-FABLE-LANDING-2026-07-12.md`'s rebase order). Only after
+  that lands does it make sense to revisit the higher-risk parking-lot items flagged above.
+
 ## 2026-07-12 21:55 — Library view modes: rail / large grid / compact grid / list (round-2 Lane D)
 - **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane D (layout/view options); VISION
   controller-first ergonomics — one presentation was the launcher's biggest visual gap.
@@ -1224,58 +1334,6 @@ Entry template:
 - **Next candidate:** integration pass mounts ContinueWatchingRow on the home screen (+ input-
   router focus), then Lane C (artwork disk cache / startup perf) is the last untouched backend
   lane. Couch-test resume against the real Jellyfin before promoting #42.
-
-## 2026-07-13 01:55 — theme system: 6 built-in themes over the design tokens (round-2 Lane A)
-- **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane A (theme system on the #16 tokens);
-  VISION.md priority 3 (polish on shipped surfaces) + a11y bar (High Contrast theme,
-  motion-free CRT scanlines).
-- **Branch / PR:** `loop/fable-themes-20260712-212059` —
-  https://github.com/atiner117/omnideck/pull/41 (draft, base `loop/fable-integration-page-20260712`)
-- **Changed:** new `src/lib/themes/` (registry + `applyTheme()` in themes.ts; per-theme
-  `:root[data-theme]` token blocks in themes.css — OmniDark default, OLED Black, Light,
-  High Contrast, Retro CRT w/ static scanlines, Deck). Gamepad-cyclable "Theme" row in the
-  table-driven Appearance settings section. `+page.svelte` wiring only: `$effect` applies the
-  theme; page background follows `var(--bg)` unless a custom background_color is set.
-  `config.rs`: additive `settings.theme` (serde default, whitelist-normalized, tests) +
-  regenerated bindings. Accent override = the existing `settings.accent`, untouched.
-  NOTE: cherry-picked #16 tokens commit `9fe9d89` onto this branch — backlog said the tokens
-  were in the page integration branch but they only landed in the backend one.
-- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · cargo check (pass, via
-  clippy) · cargo clippy (pass) · cargo test (pass, 40)
-- **Next candidate:** Lane D (layout/view modes) shares the Appearance section — its
-  `appearance.layout` row should follow the same settings-defs pattern. Also: delete the
-  Light-theme page shim in themes.css once +page.svelte adopts the tokens.
-
-## 2026-07-13 00:00 — audit run: backlog exhausted, tracked VISION.md/night-log.md in git
-- **Vision tie:** loop-continuity infra (VISION.md guardrail: "if nothing is safely shippable,
-  log that and stop rather than inventing scope").
-- **Branch / PR:** `loop/fable-trackdocs-20260712-200008` — draft PR against
-  `feat/media-audio-fps-config` (see PR list for URL).
-- **Changed:** No product code. Audited `gh pr list` (30 open drafts) against
-  `NOTES-REVIEW-DEEP-2026-07-11.md` (26 items) and `NOTES-DEEPDIVE-ROADMAP.md` (5 numbered
-  features): **every named item already has an open draft PR**, including the two
-  "integration" branches (`loop/fable-integration-20260712`,
-  `loop/fable-integration-page-20260712`) that already consolidate the overlapping small
-  branches into two green super-branches (see `NOTES-FABLE-LANDING-2026-07-12.md` for the
-  landing order). Review #26 (consolidate NOTES) is gitignore-moot
-  (`NOTES-*.md`/`NOTES.md` are in `.gitignore`); its only actionable part
-  (`docs/ARCHITECTURE.md`) already shipped in `loop/fable-archdoc-160138`. Remaining
-  parking-lot roadmap items are each blocked or too risky to ship unattended: guide-button
-  chord *remap* was explicitly deferred by `loop/fable-input-153828`'s own commit (hold-ms +
-  kill-switch shipped; full keysym remap needs more plumbing); HDR signaling has no verifiable
-  detection surface on this box (`gpu.rs` only reads RandR mode, not gamescope HDR state);
-  Steam family-view is gated on parental controls (#2), which is drafted but not merged;
-  cloud sync is explicitly "niche, defer" in the roadmap. One real gap found and fixed:
-  `VISION.md` and this file were **never committed on any branch** (pure untracked
-  working-tree files) — now tracked so the loop's compass/journal survive a fresh clone or a
-  worktree reset.
-- **Verify:** bun run check (n/a, docs-only) · bun run build (n/a, docs-only) · cargo check
-  (n/a, docs-only) · cargo clippy (n/a, docs-only) — no source files touched.
-- **Outcome:** shipped to draft PR (docs-only).
-- **Next candidate:** **not more code** — the safely-shippable backlog is exhausted. The
-  bottleneck is now landing debt: 30 open draft PRs need human triage/merge (start with the
-  two integration branches per `NOTES-FABLE-LANDING-2026-07-12.md`'s rebase order). Only after
-  that lands does it make sense to revisit the higher-risk parking-lot items flagged above.
 
 ## 2026-07-11 (session) — autonomous run over GLM-5.2's deep review
 Branch `loop/night-20260711` (branched off `feat/media-audio-fps-config` for this test run).
