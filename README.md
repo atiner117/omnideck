@@ -198,8 +198,8 @@ Most of these are also editable in-app (**Settings**), including an **Add custom
 form for your own commands.
 
 Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
-`catalog`, `gridart <appid>`, `media`, `mediasrv`, `mpvprofiles`
-(and `omnideck --help` / `--version`).
+`catalog`, `gridart <appid>`, `media`, `mediasrv`, `watched <id> [--un]`, `mpvprofiles`,
+`bgprep <image>`, `logs`, `doctor` (and `omnideck --help` / `--version`).
 
 ## A note on streaming quality
 
