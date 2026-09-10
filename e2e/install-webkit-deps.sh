@@ -16,7 +16,8 @@
 # brotli / libjxl that Playwright bundles there for exactly the same reason.
 #
 # Nothing outside ~/.cache/ms-playwright is touched, no root is needed, and
-# `bunx playwright install --force webkit` undoes it.
+# `bunx playwright install --force webkit` undoes it. Every download is fetched over HTTPS and
+# checked against a pinned sha256 taken from Ubuntu's signed package index before it is unpacked.
 #
 #   ./e2e/install-webkit-deps.sh          # install what's missing
 #   ./e2e/install-webkit-deps.sh --force  # re-copy even if present
@@ -28,11 +29,25 @@ FORCE=0
 # Pinned to Ubuntu 24.04 (noble) — the release Playwright's WebKit is built on. Pinned, not
 # "newest in the pool", because the pool holds every release's builds and lexical sort puts
 # 2.9.4 above 2.9.14.
-UBUNTU=http://archive.ubuntu.com/ubuntu/pool
+UBUNTU=https://archive.ubuntu.com/ubuntu/pool
+
+# "<sha256> <url>" per line. The digest is the control that matters: these .so files get dropped
+# onto WebKit's LD_LIBRARY_PATH and loaded into a process on your machine, so "whatever that host
+# sent" is not good enough. HTTPS alone only proves you reached archive.ubuntu.com — apt does not
+# even bother with it, because apt verifies a GPG-signed index instead, which is the part this
+# script used to skip entirely (it fetched over plain HTTP and checked nothing).
+#
+# Provenance of the digests: Ubuntu's own signed metadata, not a hash of whatever this script
+# happened to download once. Each came from dists/noble{,-updates}/<component>/binary-amd64/
+# Packages.xz, which the signed InRelease file pins by SHA256 in turn. Re-derive them the same
+# way if a URL is ever bumped:
+#
+#   curl -fsSL https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.xz \
+#     | xz -d | awk 'BEGIN{RS=""} /^Package: libicu74$/ {print}' | grep ^SHA256:
 DEBS=(
-  "$UBUNTU/main/i/icu/libicu74_74.2-1ubuntu3.1_amd64.deb"
-  "$UBUNTU/main/libx/libxml2/libxml2_2.9.14+dfsg-1.3ubuntu3.8_amd64.deb"
-  "$UBUNTU/universe/f/flite/libflite1_2.2-6build3_amd64.deb"
+  "c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8 $UBUNTU/main/i/icu/libicu74_74.2-1ubuntu3.1_amd64.deb"
+  "bfd07c01d6e5ab3e327f3ca5819409b1914bbfb3f1a016d53e4dabd5f96143bb $UBUNTU/main/libx/libxml2/libxml2_2.9.14+dfsg-1.3ubuntu3.8_amd64.deb"
+  "367f1d0da5cd38759a0515eafc27aa133b2d7bf99308cac34831df0212e96b75 $UBUNTU/universe/f/flite/libflite1_2.2-6build3_amd64.deb"
 )
 # Only these leave the .debs — no headers, no binaries, no config. Each pattern has to match
 # the real file as well as the soname symlink, or the symlink lands dangling: libflite's
@@ -59,10 +74,23 @@ if [ "$FORCE" -eq 0 ] && [ -e "${targets[0]}/libicuuc.so.74" ] \
   echo "already installed (--force to redo)"
 else
   work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-  for url in "${DEBS[@]}"; do
+  for entry in "${DEBS[@]}"; do
+    read -r want url <<<"$entry"
     deb="$work/$(basename "$url")"
     echo "fetching $(basename "$url")"
     curl -fsSL --retry 3 -o "$deb" "$url"
+    # Verify BEFORE unpacking: `ar x`/`tar xf` on an attacker-chosen archive is already
+    # letting it choose filenames. Mismatch is fatal, never a warning — the whole point is
+    # that an unexpected byte stream stops here instead of reaching LD_LIBRARY_PATH.
+    if ! printf '%s  %s\n' "$want" "$deb" | sha256sum -c --status -; then
+      echo "error: sha256 mismatch for $(basename "$url")" >&2
+      echo "  expected $want" >&2
+      echo "  got      $(sha256sum "$deb" | cut -d" " -f1)" >&2
+      echo "  refusing to install. If Ubuntu legitimately rebuilt this package, re-derive the" >&2
+      echo "  digest from the signed Packages index (see the DEBS comment) — do not paste the" >&2
+      echo "  hash of the file you just downloaded." >&2
+      exit 1
+    fi
     # A .deb is an `ar` archive holding data.tar.{xz,zst}; tar sniffs the compression.
     ( cd "$work" && ar x "$deb" && tar xf data.tar.* && rm -f data.tar.* control.tar.* debian-binary )
   done
