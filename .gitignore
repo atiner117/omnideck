@@ -9,6 +9,12 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+# Playwright harness output (regenerate with `bun run screenshots`)
+/e2e/screenshots
+/e2e/.results
+/playwright-report
+/test-results
+
 # Rust / Tauri build output
 /src-tauri/target
 /src-tauri/gen
@@ -26,6 +32,11 @@ vite.config.ts.timestamp-*
 /GLM-REVIEW.md
 /NOTES.md
 /NOTES-*.md
+# …except the binding quality bars: CLAUDE.md holds every PR to these ("a regression
+# there is not shippable"), so contributors and fresh clones must be able to read them.
+!/NOTES-A11Y.md
+!/NOTES-PERFORMANCE.md
+!/NOTES-SECURITY.md
 # maintainer-local agent instructions (tailnet-only infra; auto-loaded by Claude Code)
 /CLAUDE.local.md
 

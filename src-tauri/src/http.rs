@@ -89,8 +89,11 @@ pub fn is_blocked_host_resolved(host: &str) -> bool {
 /// body reads — this is what kills the streaming `.chunk()` hang when a server accepts the
 /// connection but never sends), total 15s (whole-request budget, incl. `.json()`).
 ///
-/// Built once; if the builder ever fails (it won't with the rustls backend) we fall back to a
-/// default client so callers always get something usable rather than panicking.
+/// Built once. This deliberately does **not** fall back to `Client::default()`: that client
+/// carries neither the timeouts above nor the SSRF redirect policy below, so a silent fallback
+/// would fail open on two security controls at exactly the moment something is already wrong.
+/// The only realistic failure here is TLS-backend init, and a client that can't do TLS would
+/// error on every fetch anyway — there is no "usable" degraded mode to preserve. Fail loudly.
 pub fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -111,7 +114,7 @@ pub fn client() -> &'static reqwest::Client {
             .read_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(15))
             .build()
-            .unwrap_or_default()
+            .expect("HTTP client build failed (TLS backend init) — refusing a fallback client that would carry no timeouts and no SSRF redirect policy")
     })
 }
 
