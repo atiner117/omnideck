@@ -26,6 +26,33 @@
   let fIcon = $state("🚀");
   let fCat = $state("apps");
 
+  // ---- controller path ----
+  // The form is reachable from the pad (Settings → "Add custom launcher"), so it must be
+  // drivable without a keyboard — before this, the page's overlay entry routed only East
+  // (close) and a pad-only user could open a form they could never fill or submit. The
+  // page routes D-pad/stick up-down to padMove, South to padActivate, East to close.
+  // Typing into the text fields still needs a physical keyboard (the hint says so), but
+  // Cancel/Add/Category are always reachable, so the form is never a trap.
+  const CATS = ["games", "video", "music", "apps"];
+  const FIELDS = ["f-name", "f-exec", "f-icon", "f-cat", "cancel", "add"] as const;
+  let padFocus = $state(-1); // -1 until the pad first moves — pointer/keyboard users never see it
+  export function padMove(d: number) {
+    const start = padFocus < 0 ? (d > 0 ? -1 : FIELDS.length) : padFocus;
+    padFocus = Math.max(0, Math.min(FIELDS.length - 1, start + d));
+    const id = FIELDS[padFocus];
+    // Real DOM focus on the fields (the accent :focus border is the cursor); the buttons
+    // show the pad cursor via .padfocus instead (:focus-visible won't fire for script focus).
+    if (id.startsWith("f-")) document.getElementById(id)?.focus();
+    else (document.activeElement as HTMLElement | null)?.blur?.();
+  }
+  export function padActivate() {
+    const cur = padFocus >= 0 ? FIELDS[padFocus] : null;
+    if (cur === "cancel") onclose();
+    else if (cur === "add") addCustom();
+    else if (cur === "f-cat") fCat = CATS[(CATS.indexOf(fCat) + 1) % CATS.length];
+    else if (cur === null) padMove(1); // first South just lands on the first field
+  }
+
   function addCustom() {
     const name = fName.trim();
     const cmd = fExec.trim();
@@ -66,10 +93,10 @@
     </select>
   </div>
   <div class="confirm-btns">
-    <button class="cbtn" onclick={onclose}>Cancel</button>
-    <button class="cbtn danger" onclick={addCustom}>Add</button>
+    <button class="cbtn" class:padfocus={padFocus === 4} onclick={onclose}>Cancel</button>
+    <button class="cbtn danger" class:padfocus={padFocus === 5} onclick={addCustom}>Add</button>
   </div>
-  <p class="phint">Split on spaces; quote paths that contain them: "/My Games/app" --flag. Use the full path if it isn't on PATH. Esc to close.</p>
+  <p class="phint">Split on spaces; quote paths that contain them: "/My Games/app" --flag. Use the full path if it isn't on PATH. Esc/B to close. D-pad moves between fields, A cycles Category and presses the buttons — typing needs a keyboard.</p>
 </Modal>
 
 <style>
@@ -77,4 +104,6 @@
   .frow label { width: 96px; flex: 0 0 auto; color: #9fb0c8; font-weight: 600; font-size: clamp(13px, 1.3vw, 15px); }
   .frow input, .frow select { flex: 1; background: #0c1320; border: 1px solid #2c3a5c; color: #eef2f8; border-radius: 9px; padding: 9px 12px; font-size: clamp(13px, 1.4vw, 16px); }
   .frow input:focus, .frow select:focus { outline: none; border-color: var(--accent); }
+  /* Pad cursor on the buttons (script focus doesn't trigger :focus-visible). */
+  .confirm-btns .cbtn.padfocus { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
