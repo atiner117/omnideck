@@ -78,6 +78,11 @@ cargo run -- mediasrv     # probe the configured media server (sections + first 
 cargo run -- mpvprofiles  # report the auto-generated mpv profile set
 cargo run -- gridart 570  # fetch SteamGridDB art for an appid (needs steamgriddb_key)
 cargo run -- bgprep <img> # wallpaper downscale-to-cache
+cargo run -- watched <id> # mark an item watched through the couch's own transport, then
+                          # re-read it (add --un to clear). <id> comes from `mediasrv`.
+                          # WRITES to the media server — it changes real watch state, and
+                          # marking watched clears that item's resume point (Jellyfin's
+                          # behaviour). Use an item you don't mind touching.
 ```
 
 ### 4. Input/session paths without a physical pad or logout
