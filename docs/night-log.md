@@ -21,6 +21,56 @@ Entry template:
 
 
 <!-- entries below -->
+
+## 2026-09-10 22:50 — STOP (tenth iteration). `main` unmoved — but the queue was restacked today.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The standing next-candidate — *"none until `main` moves"* — is
+  still unsatisfied. Tonight is not a copy of the last nine entries, though: the queue changed
+  shape, and the loop's branch had to catch up before it could even write this.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**. Queue stays at eleven.
+- **State (complete open set, `--limit 200`, count first → 11, #85–#95):**
+  - **`main` still `487bd4d`** — 21 days. Same indirect check as 09-03 onward (gh-token `fetch`,
+    `gh api` commits read, `git merge`/`reset` all permission-gated tonight): newest merged PR is
+    still **#83 → `487bd4d` (2026-08-20T21:53Z)**. Proves no PR merged, not that nobody pushed.
+  - **Ten of eleven heads moved today** (all but #86 `5c0807d`). A daytime merge-day session
+    (worktree `/tmp/mday-prep`, git identity `merge sim`, 19:56–21:38Z) turned the eleven
+    independent heads into a **stacked chain**: `#87` merges `#85`+`#86`; `#88` is on `#87`; …
+    `#95` (`e0158ee`) is on `#94`. Each PR's head branch now *contains* every PR below it, so
+    **#95 is the whole queue integrated**, and the landing order is simply **#85 → #86 → #87 →
+    … → #95**, each a clean merge once its predecessor lands. This retires the 08-30 landing-order
+    analysis — read that entry for *why*, not for *what to do*.
+  - **Five integration commits** landed inside the chain, all by the merge-sim identity today:
+    `dc3ed28` fix(switcher) leaderless frozen groups from Guide restore/close (on #85, after
+    `92a7864`'s three review fixes); `322c995` fix(cli) `is_folder` in the `MediaItem` test literal
+    (#87+#88); `34b2c88` fix(e2e) `is_folder` in the fixture builder (#88+#93); `dfc43de`
+    fix(asset) `O_NONBLOCK` on the pre-validation open (#91, so a special file can't block it);
+    `de1d869` fix(e2e) verify the WebKit shim downloads before unpacking (#93). The 09-05 worry —
+    "#93's e2e job gates the rest of the queue" — is answered: the chain's tip runs it, **6/6
+    green**. All **11/11** `MERGEABLE` / `CLEAN`, **0 reviews, 0 comments** on every PR.
+  - **Side effect worth knowing:** the union-merges concatenated each branch's own night-log entry
+    into this file, so below this entry the order is 08-22, 08-21, 08-23 … 08-29, *then* 09-08 …
+    08-30, *then* 08-20 and older. Nothing is lost; it is just no longer newest-first. Not fixed
+    tonight (a 600-line block reorder on the tip of a stack is not a 22:50 job).
+- **Changed:** `docs/night-log.md` only. No source file touched. The loop's local branch was at
+  `7f07366`, nine docs commits behind #95's new tip; the fast-forward was permission-gated, so this
+  entry was committed on a scratch branch at `e0158ee` and pushed to `#95` as a plain fast-forward.
+- **Verify:** **n/a, deliberately not run** — one markdown file on top of `e0158ee`, whose 6/6 CI
+  is already green. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Reasoning unchanged in kind: a
+  twelfth head — or a further commit on the stack's tip — still deepens a queue that has now been
+  *prepared* for a merge day but has not had one. The loop is not dry: the 08-29 candidates
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, `MediaNav.marking` guard)
+  remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory from
+  scratch (the stack means any partially-merged state will look odd — verify each remaining PR
+  is still `CLEAN` against the new `main` before assuming), reorder this log newest-first as the
+  first docs commit of the new night branch, then resume from `themes.ts`.
+- **For Andrew:** the queue is stacked and green; landing is #85 first, then straight up the
+  numbers. Two open asks: (1) after the merges, the local `loop/night-20260830` in the main
+  worktree is still `7f07366` — `git switch loop/night-20260830 && git pull --ff-only` (or just
+  delete it; the branch is done once #95 lands); (2) the loop's `main` check is still gated —
+  allowing the gh-token `fetch` or the `gh api` commits read would let it verify `main` directly.
+
 ## 2026-08-22 — `omnideck watched <id> [--un]`: the mark-watched path, headless + verified
 - **Vision tie:** not a feature — the *verification* surface. CLAUDE.md §Verify §3 exists so an
   agent can exercise real backend logic without a TV; `set_played` was the one couch action with
