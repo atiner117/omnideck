@@ -18,7 +18,1043 @@ Entry template:
 
 ---
 
+
+
 <!-- entries below -->
+
+## 2026-09-11 22:54 — STOP (eleventh iteration). Nothing moved since last night's entry.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The standing next-candidate is still *"none until `main` moves."*
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95** (chain tip).
+- **State (complete open set, `--limit 200`, count first → 11, #85–#95):** `main` still
+  `487bd4d` — 22 days (every PR's `baseRefOid` is `487bd4d`; newest merged PR is still #83). All
+  eleven heads identical to the 09-10 entry (#95 `e04cd0c`, #94 `3c896ac`, … #85 `dc3ed28`);
+  the only push since was that entry itself. 11/11 `CLEAN`, all CI green, **0 reviews, 0 comments**.
+  The direct `main` checks (gh-token `fetch`, `gh api` commits) were permission-gated again.
+- **Changed:** `docs/night-log.md` only.
+- **Verify:** n/a — one markdown file on a 6/6-green tip.
+- **Outcome:** **stopped — no wake-up scheduled.** Nothing to add to the 09-10 reasoning: a
+  twelfth stacked head deepens a merge-ready queue that has not had its merge day.
+- **Next candidate:** unchanged — **none until `main` moves.** Then: re-inventory, reorder this
+  log newest-first, resume from `themes.ts` cycle-wrap tests (08-29 list).
+
+## 2026-09-10 22:50 — STOP (tenth iteration). `main` unmoved — but the queue was restacked today.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The standing next-candidate — *"none until `main` moves"* — is
+  still unsatisfied. Tonight is not a copy of the last nine entries, though: the queue changed
+  shape, and the loop's branch had to catch up before it could even write this.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**. Queue stays at eleven.
+- **State (complete open set, `--limit 200`, count first → 11, #85–#95):**
+  - **`main` still `487bd4d`** — 21 days. Same indirect check as 09-03 onward (gh-token `fetch`,
+    `gh api` commits read, `git merge`/`reset` all permission-gated tonight): newest merged PR is
+    still **#83 → `487bd4d` (2026-08-20T21:53Z)**. Proves no PR merged, not that nobody pushed.
+  - **Ten of eleven heads moved today** (all but #86 `5c0807d`). A daytime merge-day session
+    (worktree `/tmp/mday-prep`, git identity `merge sim`, 19:56–21:38Z) turned the eleven
+    independent heads into a **stacked chain**: `#87` merges `#85`+`#86`; `#88` is on `#87`; …
+    `#95` (`e0158ee`) is on `#94`. Each PR's head branch now *contains* every PR below it, so
+    **#95 is the whole queue integrated**, and the landing order is simply **#85 → #86 → #87 →
+    … → #95**, each a clean merge once its predecessor lands. This retires the 08-30 landing-order
+    analysis — read that entry for *why*, not for *what to do*.
+  - **Five integration commits** landed inside the chain, all by the merge-sim identity today:
+    `dc3ed28` fix(switcher) leaderless frozen groups from Guide restore/close (on #85, after
+    `92a7864`'s three review fixes); `322c995` fix(cli) `is_folder` in the `MediaItem` test literal
+    (#87+#88); `34b2c88` fix(e2e) `is_folder` in the fixture builder (#88+#93); `dfc43de`
+    fix(asset) `O_NONBLOCK` on the pre-validation open (#91, so a special file can't block it);
+    `de1d869` fix(e2e) verify the WebKit shim downloads before unpacking (#93). The 09-05 worry —
+    "#93's e2e job gates the rest of the queue" — is answered: the chain's tip runs it, **6/6
+    green**. All **11/11** `MERGEABLE` / `CLEAN`, **0 reviews, 0 comments** on every PR.
+  - **Side effect worth knowing:** the union-merges concatenated each branch's own night-log entry
+    into this file, so below this entry the order is 08-22, 08-21, 08-23 … 08-29, *then* 09-08 …
+    08-30, *then* 08-20 and older. Nothing is lost; it is just no longer newest-first. Not fixed
+    tonight (a 600-line block reorder on the tip of a stack is not a 22:50 job).
+- **Changed:** `docs/night-log.md` only. No source file touched. The loop's local branch was at
+  `7f07366`, nine docs commits behind #95's new tip; the fast-forward was permission-gated, so this
+  entry was committed on a scratch branch at `e0158ee` and pushed to `#95` as a plain fast-forward.
+- **Verify:** **n/a, deliberately not run** — one markdown file on top of `e0158ee`, whose 6/6 CI
+  is already green. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Reasoning unchanged in kind: a
+  twelfth head — or a further commit on the stack's tip — still deepens a queue that has now been
+  *prepared* for a merge day but has not had one. The loop is not dry: the 08-29 candidates
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, `MediaNav.marking` guard)
+  remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory from
+  scratch (the stack means any partially-merged state will look odd — verify each remaining PR
+  is still `CLEAN` against the new `main` before assuming), reorder this log newest-first as the
+  first docs commit of the new night branch, then resume from `themes.ts`.
+- **For Andrew:** the queue is stacked and green; landing is #85 first, then straight up the
+  numbers. Two open asks: (1) after the merges, the local `loop/night-20260830` in the main
+  worktree is still `7f07366` — `git switch loop/night-20260830 && git pull --ff-only` (or just
+  delete it; the branch is done once #95 lands); (2) the loop's `main` check is still gated —
+  allowing the gh-token `fetch` or the `gh api` commits read would let it verify `main` directly.
+
+## 2026-08-22 — `omnideck watched <id> [--un]`: the mark-watched path, headless + verified
+- **Vision tie:** not a feature — the *verification* surface. CLAUDE.md §Verify §3 exists so an
+  agent can exercise real backend logic without a TV; `set_played` was the one couch action with
+  no headless entry point, so #83's transport fixes could only be checked from the sofa. #83's
+  follow-up list and the 2026-08-21 log both named this exact command as the cheapest
+  agent-shippable item.
+- **Branch / PR:** `loop/night-20260822` — https://github.com/atiner117/omnideck/pull/87
+- **Open-PR inventory:** **2 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `2`: **#85** (`fix/review-20260821`, P0/P1 fixes from the five-angle review)
+  and **#86** (`loop/night-20260821`, the 0.2.0 changelog top-off). That is the whole list, not a
+  subset. Checked both file lists before building: #85 touches `media_server.rs` (poison-tolerant
+  lock) and 22 other files but **not** `cli.rs` and **not** `set_played`; #86 is `CHANGELOG.md` +
+  `docs/night-log.md` only. No open PR adds a CLI subcommand, so this isn't a duplicate.
+- **Changed:** `media_server.rs` — new `item(&self, id)` reads one item by id
+  (`/Users/{user}/Items/{id}`, a bare `BaseItemDto`), wrapped into a one-element array so
+  `items_of` stays the single field mapping; same two `valid_id` gates as `set_played` (item id
+  *and* user id), pinned by a no-IO test against a dead loopback port. `cli.rs` — `watched <id>
+  [--un]`: read state → flip through the same `PlayedItems` transport → **re-read**. The re-read
+  is the entire value: a redirect that downgrades POST→GET and a jellyfin#8168 server that
+  answers 200 without applying both look like success in the response body, and only a second
+  read separates them. A `set_played` error deliberately does *not* short-circuit the re-read —
+  "refused, nothing changed" vs "errored after applying" are different bugs. Prints
+  `before:` / `set_played -> OK|FAILED` / `after:` / `VERIFIED|MISMATCH|UNKNOWN`.
+  Two new tests (the first in `cli.rs`): the argv contract, and `watch_state` rendering a missing
+  `UserData` as `played=(none)` rather than guessing "unwatched". Docs: CLAUDE.md §Verify §3
+  gains the command **with an explicit "this WRITES to the server, and marking watched clears
+  that item's resume point" caveat**; README's helper list was also missing `bgprep`/`logs`/
+  `doctor`, filled in.
+- **Verify:** `cargo clippy --all-targets -- -D warnings` **clean** in debug *and* `--release` ·
+  `cargo test` **112 pass / 1 ignored** (110 before, +2), identical under `--release` ·
+  `bun run check` **369 files, 0 errors / 0 warnings** · `bun run build` **pass** ·
+  `bun run test` **47/47**. No new deps; no `#[ts(export)]` type changed, so `git status` stayed
+  clean after the release test run (no bindings churn).
+- **Deliberately NOT run:** the command against Andrew's live Jellyfin. It mutates real watch
+  state, and marking watched destroys that item's resume point — an unattended loop should not
+  pick one of his titles and flip it. `cargo run` also needs an approval this session didn't
+  have. So: guards and argv are test-covered, the network path is one `cargo run -- watched <id>`
+  away whenever Andrew wants it.
+- **Merge-order note:** branched off `main` (`487bd4d`), so it does not contain #86. Both PRs
+  prepend to this file → **expect a trivial conflict here if #86 merges first; keep both
+  entries.** No `CHANGELOG.md` bullet was added for the same reason (#86 owns that file right
+  now) — this command wants one line under `[Unreleased]` → *Added* once #86 lands.
+- **Outcome:** shipped to draft PR #87. Additive, backend-only, zero frontend risk.
+- **Next candidate:** still **the couch pass** — it is the only thing between here and the 0.2.0
+  tag and the only thing an agent cannot do (`needs-hardware` has stacked up across #77/#78/#79/
+  #81/#83/#84; capture it in a dated `NOTES-COUCHTEST-*.md`). This increment makes one slice of
+  it cheaper: the mark-watched half can now be checked from a terminal before the TV is on.
+  Agent-shippable alternatives if another is wanted first: #81's `parse_backup` normalize gap
+  (cheapest of its five review follow-ups); making the shared-retry idempotency a mechanism
+  rather than prose (opt-in per call site) before anything non-idempotent is added to `send()`;
+  or the `BROWSE_KINDS` allowlist gap from #83's review. Still loose: #39's `0dabfea` (L2/R2
+  synthesis, needs-hardware).
+
+## 2026-08-21 — 0.2.0 changelog top-off: the 30 PRs merged since 2026-07-26
+- **Vision tie:** not a feature — the release blocker. The last two iterations both named
+  "changelog top-off for 0.2.0 (docs-only)" as the next candidate, and it gates the tag.
+- **Branch / PR:** `loop/night-20260821` — https://github.com/atiner117/omnideck/pull/86
+- **Open-PR inventory:** **1 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `1`: **#85** (`fix/review-20260821`, "close the P0/P1 findings from the
+  2026-08-21 five-angle review"). That is the whole list, not a subset. Searched it for
+  changelog/release keywords before building — #85 is review fixes to #83's transport and resume
+  state, nothing touching CHANGELOG.md or RELEASING.md, so this is not a duplicate. Note #85 is
+  **unmerged**, so its fixes are deliberately *not* in the changelog: the notes describe `main`.
+- **The finding:** the `[0.2.0]` section was last edited 2026-07-26 by #51. Thirty PRs merged
+  after that (**#54–#84**, plus docs #52/#53/#65) and **none** were documented — the release notes
+  described a version two months of work out of date. Separately the heading read
+  `## [0.2.0] — 2026-07-27`, but **v0.2.0 is not tagged** (`git tag` → only `v0.1.0`), so it
+  claimed a release date for a release that never happened. `RELEASING.md:28` is explicit that the
+  heading stays `## [Unreleased] — X.Y.Z` until the bump PR stamps the date, so #50 retitled it
+  early. Retitled back to `## [Unreleased] — 0.2.0`; the release step now works as written.
+- **Changed:** `CHANGELOG.md` only, +150/−1. New bullets in all four subsections, in the
+  section's existing voice (user-facing, no PR numbers — the mapping lives here and in the PR
+  body). *Added* (16): resume + mark-watched (#81/#83), artwork disk cache (#84), library view
+  modes (#79), themes (#80), overscan calibration (#78), screensaver (#59), audio output switcher
+  (#58), sleep timer (#68), phone remote (#69), parental PIN (#56+#61), update check (#67),
+  config backup/restore (#64), `[launch_overrides]` (#62), `[input]` (#66), `doctor`/`logs`
+  (#54/#55), `docs/ARCHITECTURE.md` (#57). *Changed* (5): the `OVERLAYS` input-router
+  unification + `+page.svelte` decomposition (#77/#74/#75/#76), table-driven settings (#60), icon
+  windowing + derived clamps + quote-aware argv (#72), pooled X11 connection (#71), Jellyfin
+  server re-resolve + `config_version` (#70). *Fixed* (1): spawn-error mapping (#63). *Security*
+  (6): `X-Emby-Token` header instead of `api_key` query param (#70), PIN IPC mask +
+  `set_locked_categories` (#61), `get_artwork` gated by `url_within_base` (#84), enumerated-sink
+  validation (#58), credentials excluded from backups + the remote's constant-time token
+  (#64/#69), and the `argon2` dependency note (#61).
+- **Verification discipline (docs can be wrong silently — grep, don't recall):** every config key,
+  command and module name asserted in the new text was checked against the tree before it shipped
+  — `art_cache_mb`, `guide_hold_ms`, `session_hotkeys`, `launch_overrides`, `overscan_pct`,
+  `check_updates`, `locked_categories`, `config_version`, `[appearance]`, `set_locked_categories`,
+  `has_pin`, `url_within_base`, `get_artwork`, `X-Emby-Token`, `--http-header-fields`, and the
+  `src/lib/components/` + `src/lib/themes/` files (#78/#79/#80 put them in subdirectories, not
+  `src/lib/` — the PR bodies' paths would have been wrong if copied). The "only new runtime
+  dependency" claim was verified by diffing the manifests over the window
+  (`git diff 43d7c45..HEAD -- src-tauri/Cargo.toml package.json`) → `argon2` alone.
+- **Verify:** bun run check (**pass**, 369 files, 0 errors / 0 warnings) · bun run build
+  (**pass**) · bun run test (**47 pass**, 6 files). Rust untouched, so clippy/cargo test don't
+  apply — the branch is at main's tip (`487bd4d`) otherwise. No CI job reads `CHANGELOG.md`
+  (checked `ci.yml`; the version-sync job compares only the five version *sources*), so the
+  `[Unreleased]` retitle can't break a gate. No new deps, no version change, no bindings churn.
+- **Outcome:** shipped to draft PR. Docs-only, zero runtime risk.
+- **Next candidate:** **the couch pass** is now the only thing between here and a 0.2.0 tag —
+  everything else is written. It is the one thing an agent cannot do: the `needs-hardware` items
+  have stacked up (#77 input layer, #78 overscan on the actual TV, #79 view modes, #81 resume
+  landing on the right frame, #83 the ✓ surviving a reopen against a live Jellyfin, #84 the
+  second-launch art pop-in disappearing). Capture it in a dated `NOTES-COUCHTEST-*.md`. Then
+  RELEASING.md §1 (retitle `[Unreleased]` → `[0.2.0] — <date>`, `.SRCINFO`) and §2 (tag).
+  If another agent-shippable increment is wanted first: #81's five review follow-ups, cheapest
+  first (`parse_backup`'s remaining normalize gap), or #83's logged follow-ups (an
+  `omnideck watched <id> [--un]` CLI subcommand would make the #85 transport fixes observable
+  headlessly). Still loose: #39's `0dabfea` (L2/R2 synthesis, needs-hardware).
+
+## 2026-08-23 — Browse rows classified by the server's `IsFolder`, not a five-name allowlist
+- **Vision tie:** VISION §3 (polish on already-shipped surfaces) and the media-server track.
+  Not a new feature — closing a **latent correctness gap** #83's five-angle review found and
+  logged rather than fixed, and which the 2026-08-22 entry listed as an agent-shippable
+  alternative to the couch pass.
+- **Branch / PR:** `loop/night-20260823` — https://github.com/atiner117/omnideck/pull/88
+- **Open-PR inventory:** **3 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `3`. That is the complete list, not a subset: **#85** `fix/review-20260821`
+  (P0/P1 fixes from the five-angle review), **#86** `loop/night-20260821` (0.2.0 changelog
+  top-off), **#87** `loop/night-20260822` (`omnideck watched <id>`). Checked all three file
+  lists before choosing: **none touches `src/lib/mediarow.ts` or `src/lib/medianav.svelte.ts`**,
+  so this is not a duplicate and not a collision on the frontend half.
+- **The bug:** `BROWSE_KINDS` was an allowlist of five `Type` names, so any container kind
+  Jellyfin returns that isn't in it — `MusicAlbum`, `Playlist`, `UserView`, `AggregateFolder`,
+  anything upstream adds later — fell through as **playable**. Two consequences: Enter handed a
+  folder id to the play path instead of drilling in, and the row passed `toggleWatched`'s
+  `!r.browse` gate, so **W offered to mark a whole container watched** — which clears every
+  child's resume point with no undo. That is exactly what `toggleWatched`'s own doc comment
+  says must never be reachable from one un-confirmed press. Latent today only because v1
+  filters library views to `movies|tvshows|homevideos`; nothing structural was holding it.
+- **Changed:** `media_server.rs` — `MediaItem.is_folder: Option<bool>` from
+  `BaseItemDto.IsFolder`, mapped in `items_of`. `mediarow.ts` — new `isBrowse(i)`:
+  `i.is_folder ?? BROWSE_KINDS.has(i.kind)`. **`??` not `||` on purpose** — `false` is a real
+  server answer and must survive, `null` is the unknown one. `medianav.svelte.ts` calls it in
+  `row()`. `BROWSE_KINDS` stays, demoted to the fallback and widened to the container kinds
+  Jellyfin can actually return. Bindings regenerated (`MediaItem.ts`).
+- **Why this can't regress:** if the server sends `IsFolder` we use its own answer; if it
+  doesn't, `None` → the name-list path, i.e. **today's exact behaviour**. Worst case is the
+  status quo, never worse. The widened fallback then narrows the gap even on a response with
+  no `IsFolder`.
+- **Verify:** `bun run check` **369 files, 0 errors / 0 warnings** · `bun run build` **pass** ·
+  `bun run test` **50/50** (47 before, +3) · `cargo clippy --release --all-targets -D warnings`
+  **clean** · `cargo test --release` **109 pass / 1 ignored**. Bindings: re-exported and
+  `diff -rq` against `src/lib/bindings` is identical, so CI's clean-diff check passes. No new
+  deps. No a11y/perf/security surface touched (one `??` in an existing pure function).
+- **Not verified — be honest about this:** `IsFolder` was **not** confirmed against Andrew's
+  live Jellyfin. Web search (searxng) and the live-config/`cargo run` probes were both
+  unavailable in this session's permission set, so the claim "Jellyfin populates IsFolder" rests
+  on the API shape, not on an observed response. This is why the fallback exists and why the
+  field is `Option<bool>` — **if the assumption is wrong the code degrades to the old
+  behaviour instead of misclassifying.** One `cargo run -- mediasrv` against the real server
+  would upgrade this from "safe either way" to "confirmed working".
+- **Merge-order note:** branched off `main` (`487bd4d`), so it contains neither #86 nor #87.
+  Two things to expect: (1) this file — #86 and #87 also prepend here, so a trivial conflict is
+  likely; **keep all entries**. (2) **A semantic, non-textual conflict with #87:** that branch
+  adds two `MediaItem { … }` literals in `cli.rs` (~427 and ~442) for its `watched` tests. They
+  predate `is_folder`, so whichever of #87/#88 merges second, `cargo check` will fail with
+  "missing field `is_folder`" until each literal gets `is_folder: None`. Git will not flag it —
+  the two branches touch different files. Two lines, but it will not show up until build.
+- **Outcome:** shipped to draft PR #88. Additive; the only behaviour change is that containers
+  the old list missed now drill down instead of being offered as playable.
+- **Next candidate:** still **the couch pass** — unchanged as the top item and still the one
+  thing an agent cannot do (`needs-hardware` stacked across #77/#78/#79/#81/#83/#84; capture in
+  a dated `NOTES-COUCHTEST-*.md`), and still the only thing between here and the 0.2.0 tag.
+  Agent-shippable alternatives, now one shorter: #81's `parse_backup` normalize gap (**note it
+  collides with #85, which touches `config.rs` — check that diff first**); making shared-retry
+  idempotency a mechanism rather than prose (opt-in per call site) before anything
+  non-idempotent joins `send()`; or the *server-side* half of tonight's fix — `set_played` still
+  trusts its caller not to hand it a container id, so a Rust-side `Type`/`IsFolder` check would
+  make the playable-only rule real instead of TS-only. Still loose: #39's `0dabfea` (L2/R2
+  synthesis, needs-hardware).
+
+## 2026-08-24 — The playable-only watch-state rule becomes a rule: enforced in `set_played`
+- **Vision tie:** VISION §3 (polish on already-shipped surfaces) and the media-server track.
+  Not a new feature — closing the **last unfixed correctness follow-up** from #83's five-angle
+  review, which logged it rather than fixing it, and which the 2026-08-23 entry named as the
+  best agent-shippable item after the couch pass.
+- **Branch / PR:** `loop/night-20260824` — https://github.com/atiner117/omnideck/pull/89
+- **Open-PR inventory:** **4 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `4`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821` (0.2.0 changelog), **#87** `loop/night-20260822` (`omnideck watched
+  <id>`), **#88** `loop/night-20260823` (browse rows by `IsFolder`). All four report
+  `baseRefOid=487bd4d3`, which is also main's tip — **main has not moved since 2026-08-19**, so
+  nothing has merged and every draft is still outstanding. Checked all four file lists before
+  choosing; none touches `set_played`'s body or `played_request`.
+- **Roadmap doc is stale — don't pick from it cold.** `NOTES-DEEPDIVE-ROADMAP.md` (dated
+  2026-07-05) still lists parental controls (#2), the audio switcher (#3) and the update manager
+  (#4) as unbuilt. #85's file list contains `pin.rs`, `audio.rs` and `update.rs`. All three are
+  **done**; the doc is gitignored and was never refreshed. This is the exact trap the loop
+  contract warns about, now confirmed a second time — treat open-PR titles as outranking it.
+- **The gap:** the "only a single playable item may be marked watched" rule lived **only in the
+  frontend row model**. So it was a convention, not a rule — `cli.rs` (and #87 adds exactly such
+  a caller), a new Tauri command, or any future Rust code could hand a series/season/library-view
+  id straight to `PlayedItems`. Jellyfin then clears the server-side resume point of **every
+  child**; un-marking restores the `Played` flag but never the positions. That is the only
+  irreversible operation in the whole media client, and its guard was one layer away from the
+  code that performs it.
+- **Changed:** `media_server.rs` only. New pure `is_container(&Value)` beside `played_request` —
+  split out for the same reason that one was, so the rule is unit-testable without a live
+  server. It reads the server's own `IsFolder` and falls back to a `CONTAINER_KINDS` `Type`
+  name-list **only when the field is absent**: a nested `match`, deliberately **not an `||`**
+  over both sources, because `IsFolder: false` is a real answer that must beat a stale list
+  entry. `set_played` probes `GET /Users/{user}/Items/{id}` and refuses a container before
+  issuing the mutating verb, naming the `Type` in the error.
+- **Trade-offs, stated rather than buried:** (1) **one extra LAN round-trip per toggle** — paid
+  deliberately for the only irreversible call we make; it is not on the rAF/input path, so
+  NOTES-PERFORMANCE is unaffected. (2) **Fails closed** if the probe errors — costs no behaviour
+  we would otherwise have had, since a server that can't answer the GET wouldn't have applied
+  the POST. (3) **Unknown → allow**, so a server sending neither field keeps today's behaviour
+  instead of losing a legitimate toggle.
+- **Verify:** `cargo clippy --all-targets -D warnings` **clean** · `cargo test --release`
+  **110 pass / 0 fail / 1 ignored** (+1 new) · `bun run check` **369 files, 0 errors / 0
+  warnings** · `bun run build` **pass** · `bun run test` **47/47**. No new deps. No
+  `#[ts(export)]` struct changed, so `src/lib/bindings/` is untouched and CI's clean-diff check
+  is unaffected. `git status` showed exactly one modified file before the commit.
+- **Not verified — be honest about this:** not exercised against the live Jellyfin (no
+  `cargo run -- mediasrv` or network probe in this session's permission set), so
+  `/Users/{userId}/Items/{itemId}` and `IsFolder` rest on the documented API shape, not an
+  observed response. Note the failure direction: because this **fails closed**, a wrong route
+  would make toggles *stop working*, not misfire — visible immediately, never silently
+  destructive. One `omnideck watched <id>` run (#87) against the real server settles it.
+- **Merge-order note:** branched off `main` (`487bd4d`) — contains none of #85–#88. Expect a
+  trivial conflict in **this file** (#86/#87/#88 all prepend here too); **keep all entries**.
+  The `media_server.rs` overlap should be textually clean — this touches only `set_played`'s
+  body and adds a helper after `played_request`. **#88 overlaps semantically, not textually:**
+  it applies the same `IsFolder`-first idea to the frontend row model. Complementary — TS stops
+  the UI offering the action, this stops the backend performing it — but if both land,
+  `BROWSE_KINDS` (TS) and `CONTAINER_KINDS` (Rust) become two copies of the same fallback
+  knowledge.
+- **Outcome:** shipped to draft PR #89. Additive; the only behaviour change is that a container
+  id now returns an error instead of silently wiping child resume points.
+- **Next candidate:** still **the couch pass** — unchanged as the top item, still the only thing
+  an agent cannot do (`needs-hardware` now stacked across #77/#78/#79/#81/#83/#84/#88/#89), and
+  still the only thing between here and the 0.2.0 tag. **Worth flagging plainly: four green
+  drafts are now queued behind a review that hasn't happened, and main hasn't moved in five
+  days — the bottleneck is merging, not building.** Agent-shippable alternatives if that stays
+  blocked: #81's `parse_backup` normalize gap (**collides with #85's `config.rs` — read that
+  diff first**); making shared-retry idempotency a mechanism rather than prose (opt-in per call
+  site) before anything non-idempotent joins `send()`; de-duplicating the two container-kind
+  lists once #88 and #89 have both landed. Still loose: #39's `0dabfea` (L2/R2 synthesis,
+  needs-hardware).
+
+## 2026-08-26 — Close the two fail-open gaps in the shared HTTP fetch path (`icons.rs` + `http.rs`)
+- **Vision tie:** VISION §3 (quality bars) and `NOTES-SECURITY.md`. Not a new feature — the last
+  two *security-shaped* leftovers of the 2026-08-21 five-angle review, whose P0/P1 set #85
+  landed and whose P2/P3 set nobody has touched since.
+- **Branch / PR:** `loop/night-20260826` — https://github.com/atiner117/omnideck/pull/90
+- **Open-PR inventory:** **5 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `5`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`. All five report `baseRefOid=487bd4d3` — **main has not moved since
+  2026-08-19, now seven days.** Pulled all five *file lists* (23+6+5+2+2) before choosing and
+  keyword-searched the full inventory for `ssrf` / `icons` / `favicon` / `http`: only #86 matched
+  (changelog prose). **No open PR touches `http.rs` or `icons.rs`** — that absence claim rests on
+  the complete set, both ways.
+- **Local `main` was stale again** (`dfdfa32`, PR #48 era) — the documented trap. Branched from
+  the *fetched* main SHA `487bd4d3` taken from the PRs' `baseRefOid`, not from `refs/heads/main`.
+  Note for the next agent: `git fetch origin` fails here (SSH wants a yubikey touch); use
+  `gh pr list --json baseRefOid` or the gh-token HTTPS remote to learn where main actually is.
+- **Why this and not the roadmap:** `NOTES-DEEPDIVE-ROADMAP.md` is gitignored and stale (third
+  confirmation). `NOTES-CODE-REVIEW-2026-08-21.md` is *committed, dated, and cross-verified*, and
+  its P2/P3/test-gap sections are a far better backlog for a cold agent. **Next iterations should
+  pick from it.** Ranked leftovers there, all still open: lock hygiene (`media_server.rs:150-168`,
+  `update.rs:103,125` raw `.unwrap()` where the tree uses `sync::lock_or_recover`); TOCTOU
+  triple-resolution in `asset.rs`/`get_art`; the `remote.rs` header-cap parser trap; `AudioSink`
+  is the one ts-rs source-of-truth violation; `Modal.svelte:63` `.osk` is the single animated
+  surface without a reduced-motion rule; test gaps ranked `npActions.ts` → `settings-defs.ts` →
+  `themes.ts`/`SleepTimer` → `MediaNav.marking`.
+- **Changed:** two files, one concern — *the SSRF guard must hold on every host we actually fetch,
+  and must not be silently droppable.*
+  1. **`icons.rs`** — `favicon()` gates `host`, then quietly builds candidates for a **second**
+     host, `root_domain(host)`, including a direct `https://{root}/favicon.ico` **fetch** that was
+     never checked. `--app=https://foo.127.1` clears the entry gate (the `foo` label makes the
+     host non-numeric; it also doesn't resolve) and derives `127.1` — an `inet_aton` short form
+     for `127.0.0.1`, so an icon fetch becomes a loopback probe. Needs no crafting either: a
+     public `sub.example.com` whose bare `example.com` resolves internally under split-horizon
+     DNS. The derived domain now gets its own `is_blocked_host_resolved`; a blocked root is never
+     a legitimate icon source, so the **whole** domain is dropped rather than only its direct
+     fetch — no reason to hand an internal hostname to DDG/Google as a query parameter either.
+     (Redirect *hops* were already covered by the client's redirect policy; this is the
+     initial-URL side, for the candidate that never had one.)
+  2. **`http.rs`** — `.build().unwrap_or_default()` failed open on **two** controls at once: a
+     default `reqwest::Client` carries neither the timeout policy nor the SSRF redirect policy.
+     The fallback bought nothing — the only realistic failure is TLS-backend init, where every
+     HTTPS fetch errors anyway, so there was no usable degraded mode being preserved. Now
+     `.expect` with a message naming what it refuses to hand back.
+- **Verify:** `cargo clippy --release --all-targets -- -D warnings` **clean** (debug too) ·
+  `cargo test --release` **110 pass / 0 fail / 1 ignored** (+1 new) · `bun run check` **369 files,
+  0 errors / 0 warnings** · `bun run build` **pass** · `bun run test` **47/47**. `git status`
+  showed exactly the two intended files before the commit. No new deps. No `#[ts(export)]` struct
+  changed, so `src/lib/bindings/` is untouched and CI's clean-diff check is unaffected.
+- **Not verified — be honest about this:** the loopback-probe vector was reasoned from the code
+  plus `inet_aton` short-form semantics and pinned with a **no-IO** unit test
+  (`derived_root_domain_can_escape_the_entry_gate`); it was *not* demonstrated end-to-end against
+  a live listener, which would mean a network fetch inside a test. Failure direction is safe: the
+  fix is fail-closed, so a wrongly-blocked root domain costs one fallback icon candidate, never a
+  wrong fetch.
+- **Outcome:** shipped to draft PR #90. Additive and contained; the only behaviour change is that
+  a root domain resolving somewhere internal stops being fetched.
+- **Next candidate:** **the couch pass is still the top item and still the only thing an agent
+  cannot do** — `needs-hardware` now stacked across #77/#78/#79/#81/#83/#84/#88/#89, and it is
+  still the only thing between here and the 0.2.0 tag. **Say the real bottleneck plainly: six
+  green drafts are queued behind a review that hasn't happened, and main has not moved in seven
+  days. The constraint is merging, not building** — and note that #85/#87/#88/#89 all touch
+  `media_server.rs`, so the conflict cost of the queue grows with every media increment. Tonight
+  deliberately avoided that file for exactly this reason. If the queue stays blocked, the best
+  agent-shippable work is the `NOTES-CODE-REVIEW-2026-08-21.md` P2 list above, preferring items in
+  files no open PR touches: `asset.rs` TOCTOU, `remote.rs` parser, or the `npActions.ts` /
+  `settings-defs.ts` test gaps (pure modules, zero conflict risk). Avoid `media_server.rs`,
+  `config.rs`, `commands.rs`, `+page.svelte` and `Modal.svelte` until the queue drains.
+
+## 2026-08-27 — Close the TOCTOU triple-resolution in the `omnideck://` asset chokepoint
+- **Vision tie:** VISION §3 (quality bars) / `NOTES-SECURITY.md`, via `NOTES-CODE-REVIEW-2026-08-21.md`
+  **P2 — "TOCTOU triple-resolution"**. Continues the previous iteration's explicit instruction:
+  with the merge queue blocked, work the committed review's P2 list, preferring files no open PR
+  touches.
+- **Branch / PR:** `loop/night-20260827` — https://github.com/atiner117/omnideck/pull/91
+- **Open-PR inventory:** **6 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `6`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`. Pulled the full file list of all six
+  before choosing (`gh pr list --json number,files`); the union is `media_server.rs`,
+  `commands.rs`, `remote.rs`, `config.rs`, `switcher.rs`, `watchdog.rs`, `update.rs`, `audio.rs`,
+  `pin.rs`, `http.rs`, `icons.rs`, `+page.svelte`, `Modal.svelte`, `LauncherForm.svelte`,
+  `AudioOutputModal.svelte`, `medianav.svelte.ts`, `mediarow.ts`, `CHANGELOG.md`, packaging, and
+  the NOTES-*. **`asset.rs` is in none of the six** — that absence claim rests on the complete
+  set, checked file-by-file, not on a keyword search.
+- **Main still has not moved.** All six PRs report `baseRefOid=487bd4d3`, unchanged since
+  2026-08-19 — now **eight days**. Local `refs/heads/main` is still stale (`dfdfa32`, PR #48 era);
+  branched from the fetched `487bd4d` taken from `baseRefOid`, per the documented trap. `git fetch
+  origin` still can't run here (SSH wants a yubikey touch).
+- **Why this one:** #90's next-candidate note ranked the remaining P2 items by conflict risk and
+  named exactly three safe picks — `asset.rs` TOCTOU, the `remote.rs` parser, and the
+  `npActions.ts`/`settings-defs.ts` test gaps. `remote.rs` turned out to be in #85's diff, so it
+  was out. Between the `asset.rs` fix and the test gaps, the fix is the higher-value one: it's a
+  real security-shaped defect in the single chokepoint for every art request, and it's one file.
+- **Changed:** one file, one concern — `src-tauri/src/asset.rs`.
+  `resolve_and_read()` resolved the requested path **three separate times**: `canonicalize()`,
+  then `metadata()`, then `read()`. Every allowlisted root is a user-writable cache dir
+  (SteamGridDB art, artwork cache, downscaled wallpapers), so the inode that cleared the root /
+  extension / size gates was not necessarily the inode whose bytes got served. Now the open
+  happens first and each check interrogates that descriptor: new `fd_path()` reads
+  `readlink("/proc/self/fd/N")` for the path the kernel actually resolved (`..`/symlinks already
+  collapsed) and feeds the root-allowlist + MIME gates; `f.metadata()` is an `fstat(2)` on the
+  same handle and **now also rejects non-regular files**, which the path-based check never did;
+  the bytes come off that fd, `take(MAX_BYTES)`-capped so an append after the fstat can't overrun
+  the cap. Linux-only via `/proc`, matching `proc.rs`/`switcher.rs`. No new deps. No
+  `#[ts(export)]` struct touched → `src/lib/bindings/` untouched, CI's clean-diff check
+  unaffected. `git status` showed exactly the one intended file before the commit.
+- **Deliberately half-done, and why:** the same P2 item also names `commands.rs:63-86` (`get_art`),
+  which has the identical canonicalize→metadata→read shape. `commands.rs` is in **#85**'s diff, so
+  fixing it tonight would put a conflict into the queue. Deferred until #85 lands — it is the
+  natural follow-up and the fix is a copy of this one.
+- **Verify:** `cargo clippy --release --all-targets -- -D warnings` **clean** (debug profile too) ·
+  `cargo test --release` **111 pass / 0 fail / 1 ignored** (+2 new) · `bun run check` **369 files,
+  0 errors / 0 warnings** · `bun run build` **pass** · `bun run test` **47/47**.
+- **Not verified — be honest:** the swap window was reasoned from the code and closed
+  structurally; it was *not* demonstrated with a live racing writer against a cache dir. Failure
+  direction is safe — every new check is fail-closed, so a wrongly-rejected file costs one 404'd
+  art request, never a wrong read.
+- **Residual, logged not fixed:** `File::open` on a FIFO planted in a cache dir blocks until a
+  writer appears. Pre-existing (the old code hit it inside `fs::read`) and unchanged here; closing
+  it needs `O_NONBLOCK` via `libc`/`rustix` — a new dependency, out of scope for one increment.
+- **Outcome:** shipped to draft PR #91.
+- **Next candidate:** **the bottleneck is still merging, not building — say it plainly.** Seven
+  green drafts are now queued behind a review that hasn't happened, and main is eight days cold;
+  the couch pass (`needs-hardware`, stacked across #77/#78/#79/#81/#83/#84/#88/#89) remains the
+  only thing an agent cannot do and the only thing between here and the 0.2.0 tag. Every media
+  increment raises the conflict cost of the queue, so keep avoiding `media_server.rs`,
+  `commands.rs`, `config.rs`, `remote.rs`, `+page.svelte`, `Modal.svelte`. Remaining zero-conflict
+  work from `NOTES-CODE-REVIEW-2026-08-21.md`: the **`npActions.ts` test gap** (ranked #1, pure and
+  branchy, feeds two surfaces whose drift is its reason to exist) then **`settings-defs.ts`** (282
+  lines, zero tests), then `themes.ts` cycle-wrap / `SleepTimer`'s `formatRemaining`/`endsAt`.
+  Lock hygiene (`sync::lock_or_recover` in `media_server.rs`/`update.rs`) and the `AudioSink`
+  ts-rs violation both sit in queued files — **don't**.
+
+## 2026-08-28 — Cover `npActions.ts`: the #1-ranked test gap, and zero conflict with the queue
+- **Vision tie:** VISION §3 (quality bars) via `NOTES-CODE-REVIEW-2026-08-21.md` →
+  **Test-coverage gaps, item 1**: "`npActions.ts` — pure, branchy, feeds two surfaces whose drift
+  is its stated reason to exist." This is the exact pick the 2026-08-27 entry left as its
+  next candidate, and it still made sense, so it was taken unchanged.
+- **Branch / PR:** `loop/night-20260828` — https://github.com/atiner117/omnideck/pull/92
+- **Open-PR inventory:** **7 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `7`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827` (last
+  night's asset.rs TOCTOU fix). Pulled the full file list of all seven (`gh pr list --json
+  number,files`) before choosing. **`npActions.ts` is in none of the seven** — that absence claim
+  rests on the complete set, checked file-by-file, not on a keyword search.
+- **Main still has not moved.** All seven PRs report `baseRefOid=487bd4d3` — unchanged since
+  2026-08-19, now **nine days**. Branched from that fetched SHA per the documented stale-local-ref
+  trap. Two caveats, stated honestly: `git fetch origin` still can't run here (SSH wants a yubikey
+  touch), and the `gh api .../commits/main` cross-check was **denied by the permission prompt**,
+  so main's tip is corroborated *indirectly* — by seven independent PRs agreeing on the same base
+  — rather than read directly.
+- **Changed:** one new file, `src/lib/npActions.test.ts` (18 tests). `npActions.ts` itself is
+  **byte-identical to main** — `git diff` against it is empty; this increment is test-only.
+  Pinned: the gating (transport only with MPRIS metadata; ⇄ only for `kind === "app"` **and**
+  `inSession`; close only for `"app"`; ✕ suppressed on the synthetic unlaunched-media card, which
+  owns no launch id to dismiss), the render order both surfaces depend on, the `run()` call
+  arguments incl. `switchApp` receiving *this* card's id (the original drift), the `after` hook
+  (fires on the three terminal actions, never on transport, fires even when the IPC **rejects** so
+  the overlay can't stick open on a backend error, and is optional — the card stack omits it), and
+  per-path error routing to `onerror`. Backend mocked with `vi.mock("./backend")`, so no Tauri
+  runtime is needed and the node vitest env stays as-is. No new deps.
+- **Mutation-checked, not just green.** A passing new test file proves nothing on its own, so two
+  deliberate mutations were applied and reverted: `api.switchApp(c.id)` → `api.switchApp()`, and
+  replacing the `c.kind !== "media"` dismiss guard with `if (true)`. Each failed **exactly one**
+  intended test (`2 failed | 63 passed`), then the source was restored and confirmed clean.
+- **One real snag, worth remembering:** the first draft was green on `bun run test` but **failed
+  `bun run check` with 19 errors** — `ReturnType<typeof vi.fn>` erases the callback signature, so
+  the mocks didn't satisfy `cardActions`' options parameter. Fixed by deriving the types from the
+  function under test (`type Opts = Parameters<typeof cardActions>[1]`, then `Mock<Opts["onerror"]>`
+  / `vi.fn<Opts["onerror"]>()`). **`bun run test` passing is not the gate — CI runs `check` too.**
+- **Verify:** `bun run check` **pass** (370 files, 0 errors / 0 warnings) · `bun run build`
+  **pass** · `bun run test` **pass, 65/65** (was 47; +18) · `cargo check` / `cargo clippy` **n/a**,
+  no Rust touched · ts-rs bindings **n/a**, no `#[ts(export)]` struct touched, so CI's
+  clean-`src/lib/bindings` diff check is unaffected.
+- **Outcome:** shipped to draft PR #92.
+- **Next candidate:** **the bottleneck is the merge queue, not the build — this is now the third
+  night in a row saying so.** Eight green drafts (#85–#92) are stacked behind a review that hasn't
+  happened and a couch pass (`needs-hardware`, across #77/#78/#79/#81/#83/#84/#88/#89) that no
+  agent can do; main is nine days cold and that couch pass is the only thing between here and the
+  0.2.0 tag. If the next iteration finds main *still* at `487bd4d`, consider stopping the loop and
+  saying so plainly rather than deepening the stack — each increment raises the queue's conflict
+  cost. If it continues: keep avoiding `media_server.rs`, `commands.rs`, `config.rs`, `remote.rs`,
+  `http.rs`, `icons.rs`, `asset.rs`, `+page.svelte`, `Modal.svelte`. Remaining zero-conflict work
+  from the committed review, in order: **`settings-defs.ts`** (282 lines of cycle/normalize/visible
+  predicates, zero tests — same shape as tonight, and the next-largest untested pure module), then
+  `themes.ts` cycle-wrap / unknown-id restart, then `SleepTimer`'s `formatRemaining`/`endsAt`, then
+  the `MediaNav.marking` re-entrancy guard. Still **don't** touch lock hygiene
+  (`sync::lock_or_recover`) or the `AudioSink` ts-rs violation — both sit in queued files. The
+  `commands.rs:63-86` `get_art` TOCTOU twin of last night's `asset.rs` fix remains deferred behind
+  #85 for the same reason.
+
+## 2026-08-29 — Playwright screenshot harness; self-hosted Inter; contain-intrinsic-size corrections
+- **Not a loop iteration** — interactive session with Andrew. Logged here anyway because the
+  two findings below are traps the next cold agent would otherwise re-discover the hard way.
+- **Vision tie:** "I haven't had time to test" — CLAUDE.md §Verify. This adds the missing rung
+  between the vitest unit tests and `packaging/test-session.sh`: the whole frontend, driven in a
+  real browser, no TV/controller/Rust build.
+- **Branch / PR:** `feat/e2e-screenshot-harness` — see PR link in the commit trailer / gh.
+- **Changed:**
+  - `e2e/` + `playwright.config.ts` — mock Tauri IPC (`window.__TAURI_INTERNALS__` installed via
+    `addInitScript`, so no production code changes), fixtures typed against the ts-rs bindings via
+    a `Wire<T>` mapped type (bigint→number), and a 16-shot tour of the grid/rail/list/modals.
+    Runs chromium + webkit; `e2e/install-webkit-deps.sh` makes webkit start on Arch.
+  - `static/fonts/` + `src/lib/fonts.css` — Inter was named in the CSS but never shipped.
+  - `ListView.svelte` / `GridView.svelte` — `contain-intrinsic-size` corrections (below).
+- **Verify:** `bun run check` pass (0 errors / 370 files) · `bun run test` pass · `bun run build`
+  pass · `bun run check:e2e` pass · 16/16 screenshots on both engines. Rust untouched.
+
+### Trap 1 — `contain-intrinsic-size` is a CONTENT box, not a border box
+Measuring a row with `getBoundingClientRect()` and pasting that number in **over-states it by the
+element's padding**, which the UA then adds on top again. I shipped exactly that mistake on `.lrow`
+(`calc((2.6rem + 0.7rem) * scale)`, padding included) and made the scroll extent **+17.8%** wrong —
+four times worse than the flat `64px` it replaced (−4.3%). Correct value is the content box alone —
+the thumbnail, `calc(2.6rem * var(--scale, 1))` — now −0.9%..−1.6% across all four UI scales in both
+engines. If you touch this property, the number you want is *not* the one dev-tools shows you.
+
+### Trap 2 — a 15-row fixture cannot test `content-visibility` at all
+`content-visibility: auto` only skips content outside the viewport **plus a generous margin**, so
+with the default fixture library (15 rows) nothing is ever skipped and the intrinsic size is never
+consulted. Every variant then measures identical, which reads as "my change is fine" — it is
+measuring nothing. **Verification method: rebuild the fixture with ~500 games and compare
+`.lwrap`/`.gwrap` `scrollHeight` against a control that forces `content-visibility: visible`.**
+That is the only way the property engages. This is also how `.gtile` was settled: at 500 tiles,
+ground truth / no declaration / a deliberately wrong value all produce an identical scroll extent,
+because a `1fr` grid track gives a definite width and `aspect-ratio` derives the height — so its
+`240px` was inert, and was removed rather than "corrected".
+
+### Also found, not fixed
+- **Buttons never inherited the app's font.** UA stylesheets hard-set a font on form controls, and
+  nearly every surface here is a `<button>` (rail tiles, grid tiles, list rows, deck cards). Only
+  `Modal.svelte`/`PinModal` set `font: inherit` locally. Fixed globally in `fonts.css` — but note
+  this means every screenshot taken before today shows the *wrong typeface*.
+- `ScreensaverOverlay` renders outside `<main>`, so it still doesn't get the font stack (the
+  `font-family` lives on `main`, not `:root`). Untouched — no screenshot covers it.
+- `03-games-rail-scrolled` has ~0.002% run-to-run pixel noise (rail transform still settling).
+  Harmless for review shots, but it must be fixed before these become `toHaveScreenshot()` baselines.
+- **Next candidate:** move `font-family` from `main` to `:root`, then wire the e2e run into
+  `ci.yml` as its own job (Ubuntu runners need no ICU workaround, so webkit works there natively).
+
+## 2026-08-29 — Pin the Settings table: `settings-defs.ts` coverage (review gap #2)
+- **Vision tie:** VISION §3 (quality bars) via `NOTES-CODE-REVIEW-2026-08-21.md` →
+  **test-coverage gaps, item 2**: "`settings-defs.ts` — 282 lines of cycle/normalize/visible
+  predicates, zero tests." Exactly the candidate the 2026-08-28 entry left behind, taken unchanged.
+- **Branch / PR:** `loop/night-20260829` — https://github.com/atiner117/omnideck/pull/94
+- **Open-PR inventory:** **9 open, total** — `gh pr list --state open --limit 200 --json number
+  --jq 'length'` → `9`. Complete list, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827`, **#92**
+  `loop/night-20260828`, **#93** `feat/e2e-screenshot-harness`. Pulled the full file list of all
+  nine (`gh pr list --json number,files`) before choosing; `settings-defs.ts` is in **none** of
+  them — that absence claim rests on the complete set, checked file-by-file.
+- **#93 is new and is not this loop's work.** Opened 2026-08-30T01:38Z under `atiner117`: a
+  Playwright e2e screenshot harness (`e2e/`, 16 screenshots over a mocked `__TAURI_INTERNALS__`),
+  self-hosted Inter, and `contain-intrinsic-size` fixes. It touches `GridView`/`ListView`/
+  `+layout.svelte`/`fonts.css` — **add those to the avoid-list** alongside the queued Rust files.
+  It is the missing rung between vitest and `packaging/test-session.sh`, so it is worth reviewing
+  before more frontend work stacks on top of it.
+- **Main is still `487bd4d` — ten days cold, and now nine drafts deep.** All nine PRs report the
+  same `baseRefOid=487bd4d3`, which is how main's tip was corroborated (`git fetch origin` needs a
+  yubikey touch and can't run here). The 08-28 entry said to consider stopping if main hadn't
+  moved. Judgement call, stated plainly: this increment was taken anyway because it is **test-only
+  and touches zero files in any open PR**, so it adds ~no conflict cost to the queue — but the
+  bottleneck is unchanged and is now the fourth night running. **The queue, not the build, is what
+  needs Andrew.**
+- **Changed:** one new file, `src/lib/settings-defs.test.ts` (38 tests). `settings-defs.ts` is
+  **byte-identical to main** — `git diff` against it is empty. Pinned: the structure the page
+  assumes but never checks (unique keys; **no orphaned section header** — headers are never
+  filtered by `visibleSettings`, so a section whose rows are all conditional would render as a
+  lone header; action rows == the two keys `doAction` dispatches, so a new action row that isn't
+  wired fails here instead of becoming a dead button); `normalizeNum` clamping/rounding plus two
+  properties over *every* numeric row — its default is already in range (else the first nudge
+  jumps) and one D-pad step actually moves it (else it's a dead knob); a generic **no-dead-end**
+  cycle property (feed each row's own patch back in, return to start within a lap); the
+  hand-edited-value fallbacks incl. the deliberate asymmetry (off-list accent → `ACCENTS[1]`,
+  off-list bg colour → `[0]`); the search-provider branch that clears `search_provider` **only**
+  when it still holds a preset URL, so a typed SearXNG URL survives; the sound preset ladder,
+  its float epsilon, Custom→Off, the preview blip firing only when switching *on*, and volume 0
+  clearing `sound`; and every visibility predicate. `./sfx` mocked (blip swallows its own errors,
+  so it would pass unmocked and prove nothing); node env unchanged; no new deps.
+- **Mutation-checked, not just green.** Four mutations applied together — bgcolor fallback index
+  `-1 → 0`, dropping the `SEARCH_MODES.some(...)` guard, unconditional blip, and dropping
+  `sound: v > 0` from the volume setter — gave **exactly four failures, one per mutation, each the
+  intended test** (`4 failed | 81 passed`). Source restored and re-verified clean.
+- **One documented wart, pinned rather than silently blessed:** a `background_image` path ending in
+  `/` renders blank instead of `(none)` — `split("/").pop()` returns `""`, which isn't nullish so
+  the `??` never fires. Cosmetic; left as-is because this increment is test-only.
+- **Harness note for the next agent:** the sandbox refuses `perl -0pi` in-place rewrites and
+  refuses to run a repo-local shell script, so mutation checks have to be driven with the Edit tool
+  (batch the mutations, run once, read the failing test names, revert). Also `bun run test` passing
+  is *not* the gate — CI runs `check` too.
+- **Verify:** `bun run check` **pass** (370 files, 0 errors / 0 warnings) · `bun run build`
+  **pass** · `bun run test` **pass, 85/85** (was 47 on this base; +38) · `cargo check` /
+  `cargo clippy` **n/a**, no Rust touched · ts-rs bindings **n/a**, no `#[ts(export)]` struct
+  touched.
+- **Outcome:** shipped to draft PR #94.
+- **Next candidate:** **review the queue before adding to it.** If it's still nine deep and main is
+  still `487bd4d`, the honest move is to stop rather than ship a tenth. If work continues, the
+  remaining zero-conflict items from the committed review, in order: `themes.ts` cycle-wrap /
+  unknown-id restart (small — `nextTheme`/`normalizeTheme`/`themeLabel`, and the Rust
+  `theme_ids_match_frontend` test already guards the registry, so this is the frontend half), then
+  `SleepTimer`'s exported `formatRemaining`/`endsAt`, then the `MediaNav.marking` re-entrancy
+  guard. Avoid-list, now ten files: `media_server.rs`, `commands.rs`, `config.rs`, `remote.rs`,
+  `http.rs`, `icons.rs`, `asset.rs`, `+page.svelte`, `Modal.svelte`, and (new, via #93)
+  `GridView.svelte` / `ListView.svelte` / `+layout.svelte`. Still don't touch lock hygiene
+  (`sync::lock_or_recover`) or the `AudioSink` ts-rs violation, and the `commands.rs:63-86`
+  `get_art` TOCTOU twin stays deferred behind #85. **Note:** every night branch prepends to this
+  file at the same anchor, so #86–#94 all conflict here on merge — resolve by keeping all entries,
+  newest first.
+
+## 2026-09-08 22:52 — STOP (ninth iteration, second check today). Nothing moved since 02:50.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The standing next-candidate — *"none until `main` moves"* — is
+  unsatisfied for the ninth consecutive iteration.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on every night
+  since 08-31. The queue stays at eleven heads.
+- **State, three calls, no analysis:**
+  - **`main` still `487bd4d`** — nineteen days cold. Same indirect check (direct `gh api` commits
+    read and gh-token `ls-remote`/`fetch` remain permission-gated): newest merged PR is still
+    **#83 → `487bd4d` (2026-08-20T21:53Z)**. Same standing caveat — proves no PR merged, not that
+    nobody pushed directly.
+  - **Queue: complete open set, `--limit 200`, count first → 11** (#85–#95), unchanged for the
+    eighth consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`, and every
+    `headRefOid` is byte-identical to last night's. Nineteen days, still zero rebase debt.
+  - **Zero review activity.** #93 queried directly this time rather than inferred: `reviews=0`,
+    `comments=0`, head still `5dfef88`, `updatedAt` still 2026-09-05T14:34Z. Three days on, the
+    09-06 reading of that commit as "the queue starting to move" stays refuted.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Unchanged reasoning: shipping a
+  twelfth head deepens a queue Andrew has not had a merge day for. The loop is not dry — the 08-29
+  entry's three zero-conflict candidates (`themes.ts` cycle-wrap, `SleepTimer`'s
+  `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard) remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (every list above will be stale; do not reuse them as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** no new asks; the two from 09-06 still stand (re-gate #85, then #88, against #93's
+  new e2e job before merging; and unblock the loop's `main` check by allowing the gh-token
+  `ls-remote`/`fetch` or the `gh api` commits read — `gh pr diff` too).
+
+## 2026-09-08 02:50 — STOP (eighth night). Nothing moved; short entry by design.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-07 next-candidate is a conditional instruction to this
+  iteration: *"none until `main` moves."* It has not moved.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on every night
+  since 08-31. The queue stays at eleven heads.
+- **State, three calls, no analysis:**
+  - **`main` still `487bd4d`** — eighteen days cold, thirteenth night. Same indirect check as the
+    last five nights (the `gh api …/commits/main` read and the gh-token `ls-remote`/`fetch` are
+    still permission-gated): newest merged PR is **#83 → `487bd4d` (2026-08-20T21:53Z)**. Same
+    standing caveat — this proves no PR merged, not that nobody pushed directly.
+  - **Queue: complete open set, `--limit 200`, count first → 11** (#85–#95), unchanged for the
+    seventh consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`. Eighteen
+    days, still zero rebase debt.
+  - **Zero review activity.** Every `updatedAt` is identical to last night except #95's own log
+    commit — a review or comment would have bumped it, so this is read off data already fetched.
+- **#93's 09-06 commit did not continue.** Still `5dfef88`, `updatedAt` still 2026-09-05T14:34Z. Two
+  days on, the 09-06 entry's reading of that commit as "the queue starting to move" is refuted for
+  now. #93 is still green on all five checks and still the recommended first landing.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Unchanged reasoning. The loop is not
+  dry: the 08-29 entry's three zero-conflict candidates (`themes.ts` cycle-wrap, `SleepTimer`'s
+  `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard) remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the lists above will be stale; do not reuse them as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** no new asks. The two from 09-06 still stand (re-gate #85, then #88, against #93's
+  new e2e job before merging; and unblock the loop's `main` check by allowing the gh-token
+  `ls-remote`/`fetch` or the `gh api` commits read — `gh pr diff` too).
+
+## 2026-09-07 02:48 — STOP (seventh night). Condition re-checked in three calls; nothing moved, including #93.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-06 next-candidate instructs this iteration: *"none until
+  `main` moves."* It has not. Nothing re-derived, no candidate re-ranked, no landing order restated.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31, 09-01,
+  09-03, 09-04 and 09-06. The queue stays at eleven heads.
+- **State is byte-identical to last night.** Three calls, no analysis:
+  - **`main` still `487bd4d`** — seventeen days cold, twelfth night running. Same indirect check as
+    the last four nights (`gh api …/commits/main` and the gh-token `ls-remote`/`fetch` are *still*
+    permission-gated): newest merged PR is **#83 → `487bd4d` (2026-08-20T21:53Z)**. Same standing
+    caveat — this proves no PR merged, not that nobody pushed directly.
+  - **Queue: complete open set, `--limit 200`, count first → 11** (#85–#95), unchanged for the sixth
+    consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`. Seventeen days,
+    still zero rebase debt.
+- **The 09-06 signal did not continue.** #93 is still at **`5dfef88`**, `updatedAt` still
+  **2026-09-05T14:34Z** — no further commits, and it did not merge. Stated as one data point, not a
+  trend: yesterday's entry read the manual `ci:` commit as the queue starting to move, and after one
+  day that reading is neither confirmed nor refuted. #93 remains green on all five checks and is the
+  Tier-1 head with no code conflicts, so the recommendation to land it first is unchanged.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Same reasoning as 09-06: a twelfth
+  head while Andrew is working the queue by hand adds review burden at the wrong moment. The loop is
+  not dry — the 08-29 entry's three zero-conflict candidates (`themes.ts` cycle-wrap, `SleepTimer`'s
+  `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard) remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the lists above will be stale; do not reuse them as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** nothing new to action beyond the 09-06 entry's two asks (re-gate #85, then #88,
+  against #93's new e2e job before merging them; and unblock the loop's `main` check by allowing the
+  gh-token `ls-remote`/`fetch` or the `gh api` commits read — `gh pr diff` too, so it can read queued
+  changes instead of inferring from file paths).
+
+## 2026-09-06 02:55 — STOP (sixth night) — but the queue moved for the first time in 15 days: #93 got a human commit today.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-04 next-candidate is a conditional instruction to this
+  iteration: *"none until `main` moves… If it is still `487bd4d`, stop again immediately."* `main` is
+  still `487bd4d`, so the stop holds — but the condition around it changed, and that is what this
+  entry is for. **Reverses the 09-04 headline claim**, which said there had been "no review activity
+  of any kind on any of the eleven." That is now false.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31, 09-01,
+  09-03 and 09-04. The queue stays at eleven heads.
+- **`main` still `487bd4d`** — sixteen days cold, eleventh night running. Verified the same indirect
+  way as the last two nights, because the direct paths are *still* permission-gated (`git ls-remote`
+  over the gh-token HTTPS helper, and `gh api …/commits/main`). Substitute that worked:
+  `gh pr list --state merged` → newest merge is still **#83 → `487bd4d` (2026-08-20T21:53Z)**, with
+  #84 behind it. Same standing caveat: this proves *no PR merged*, not that nobody pushed directly.
+- **Queue:** complete open set, `--limit 200`, count first → **11** (#85–#95), unchanged for the
+  fifth consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`. Sixteen days,
+  still zero rebase debt.
+
+### The new fact: #93 was touched today, by hand
+`updatedAt` on **#93** is **2026-09-05T14:34Z** — today, and *not* this loop (the loop's only writes
+are the night-log commits on #95, timestamped 02:49Z). The cause is a new commit on the branch:
+
+- **`5dfef88` — "ci: run the e2e harness as its own job" (2026-09-05T14:33Z)**, sitting on top of
+  #93's four original 08-30 commits.
+
+Attribution caveat, stated plainly: every commit on #93 shows author `atiner117`, which is also the
+loop's identity, so the author field does not by itself prove a human wrote it. What does: the loop
+never ran at 14:33Z, and no night-log entry claims this work. So this is Andrew (or another manual
+session) working the queue — **the first non-loop activity on any PR in fifteen days.**
+
+**#93 is now green on all five checks**, including the new job:
+`lint · test · build (linux)` · `e2e (screenshot tour · chromium + webkit)` · `cargo-deny` ·
+`cargo-audit` · `version sync` — all `SUCCESS`.
+
+### A landing-order consequence the 08-30 analysis does not cover
+The 08-30 overlap map put #93 in Tier 1 — "collides with nothing but the `docs/night-log.md`
+prepend." **That is still true textually, and I re-verified it against the complete open set** (not a
+subset): searching all 11 PRs for `.github/` paths returns exactly two, touching *different* files —
+
+| PR | `.github/` path |
+|---|---|
+| #93 | `.github/workflows/ci.yml` (+58/−0) |
+| #85 | `.github/workflows/packaging.yml` |
+
+So there is no CI merge conflict. **But the semantic consequence is new:** once #93 lands, the e2e
+screenshot job becomes part of CI for every PR merged after it — and **none of the other ten have
+ever run it.** A queue that is currently 11/11 clean could acquire a failing check on the first
+merge, which would look like rot but would be an untested gate, not a regression.
+
+Which of the remaining ten are actually exposed, by what they touch in the frontend:
+
+- **#85** — `+page.svelte` plus `Modal`/`LauncherForm`/`AudioOutputModal`. This is the grid page the
+  screenshot tour walks. **Highest exposure; re-gate this one first.**
+- **#88** — `medianav.svelte.ts` / `mediarow.ts`, which feed list rows. Moderate exposure.
+- **#92, #94** — frontend paths are `*.test.ts` only. No render surface; no exposure.
+- **#86, #87, #89, #90, #91, #95** — Rust, CLI and docs only. No exposure.
+
+I could not read the spec to say whether it does baseline image comparison (`toHaveScreenshot`) or
+just render assertions — `gh pr diff` and the branch-protection read were both permission-gated this
+session. Nor could I confirm whether the new job is a *required* check on `main`. Both would sharpen
+the risk estimate; neither changes the recommendation.
+
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Andrew being mid-flight on #93 is a
+  reason to stay out of the way, not a reason to ship: a twelfth head while he is actively working
+  the queue would add review burden at exactly the wrong moment. The loop is still not dry — the
+  08-29 entry's three zero-conflict candidates (`themes.ts` cycle-wrap, `SleepTimer`'s
+  `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard) remain unstarted.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** #93 is green and self-contained — landing it first is a good call. Two asks after
+  that: (1) re-gate **#85** and then **#88** against the new e2e job before merging them, since they
+  are the only queued PRs with real render surface; (2) the loop still cannot verify `main` directly
+  — allowing either the gh-token HTTPS `ls-remote`/`fetch` or the `gh api` commits read would fix
+  that, and allowing `gh pr diff` would let it read queued changes instead of inferring from paths.
+
+## 2026-09-04 — STOP (fifth night). Condition re-checked in three calls; nothing moved, analysis not re-derived.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-03 next-candidate is a direct instruction to this iteration:
+  *"none until `main` moves… If it is still `487bd4d`, stop again immediately and do not re-derive
+  this analysis."* Honoured — nothing re-derived, no candidate re-ranked, no landing order restated.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31, 09-01
+  and 09-03. The queue stays at eleven heads.
+- **`main` still `487bd4d`, now fifteen days cold — tenth night running.** Verified the same
+  indirect way as 09-03, because the direct paths are still closed: `git ls-remote` over the
+  gh-token HTTPS helper and `gh api …/commits/main` were **both permission-gated again** this
+  session. Substitute that did work: `gh pr list --state merged` → newest merge is still **#83 →
+  `487bd4d` (2026-08-20T21:53Z)**, with #84 (2026-08-20T11:25Z) behind it. Nothing merged since.
+  Same caveat as last night, restated because it has not been fixed: this proves *no PR merged*,
+  not that nobody pushed to `main` directly.
+- **Queue:** complete open set, `--limit 200`, count first → **11** (#85–#95), unchanged for the
+  fourth consecutive check. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`. Fifteen days
+  and still zero rebase debt.
+- **One new datum, and it is the only thing this entry adds.** I pulled `updatedAt` alongside
+  mergeability this time. Every open PR's `updatedAt` is **still its original creation night**
+  (#85 08-21, #86 08-22, … #94 08-30) — the sole exception is #95, whose 09-04 timestamp is this
+  loop's own night-log commits. So there has been **no review activity of any kind on any of the
+  eleven**: no merge, no comment, no review, no push. Previous nights inferred the review-throughput
+  bottleneck from `main` not moving; this measures it directly on the PRs themselves.
+- **Landing order: not re-derived.** It is in the 08-30 entry. Read that one.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** The blocker is unchanged and is not
+  that the loop has run dry: the 08-29 entry still holds three ready zero-conflict candidates
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking`
+  re-entrancy guard). Adding a twelfth PR to an eleven-deep queue that has received zero review
+  events in fifteen days would add review burden, not value.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew:** the ask is the same as last night and is now the only thing gating the loop —
+  review and merge from the queue (start with the 08-30 landing order). Optionally, allowing either
+  the gh-token HTTPS `ls-remote`/`git fetch` or the `gh api` commits read would let the loop verify
+  `main` directly instead of inferring it from the merged-PR list.
+
+## 2026-09-03 22:55 — STOP (fourth night). One new fact: the SSH fetch path is gone, so `main` was verified a different way.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 09-01 next-candidate is a conditional instruction to this
+  iteration: *"none until `main` moves… If it is still `487bd4d`, stop again immediately and do not
+  re-derive this analysis."* Honoured — no analysis re-derived, no candidate re-ranked.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, as on 08-31 and 09-01.
+  The queue stays at eleven heads.
+- **`main` verification changed, and this is the part worth recording.** `git fetch origin main`
+  **failed**: `origin` is SSH and every FIDO2 key errored (`ssh-askpass` missing, `device not found`
+  / `invalid format` for all three yubikeys) → `Permission denied (publickey)`. The local
+  `refs/remotes/origin/main` therefore proves nothing — it is a cached ref, and this repo has been
+  bitten by stale worktree-local `main` refs before. `ls-remote` over the gh-token HTTPS helper and
+  a direct `gh api …/commits/main` were both unavailable this session (permission-gated).
+  **Substitute check that did work:** `gh pr list --state merged --limit 5` → newest merge is
+  **#84 (2026-08-20) and #83 → merge commit `487bd4d` (2026-08-20)**; nothing merged after.
+  So `main` is still **`487bd4d`**, now **fourteen days** cold. Ninth night running.
+- **Queue:** complete open set, `--limit 200`, count first → **11** (#85–#95), unchanged from 09-01.
+  All **11/11** re-checked individually: `MERGEABLE` / `mergeStateStatus=CLEAN`. Fourteen days and
+  still zero rebase debt — which remains the whole argument for draining the queue now.
+- **Landing order: not re-derived.** It is in the 08-30 entry. Read that one.
+- **Changed:** `docs/night-log.md` only. No source file touched.
+- **Verify:** **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d` plus
+  docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** The blocker is unchanged and is not
+  the loop running dry: the 08-29 entry still holds three ready zero-conflict candidates
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking`
+  re-entrancy guard). The bottleneck is **review throughput**, which only Andrew can supply.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+- **For Andrew, one operational note:** if you want the loop to keep verifying `main` unattended,
+  either allow the gh-token HTTPS `ls-remote`/`git fetch` or the `gh api` commits read. Tonight the
+  merged-PR list was a sound substitute, but it is indirect — it proves no PR merged, not that no
+  one pushed to `main` directly.
+
+## 2026-09-01 — STOP (third night). Condition re-checked in four calls; analysis deliberately not re-derived.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The 08-31 entry's next-candidate is a direct instruction to this
+  iteration: *"none until `main` moves… If it is still `487bd4d`, stop again immediately and do not
+  re-derive this analysis."* Honoured literally — this entry is four checks and a pointer, nothing more.
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95**, same as 08-31, so the
+  queue stays at eleven heads.
+- **The four checks:**
+  1. `git rev-parse origin/main` → **`487bd4d`**. Unmoved; **twelve days cold** (merge of #83,
+     2026-08-20). Seventh night running.
+  2. Complete open set: `gh pr list --state open --limit 200 --json number --jq 'length'` → **11**.
+     Unchanged from 08-31 — same eleven (#85–#95). No new PRs, none closed, none merged.
+  3. All **11/11** still `MERGEABLE` / `mergeStateStatus=CLEAN`, checked for every one, not a sample.
+     Twelve days and nothing has rotted. Still the argument for draining now.
+  4. `VISION.md` last modified **2026-07-12** (`02ba782`). The 08-30 entry's offer — *"if Andrew
+     would rather the loop write nothing at all while the queue is deep, say so in `VISION.md`"* —
+     went unanswered, so the standing contract holds: log the stop, don't invent scope.
+- **Landing order: not re-derived.** It is in the 08-30 entry and nothing has changed. Read that one.
+- **Changed:** `docs/night-log.md` only. No source file touched anywhere in the tree.
+- **Verify:** all **n/a, deliberately not run** — one markdown file on a branch that is `487bd4d`
+  plus docs commits. Green by construction.
+- **Outcome:** **stopped — loop halted, no wake-up scheduled.** Three consecutive nights is not the
+  loop running dry: the 08-29 entry still has three ready zero-conflict candidates sitting unstarted
+  (`themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking`
+  re-entrancy guard). The bottleneck is **review throughput**, which only Andrew can supply. A
+  twelfth head would only add rebase debt to eleven PRs that are currently all clean.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (the list above will be stale; do not reuse it as an avoid-list), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+
+## 2026-08-31 — STOP again: the 08-30 stop condition still holds. No twelfth PR.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* Plus the 08-30 entry's own next-candidate, which is an explicit
+  conditional instruction to this iteration: *"none until `main` moves… If it is still `487bd4d`,
+  stop again immediately and do not re-derive this analysis."*
+- **Branch / PR:** deliberately **no new branch**. This entry is appended to the existing
+  `loop/night-20260830` / **#95** so the queue does not get a twelfth head. The date mismatch
+  between branch name and entry is intentional and is the point.
+- **Stop condition re-checked, and it holds:**
+  - `main` is still **`487bd4d`** (merge of #83, 2026-08-20) — **eleven days cold**, sixth night
+    running. Corroborated across the complete open set: all 11 PRs report `baseRefOid=487bd4d`.
+    (`gh api repos/.../commits/main` needed interactive approval in this sandbox, so the base-OID
+    agreement across every open PR is the corroboration, not a single lookup.)
+  - `VISION.md` is unchanged — the 08-30 entry offered "if Andrew would rather the loop write
+    nothing at all while the queue is deep, say so in `VISION.md`." Nothing was said, so the
+    standing contract still applies: log the stop, don't invent scope.
+- **Open-PR inventory: 11 open, total** — the complete set, not a subset.
+  `gh pr list --state open --limit 200 --json number --jq 'length'` → `11`.
+  **#85** `fix/review-20260821` · **#86** `loop/night-20260821` · **#87** `loop/night-20260822` ·
+  **#88** `loop/night-20260823` · **#89** `loop/night-20260824` · **#90** `loop/night-20260826` ·
+  **#91** `loop/night-20260827` · **#92** `loop/night-20260828` · **#93**
+  `feat/e2e-screenshot-harness` · **#94** `loop/night-20260829` · **#95** `loop/night-20260830`.
+  The only change since 08-30 is #95 — which is last night's own log-only stop entry, not new work.
+- **Still 11/11 `MERGEABLE` / `mergeStateStatus=CLEAN`** (checked for every one, not a sample).
+  Nothing has rotted in the extra day. That remains the argument for draining now.
+- **The landing order is not re-derived here — it is in the 08-30 entry directly below, and nothing
+  about it has changed.** Read that one. Summary pointer only: Tier 1 (#92, #94, #91, #90, #86, #93)
+  collide with nothing but the mechanical `docs/night-log.md` prepend; Tier 2 is the
+  `media_server.rs` cluster (#85 → #89 → #88 → #87), to be rebased and re-gated one at a time.
+- **Changed:** `docs/night-log.md` only. No source file touched anywhere in the tree.
+- **Verify:** `bun run check` / `bun run build` / `bun run test` / `cargo check` / `cargo clippy` —
+  **all n/a, deliberately not run.** One markdown file changed on a branch that is `487bd4d` plus
+  docs commits; the suite would prove nothing about it. Green by construction.
+- **Outcome:** **stopped, by design — loop halted, no wake-up scheduled.** Two nights in a row is
+  the signal, not a glitch: the loop is not out of ideas (the 08-29 entry left three ready
+  zero-conflict candidates — `themes.ts` cycle-wrap, `SleepTimer`'s `formatRemaining`/`endsAt`, the
+  `MediaNav.marking` re-entrancy guard). It is out of **review throughput**, which only Andrew can
+  supply. Restarting the loop before `main` moves would only add rebase debt.
+- **Next candidate:** unchanged — **none until `main` moves.** When it does: re-inventory the open
+  PRs from scratch (do not reuse the list above as an avoid-list; it will be stale), then resume
+  from the 08-29 candidates starting with `themes.ts`.
+
+## 2026-08-30 — STOP: the queue is the bottleneck. No code tonight; landing-order analysis instead.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* Taking that literally, and taking the 08-29 entry's own
+  next-candidate literally: *"review the queue before adding to it. If it's still nine deep and main
+  is still `487bd4d`, the honest move is to stop rather than ship a tenth."* It is now **ten** deep.
+- **Branch / PR:** `loop/night-20260830` — log-only, no source change.
+- **Open-PR inventory: 10 open, total.** `gh pr list --state open --limit 200 --json number --jq
+  'length'` → `10`. The complete set, not a subset: **#85** `fix/review-20260821`, **#86**
+  `loop/night-20260821`, **#87** `loop/night-20260822`, **#88** `loop/night-20260823`, **#89**
+  `loop/night-20260824`, **#90** `loop/night-20260826`, **#91** `loop/night-20260827`, **#92**
+  `loop/night-20260828`, **#93** `feat/e2e-screenshot-harness`, **#94** `loop/night-20260829`.
+- **Main has not moved: `487bd4d`, now ten days cold** (merge of #83, 2026-08-20). Corroborated two
+  ways — `gh api repos/atiner117/omnideck/commits/main` returns `487bd4d`, and all ten PRs report
+  `baseRefOid=487bd4d`. Fifth night running.
+
+### The good news, and it is better than it looks
+**All ten PRs are `MERGEABLE` / `mergeStateStatus=CLEAN` against main right now** (checked for all
+10/10, not a sample). Nothing has rotted. Total queue: **+3396 / −83 across 63 file-paths.**
+
+**But that CLEAN status is a snapshot that dies on the first merge.** Nine of the ten touch
+`docs/night-log.md`, all prepending at the same anchor. The moment any one of them lands, the other
+eight flip to CONFLICTING — on the log file alone, not on code. **That is expected and benign.**
+Resolution rule, every time: keep all entries, newest first. Do not let eight scary-looking red
+"conflicting" badges suggest the queue has gone bad; it hasn't.
+
+### Complete overlap map (all 63 paths across all 10 PRs)
+Exactly **three** paths are shared by more than one PR. Every other file in the queue is touched by
+exactly one PR:
+
+| Path | PRs | Nature |
+|---|---|---|
+| `docs/night-log.md` | 86, 87, 88, 89, 90, 91, 92, 93, 94 (9) | Mechanical. Same anchor. Keep all, newest first. |
+| `src-tauri/src/media_server.rs` | 85, 87, 88, 89 (4) | **The only real code cluster.** |
+| `.gitignore` | 85, 93 (2) | Two unrelated additions; almost certainly both-keep. |
+
+### Recommended landing order
+**Tier 1 — six PRs that collide with nothing but the log file.** Land these in any order; each is a
+single-concern change whose only conflict is the mechanical night-log prepend:
+- **#92** `npActions.test.ts` and **#94** `settings-defs.test.ts` — test-only, zero production code.
+  Cheapest possible merges; they cannot break the app.
+- **#91** `asset.rs` (TOCTOU fix) · **#90** `http.rs` + `icons.rs` (fail-open fixes) — security
+  hardening, one file-set each, nothing else in the queue touches those files.
+- **#86** `CHANGELOG.md` (0.2.0 top-off) — pairs with #85 for the release; see below.
+- **#93** the Playwright harness — 16 files but all new (`e2e/`, `static/fonts/`) plus
+  `GridView`/`ListView`/`+layout.svelte`/`fonts.css`, which **no other open PR touches**. Only
+  overlap is `.gitignore` with #85.
+
+**Tier 2 — the `media_server.rs` cluster (85, 87, 88, 89).** Land deliberately, rebasing each on the
+previous and re-running the Rust gate between. Suggested order **#85 → #89 → #88 → #87**, on these
+grounds: #85 is the oldest (2026-08-21), the largest (23 files), and is the *security* PR closing
+P0/P1 review findings against code already on main — fixes outrank features, and landing it first
+means the three feature PRs rebase onto the fixed baseline rather than the other way round. Order
+among #89/#88/#87 is low-stakes.
+
+**Honest limit on that recommendation:** I could establish that those four touch the same *file*,
+but **not whether they touch the same hunks** — `gh pr diff` and `gh api .../pulls/N/files` both
+require interactive approval in this sandbox, and `git fetch` of the PR branches does too (SSH
+`origin` wants a yubikey touch; the HTTPS-helper fetch needs approval). So Tier 2's ordering is
+argued from priority and size, **not** from a verified hunk-overlap analysis. A human with the
+branches fetched can settle it in one `git merge-tree` run.
+
+### Two other things worth knowing before merging
+- **#85 carries the version-sync files** — `src-tauri/Cargo.toml`, `Cargo.lock`,
+  `packaging/PKGBUILD`, `packaging/.SRCINFO`. CI enforces the five-way version sync, so #85 must
+  land internally self-consistent. Nothing else in the queue touches `Cargo.lock`, so there is no
+  cross-PR version hazard — but #85 + #86 (CHANGELOG) are effectively **the 0.2.0 release pair** and
+  are the natural thing to land together.
+- **Two PRs regenerate ts-rs bindings** — #88 (`bindings/MediaItem.ts`) and #85
+  (`bindings/AudioSink.ts`). Different files, so no conflict, but both need
+  `cargo test --release export_bindings` re-run after any rebase or CI will fail on drift.
+
+- **Changed:** `docs/night-log.md` only. No source file touched anywhere in the tree.
+- **Verify:** `bun run check` / `bun run build` / `bun run test` / `cargo check` / `cargo clippy`
+  — **all n/a, and deliberately not run.** This increment changes one markdown file; running the
+  suite would prove nothing about it. The branch is `487bd4d` plus a single docs commit, so it is
+  green by construction.
+- **Outcome:** **stopped, by design.** No eleventh code PR. The loop is not blocked on ideas — the
+  08-29 entry left three good zero-conflict candidates ready to go (`themes.ts` cycle-wrap,
+  `SleepTimer`'s `formatRemaining`/`endsAt`, the `MediaNav.marking` re-entrancy guard). It is
+  blocked on **review throughput**, which only Andrew can supply. Shipping more drafts against a
+  ten-day-cold `main` adds rebase debt to a queue that is currently, unusually, 100% clean — the
+  best moment to drain it is now, before anything rots.
+- **Stated tension, not hidden:** this entry is itself an eleventh PR, which is mildly ironic. It is
+  log-only (one file, no code), it is the one PR in the queue that costs a minute rather than a
+  review, and it carries the landing order — so it should be read *first* and merged or simply
+  closed after reading. If Andrew would rather the loop write nothing at all while the queue is
+  deep, say so in `VISION.md` and the next iteration will honour it.
+- **Next candidate:** **none until `main` moves.** The next iteration should re-check
+  `gh api repos/atiner117/omnideck/commits/main`. If it is still `487bd4d`, stop again immediately
+  and do not re-derive this analysis — it is above, and nothing about it changes until the queue
+  drains. If main *has* moved, resume from the 08-29 list (`themes.ts` first), and rebuild the
+  avoid-list from the then-current open PRs rather than reusing the stale one.
 
 ## 2026-08-20 — Review gate on #83 (mark-watched): 5-angle review, corroborated fixes on-branch
 - **Vision tie:** same gate #81 got — unreviewed autonomous work doesn't merge unreviewed.
@@ -1099,6 +2135,58 @@ Entry template:
   power/quick menu?), routes dpad focus with the exported `SLEEP_PRESETS` clamp, and dims the
   screen on `sleep-timer-fired` — pairs naturally with the #18/#29 screensaver overlay.
 
+## 2026-07-13 01:55 — theme system: 6 built-in themes over the design tokens (round-2 Lane A)
+- **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane A (theme system on the #16 tokens);
+  VISION.md priority 3 (polish on shipped surfaces) + a11y bar (High Contrast theme,
+  motion-free CRT scanlines).
+- **Branch / PR:** `loop/fable-themes-20260712-212059` —
+  https://github.com/atiner117/omnideck/pull/41 (draft, base `loop/fable-integration-page-20260712`)
+- **Changed:** new `src/lib/themes/` (registry + `applyTheme()` in themes.ts; per-theme
+  `:root[data-theme]` token blocks in themes.css — OmniDark default, OLED Black, Light,
+  High Contrast, Retro CRT w/ static scanlines, Deck). Gamepad-cyclable "Theme" row in the
+  table-driven Appearance settings section. `+page.svelte` wiring only: `$effect` applies the
+  theme; page background follows `var(--bg)` unless a custom background_color is set.
+  `config.rs`: additive `settings.theme` (serde default, whitelist-normalized, tests) +
+  regenerated bindings. Accent override = the existing `settings.accent`, untouched.
+  NOTE: cherry-picked #16 tokens commit `9fe9d89` onto this branch — backlog said the tokens
+  were in the page integration branch but they only landed in the backend one.
+- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · cargo check (pass, via
+  clippy) · cargo clippy (pass) · cargo test (pass, 40)
+- **Next candidate:** Lane D (layout/view modes) shares the Appearance section — its
+  `appearance.layout` row should follow the same settings-defs pattern. Also: delete the
+  Light-theme page shim in themes.css once +page.svelte adopts the tokens.
+
+## 2026-07-13 00:00 — audit run: backlog exhausted, tracked VISION.md/night-log.md in git
+- **Vision tie:** loop-continuity infra (VISION.md guardrail: "if nothing is safely shippable,
+  log that and stop rather than inventing scope").
+- **Branch / PR:** `loop/fable-trackdocs-20260712-200008` — draft PR against
+  `feat/media-audio-fps-config` (see PR list for URL).
+- **Changed:** No product code. Audited `gh pr list` (30 open drafts) against
+  `NOTES-REVIEW-DEEP-2026-07-11.md` (26 items) and `NOTES-DEEPDIVE-ROADMAP.md` (5 numbered
+  features): **every named item already has an open draft PR**, including the two
+  "integration" branches (`loop/fable-integration-20260712`,
+  `loop/fable-integration-page-20260712`) that already consolidate the overlapping small
+  branches into two green super-branches (see `NOTES-FABLE-LANDING-2026-07-12.md` for the
+  landing order). Review #26 (consolidate NOTES) is gitignore-moot
+  (`NOTES-*.md`/`NOTES.md` are in `.gitignore`); its only actionable part
+  (`docs/ARCHITECTURE.md`) already shipped in `loop/fable-archdoc-160138`. Remaining
+  parking-lot roadmap items are each blocked or too risky to ship unattended: guide-button
+  chord *remap* was explicitly deferred by `loop/fable-input-153828`'s own commit (hold-ms +
+  kill-switch shipped; full keysym remap needs more plumbing); HDR signaling has no verifiable
+  detection surface on this box (`gpu.rs` only reads RandR mode, not gamescope HDR state);
+  Steam family-view is gated on parental controls (#2), which is drafted but not merged;
+  cloud sync is explicitly "niche, defer" in the roadmap. One real gap found and fixed:
+  `VISION.md` and this file were **never committed on any branch** (pure untracked
+  working-tree files) — now tracked so the loop's compass/journal survive a fresh clone or a
+  worktree reset.
+- **Verify:** bun run check (n/a, docs-only) · bun run build (n/a, docs-only) · cargo check
+  (n/a, docs-only) · cargo clippy (n/a, docs-only) — no source files touched.
+- **Outcome:** shipped to draft PR (docs-only).
+- **Next candidate:** **not more code** — the safely-shippable backlog is exhausted. The
+  bottleneck is now landing debt: 30 open draft PRs need human triage/merge (start with the
+  two integration branches per `NOTES-FABLE-LANDING-2026-07-12.md`'s rebase order). Only after
+  that lands does it make sense to revisit the higher-risk parking-lot items flagged above.
+
 ## 2026-07-12 21:55 — Library view modes: rail / large grid / compact grid / list (round-2 Lane D)
 - **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane D (layout/view options); VISION
   controller-first ergonomics — one presentation was the launcher's biggest visual gap.
@@ -1171,58 +2259,6 @@ Entry template:
 - **Next candidate:** integration pass mounts ContinueWatchingRow on the home screen (+ input-
   router focus), then Lane C (artwork disk cache / startup perf) is the last untouched backend
   lane. Couch-test resume against the real Jellyfin before promoting #42.
-
-## 2026-07-13 01:55 — theme system: 6 built-in themes over the design tokens (round-2 Lane A)
-- **Vision tie:** NOTES-FEATURE-BACKLOG-2026-07-12 Lane A (theme system on the #16 tokens);
-  VISION.md priority 3 (polish on shipped surfaces) + a11y bar (High Contrast theme,
-  motion-free CRT scanlines).
-- **Branch / PR:** `loop/fable-themes-20260712-212059` —
-  https://github.com/atiner117/omnideck/pull/41 (draft, base `loop/fable-integration-page-20260712`)
-- **Changed:** new `src/lib/themes/` (registry + `applyTheme()` in themes.ts; per-theme
-  `:root[data-theme]` token blocks in themes.css — OmniDark default, OLED Black, Light,
-  High Contrast, Retro CRT w/ static scanlines, Deck). Gamepad-cyclable "Theme" row in the
-  table-driven Appearance settings section. `+page.svelte` wiring only: `$effect` applies the
-  theme; page background follows `var(--bg)` unless a custom background_color is set.
-  `config.rs`: additive `settings.theme` (serde default, whitelist-normalized, tests) +
-  regenerated bindings. Accent override = the existing `settings.accent`, untouched.
-  NOTE: cherry-picked #16 tokens commit `9fe9d89` onto this branch — backlog said the tokens
-  were in the page integration branch but they only landed in the backend one.
-- **Verify:** bun run check (pass, 0 errors) · bun run build (pass) · cargo check (pass, via
-  clippy) · cargo clippy (pass) · cargo test (pass, 40)
-- **Next candidate:** Lane D (layout/view modes) shares the Appearance section — its
-  `appearance.layout` row should follow the same settings-defs pattern. Also: delete the
-  Light-theme page shim in themes.css once +page.svelte adopts the tokens.
-
-## 2026-07-13 00:00 — audit run: backlog exhausted, tracked VISION.md/night-log.md in git
-- **Vision tie:** loop-continuity infra (VISION.md guardrail: "if nothing is safely shippable,
-  log that and stop rather than inventing scope").
-- **Branch / PR:** `loop/fable-trackdocs-20260712-200008` — draft PR against
-  `feat/media-audio-fps-config` (see PR list for URL).
-- **Changed:** No product code. Audited `gh pr list` (30 open drafts) against
-  `NOTES-REVIEW-DEEP-2026-07-11.md` (26 items) and `NOTES-DEEPDIVE-ROADMAP.md` (5 numbered
-  features): **every named item already has an open draft PR**, including the two
-  "integration" branches (`loop/fable-integration-20260712`,
-  `loop/fable-integration-page-20260712`) that already consolidate the overlapping small
-  branches into two green super-branches (see `NOTES-FABLE-LANDING-2026-07-12.md` for the
-  landing order). Review #26 (consolidate NOTES) is gitignore-moot
-  (`NOTES-*.md`/`NOTES.md` are in `.gitignore`); its only actionable part
-  (`docs/ARCHITECTURE.md`) already shipped in `loop/fable-archdoc-160138`. Remaining
-  parking-lot roadmap items are each blocked or too risky to ship unattended: guide-button
-  chord *remap* was explicitly deferred by `loop/fable-input-153828`'s own commit (hold-ms +
-  kill-switch shipped; full keysym remap needs more plumbing); HDR signaling has no verifiable
-  detection surface on this box (`gpu.rs` only reads RandR mode, not gamescope HDR state);
-  Steam family-view is gated on parental controls (#2), which is drafted but not merged;
-  cloud sync is explicitly "niche, defer" in the roadmap. One real gap found and fixed:
-  `VISION.md` and this file were **never committed on any branch** (pure untracked
-  working-tree files) — now tracked so the loop's compass/journal survive a fresh clone or a
-  worktree reset.
-- **Verify:** bun run check (n/a, docs-only) · bun run build (n/a, docs-only) · cargo check
-  (n/a, docs-only) · cargo clippy (n/a, docs-only) — no source files touched.
-- **Outcome:** shipped to draft PR (docs-only).
-- **Next candidate:** **not more code** — the safely-shippable backlog is exhausted. The
-  bottleneck is now landing debt: 30 open draft PRs need human triage/merge (start with the
-  two integration branches per `NOTES-FABLE-LANDING-2026-07-12.md`'s rebase order). Only after
-  that lands does it make sense to revisit the higher-risk parking-lot items flagged above.
 
 ## 2026-07-11 (session) — autonomous run over GLM-5.2's deep review
 Branch `loop/night-20260711` (branched off `feat/media-audio-fps-config` for this test run).
