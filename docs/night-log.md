@@ -22,6 +22,22 @@ Entry template:
 
 <!-- entries below -->
 
+## 2026-09-11 22:54 — STOP (eleventh iteration). Nothing moved since last night's entry.
+- **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
+  rather than inventing scope."* The standing next-candidate is still *"none until `main` moves."*
+- **Branch / PR:** no new branch. Appended to `loop/night-20260830` / **#95** (chain tip).
+- **State (complete open set, `--limit 200`, count first → 11, #85–#95):** `main` still
+  `487bd4d` — 22 days (every PR's `baseRefOid` is `487bd4d`; newest merged PR is still #83). All
+  eleven heads identical to the 09-10 entry (#95 `e04cd0c`, #94 `3c896ac`, … #85 `dc3ed28`);
+  the only push since was that entry itself. 11/11 `CLEAN`, all CI green, **0 reviews, 0 comments**.
+  The direct `main` checks (gh-token `fetch`, `gh api` commits) were permission-gated again.
+- **Changed:** `docs/night-log.md` only.
+- **Verify:** n/a — one markdown file on a 6/6-green tip.
+- **Outcome:** **stopped — no wake-up scheduled.** Nothing to add to the 09-10 reasoning: a
+  twelfth stacked head deepens a merge-ready queue that has not had its merge day.
+- **Next candidate:** unchanged — **none until `main` moves.** Then: re-inventory, reorder this
+  log newest-first, resume from `themes.ts` cycle-wrap tests (08-29 list).
+
 ## 2026-09-10 22:50 — STOP (tenth iteration). `main` unmoved — but the queue was restacked today.
 - **Vision tie:** `VISION.md` line 37 — *"If nothing is safely shippable tonight, log that and stop
   rather than inventing scope."* The standing next-candidate — *"none until `main` moves"* — is
