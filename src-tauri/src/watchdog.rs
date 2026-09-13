@@ -183,9 +183,40 @@ fn steam_app_running(text: &str, appid: &str) -> Option<bool> {
     Some(&after[q1 + 1..q1 + 1 + q2] == "1")
 }
 
+/// Does `cmdline` (a /proc/<pid>/cmdline, NUL-separated) belong to Steam's launch wrapper
+/// for `appid`? Every Linux Steam launch since the 2022 client goes through
+/// `ubuntu12_32/reaper SteamLaunch AppId=<appid> -- <game>`, and that reaper outlives the
+/// game by design (it is the process Steam waits on), so its presence is the running state.
+/// Exact-argument match: "AppId=570" must not hit "AppId=5700".
+fn cmdline_is_steam_launch(cmdline: &[u8], appid: &str) -> bool {
+    let want = format!("AppId={appid}");
+    let mut args = cmdline.split(|b| *b == 0);
+    while let Some(a) = args.next() {
+        if a == b"SteamLaunch" {
+            return args.next().map(|n| n == want.as_bytes()).unwrap_or(false);
+        }
+    }
+    false
+}
+
+/// Is a `reaper SteamLaunch AppId=<appid>` process alive? Scans /proc; the registry.vdf
+/// "Running" flag this used to rely on is no longer written by current Steam clients
+/// (observed 2026-09-13: a 681-byte registry.vdf with no "apps" block at all), which made
+/// every launch look like it never started.
+fn steam_app_process_running(appid: &str) -> bool {
+    let Ok(rd) = std::fs::read_dir("/proc") else { return false };
+    rd.flatten().any(|e| {
+        e.file_name().to_str().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+            && std::fs::read(e.path().join("cmdline"))
+                .map(|c| cmdline_is_steam_launch(&c, appid))
+                .unwrap_or(false)
+    })
+}
+
 /// Exit watchdog for a Steam launch (M2): the `steam://` URI returns immediately, so we
-/// poll registry.vdf — wait for the game to flip to running (cold start can be slow),
-/// then wait for it to stop — then tell the UI.
+/// poll for the game's `reaper SteamLaunch AppId=` process (registry.vdf's "Running" flag
+/// as a fallback for older clients) — wait for it to appear (cold start can be slow), then
+/// wait for it to go away — then tell the UI.
 ///
 /// Focus return is normally AUTOMATIC: gamescope shows the window whose STEAM_GAME=769
 /// ("main application") once a higher-priority game window is destroyed (per ChimeraOS
@@ -196,18 +227,27 @@ fn steam_app_running(text: &str, appid: &str) -> Option<bool> {
 pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: Option<String>) {
     let exit_key = id.unwrap_or_else(|| name.clone());
     std::thread::spawn(move || {
-        let reg = match steam_registry_path() {
-            Some(p) => p,
-            None => return, // can't observe; UI just stays on "now playing" until user backs out
-        };
-        let running = |reg: &std::path::Path| -> Option<bool> {
-            std::fs::read_to_string(reg).ok().and_then(|t| steam_app_running(&t, &appid))
+        let reg = steam_registry_path();
+        // Once the process has been seen, its absence is a confirmed exit — no registry
+        // needed. Before that, fall back to the registry (None = unknown).
+        let mut seen_process = false;
+        let mut running = || -> Option<bool> {
+            if steam_app_process_running(&appid) {
+                seen_process = true;
+                return Some(true);
+            }
+            if seen_process {
+                return Some(false);
+            }
+            reg.as_deref()
+                .and_then(|r| std::fs::read_to_string(r).ok())
+                .and_then(|t| steam_app_running(&t, &appid))
         };
         // Phase 1: confirm it actually started (up to ~120s for a cold Steam + shader pre-cache).
         let mut started = false;
         for _ in 0..240 {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            if running(&reg) == Some(true) {
+            if running() == Some(true) {
                 started = true;
                 break;
             }
@@ -224,7 +264,7 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
         // thread at 1 Hz forever.
         let mut unknown = 0u32;
         loop {
-            match running(&reg) {
+            match running() {
                 Some(false) => break,      // confirmed stopped
                 Some(true) => unknown = 0, // confirmed running — reset the unknown counter
                 None => {
@@ -248,7 +288,7 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
 
 #[cfg(test)]
 mod tests {
-    use super::steam_app_running;
+    use super::{cmdline_is_steam_launch, steam_app_running};
     const SAMPLE: &str = r#"
 "Registry" { "HKCU" { "Software" { "Valve" { "Steam" { "apps" {
   "570"   { "running"  "1"  "installed"  "1" }
@@ -268,5 +308,20 @@ mod tests {
     fn quoted_appid_does_not_match_substring() {
         // "57" must NOT match the "570"/"12570" blocks (quote-anchored).
         assert_eq!(steam_app_running(SAMPLE, "57"), None);
+    }
+
+    // A real /proc/<pid>/cmdline of Steam's launch wrapper (r2d2, 2026-09-13).
+    const REAPER: &[u8] = b"/home/atiner/.local/share/Steam/ubuntu12_32/reaper SteamLaunch AppId=2552450 -- /mnt/games/Steam/steamapps/common/SteamLinuxRuntime_4/_v2-entry-point ";
+
+    #[test]
+    fn reaper_cmdline_matches_exact_appid_only() {
+        assert!(cmdline_is_steam_launch(REAPER, "2552450"));
+        assert!(!cmdline_is_steam_launch(REAPER, "255245")); // prefix
+        assert!(!cmdline_is_steam_launch(REAPER, "25524500")); // longer
+        // The game binary itself is not the reaper.
+        assert!(!cmdline_is_steam_launch(b"/games/KH3.exe -AppId=2552450 ", "2552450"));
+        // SteamLaunch with nothing after it must not panic or match.
+        assert!(!cmdline_is_steam_launch(b"reaper SteamLaunch ", "2552450"));
+        assert!(!cmdline_is_steam_launch(b"", "2552450"));
     }
 }
