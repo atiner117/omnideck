@@ -17,7 +17,12 @@
 // Ownership: only windows whose _NET_WM_PID belongs to one of our launched process groups
 // (watchdog::live_groups; every launch is a group leader) are ever touched — never OmniDeck's
 // own window, gamescope's internals, or a Steam game's (Steam has gamescope's native
-// focus-return path).
+// focus-return path). "Steam's" is decided by the window, not the process: when the Steam
+// client itself is a launched tile (`steam://open/bigpicture`) it is a child of ours, and
+// every game it starts shares that process group — pid ownership alone would make Big
+// Picture AND the game "ours" (navpad driving a game with arrow keys/mouse, a Guide tap
+// SIGSTOPping the whole Steam tree). Any window carrying the STEAM_GAME atom is therefore
+// never owned, whatever its pid. See any_app_visible() for the related front-ness rule.
 use std::sync::Mutex;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState, Window};
@@ -310,12 +315,16 @@ fn visible_owned(
         return Vec::new();
     };
     let net_wm_pid = net_wm_pid.atom;
+    let steam_game = steam_game_atom(conn);
     let Ok(Ok(tree)) = conn.query_tree(root).map(|c| c.reply()) else { return Vec::new() };
     let mut visible = Vec::new();
     for &win in &tree.children {
         let Ok(Ok(attrs)) = conn.get_window_attributes(win).map(|c| c.reply()) else { continue };
         if attrs.map_state != MapState::VIEWABLE {
             continue;
+        }
+        if is_steam_window(conn, win, steam_game) {
+            continue; // Steam client / Steam game: gamepad-native, gamescope-managed
         }
         let Ok(Ok(prop)) = conn
             .get_property(false, win, net_wm_pid, AtomEnum::CARDINAL, 0, 1)
@@ -332,9 +341,14 @@ fn visible_owned(
     visible
 }
 
-/// True when a launched app's window is currently in front (viewable). The navpad uses
-/// this as its activation gate: gamescope focuses whatever is mapped on top, so "an owned
-/// window is viewable" is exactly "the controller's input should go to the app".
+/// True when a launched app's window is the one gamescope has IN FRONT. The navpad uses
+/// this as its activation gate: it must only drive the app that is actually receiving input.
+///
+/// "Viewable" is not enough: a launched PWA stays mapped underneath a Steam game, and while
+/// the game was in front the bridge kept turning the sticks into arrow keys and mouse motion
+/// for it — KH3 flipped to keyboard/mouse mode and the left stick went dead (couch box,
+/// 2026-09-13). So the owned window must also be gamescope's `GAMESCOPE_FOCUSED_WINDOW`.
+/// Without that root property (older gamescope) fall back to "any owned window viewable".
 pub fn any_app_visible() -> bool {
     // The navpad polls this ~3x/s for the whole session; with nothing launched the answer
     // is trivially false — don't touch X at all to say so (the pooled connection stays idle).
@@ -342,7 +356,25 @@ pub fn any_app_visible() -> bool {
     if groups.is_empty() {
         return false;
     }
-    with_x11(|conn, root| !visible_owned(conn, root, &groups).is_empty()).unwrap_or(false)
+    with_x11(|conn, root| {
+        let visible = visible_owned(conn, root, &groups);
+        if visible.is_empty() {
+            return false;
+        }
+        match gamescope_focused_window(conn, root) {
+            Some(focused) => visible.iter().any(|&(w, _)| w == focused),
+            None => true,
+        }
+    })
+    .unwrap_or(false)
+}
+
+/// gamescope's `GAMESCOPE_FOCUSED_WINDOW` root property (the X window it is presenting and
+/// routing input to). `None` when the property is absent (not gamescope, or too old).
+fn gamescope_focused_window(conn: &RustConnection, root: Window) -> Option<Window> {
+    let atom = conn.intern_atom(false, b"GAMESCOPE_FOCUSED_WINDOW").ok()?.reply().ok()?.atom;
+    let prop = conn.get_property(false, root, atom, AtomEnum::CARDINAL, 0, 1).ok()?.reply().ok()?;
+    prop.value32().and_then(|mut v| v.next()).filter(|&w| w != 0)
 }
 
 /// Toggle the launched app(s): if any owned window is visible, hide them all (focus falls
@@ -520,6 +552,26 @@ pub fn show_group(group: u32) -> bool {
     .unwrap_or(false)
 }
 
+/// The STEAM_GAME atom (Steam stamps it on Big Picture — 769 — and on every game window;
+/// OmniDeck stamps 769 on its own window in a session, which ownership already excludes by
+/// pid). `None` only if the X server could not intern it, in which case nothing is skipped.
+fn steam_game_atom(conn: &x11rb::rust_connection::RustConnection) -> Option<x11rb::protocol::xproto::Atom> {
+    conn.intern_atom(false, b"STEAM_GAME").ok()?.reply().ok().map(|r| r.atom)
+}
+
+/// Does `win` carry a STEAM_GAME property? Such windows are never owned (see header).
+fn is_steam_window(
+    conn: &x11rb::rust_connection::RustConnection,
+    win: Window,
+    steam_game: Option<x11rb::protocol::xproto::Atom>,
+) -> bool {
+    let Some(atom) = steam_game else { return false };
+    conn.get_property(false, win, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .is_some_and(|p| p.value32().and_then(|mut v| v.next()).is_some())
+}
+
 /// All toplevels (any map state) whose _NET_WM_PID belongs to `group` — used to re-map a
 /// specific app's windows after they were unmapped (they're not VIEWABLE, so visible_owned
 /// can't find them).
@@ -532,9 +584,13 @@ fn windows_of_group(
         return Vec::new();
     };
     let net_wm_pid = net_wm_pid.atom;
+    let steam_game = steam_game_atom(conn);
     let Ok(Ok(tree)) = conn.query_tree(root).map(|c| c.reply()) else { return Vec::new() };
     let mut out = Vec::new();
     for &win in &tree.children {
+        if is_steam_window(conn, win, steam_game) {
+            continue;
+        }
         let Ok(Ok(prop)) = conn
             .get_property(false, win, net_wm_pid, AtomEnum::CARDINAL, 0, 1)
             .map(|c| c.reply())

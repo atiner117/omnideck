@@ -282,6 +282,29 @@ fn steam_app_running(text: &str, appid: &str) -> Option<bool> {
     Some(&after[q1 + 1..q1 + 1 + q2] == "1")
 }
 
+/// Steam appids with a live launch watcher (launching or running). Held by
+/// [`SteamWatchGuard`] for the watcher thread's lifetime.
+static STEAM_WATCHED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Claim `appid` for one watcher; `None` when it is already launching/running. Dropping the
+/// guard releases it, whichever way the watcher ends (started+exited, or gave up).
+pub(crate) struct SteamWatchGuard(String);
+impl SteamWatchGuard {
+    pub(crate) fn claim(appid: &str) -> Option<Self> {
+        STEAM_WATCHED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(appid.to_string())
+            .then(|| Self(appid.to_string()))
+    }
+}
+impl Drop for SteamWatchGuard {
+    fn drop(&mut self) {
+        STEAM_WATCHED.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
 /// Does `cmdline` (a /proc/<pid>/cmdline, NUL-separated) belong to Steam's launch wrapper
 /// for `appid`? Every Linux Steam launch since the 2022 client goes through
 /// `ubuntu12_32/reaper SteamLaunch AppId=<appid> -- <game>`, and that reaper outlives the
@@ -323,9 +346,16 @@ fn steam_app_process_running(appid: &str) -> bool {
 /// re-stamp below is a belt-and-suspenders no-op if the atom is still set; if M2 shows
 /// gamescope NOT returning to us, the stronger lever is GAMESCOPECTRL_BASELAYER_APPID on
 /// the root window (pins our appid as the base layer) — add that only if needed.
-pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: Option<String>) {
+///
+/// One watcher per appid: the guard is claimed here and released when the thread ends, so
+/// a launch of an app that is already launching/running is a no-op for the caller
+/// (`launch_game` checks [`SteamWatchGuard::claim`] BEFORE talking to Steam — a second
+/// `steam://rungameid` only makes Steam pop "already running" and re-raise the game
+/// mid-load, which wedged KH3 on a black frame on the couch box, 2026-09-13).
+pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: Option<String>, guard: SteamWatchGuard) {
     let exit_key = id.unwrap_or_else(|| name.clone());
     std::thread::spawn(move || {
+        let _guard = guard; // released when this thread returns, on every path below
         let reg = steam_registry_path();
         // Once the process has been seen, its absence is a confirmed exit — no registry
         // needed. Before that, fall back to the registry (None = unknown).
@@ -387,7 +417,7 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
 
 #[cfg(test)]
 mod tests {
-    use super::{cmdline_is_steam_launch, steam_app_running};
+    use super::{cmdline_is_steam_launch, steam_app_running, SteamWatchGuard};
     const SAMPLE: &str = r#"
 "Registry" { "HKCU" { "Software" { "Valve" { "Steam" { "apps" {
   "570"   { "running"  "1"  "installed"  "1" }
@@ -422,5 +452,14 @@ mod tests {
         // SteamLaunch with nothing after it must not panic or match.
         assert!(!cmdline_is_steam_launch(b"reaper SteamLaunch ", "2552450"));
         assert!(!cmdline_is_steam_launch(b"", "2552450"));
+    }
+
+    #[test]
+    fn one_watcher_per_appid_until_released() {
+        let a = SteamWatchGuard::claim("900001").expect("first claim");
+        assert!(SteamWatchGuard::claim("900001").is_none(), "second launch must be a no-op");
+        assert!(SteamWatchGuard::claim("900002").is_some(), "other appids unaffected");
+        drop(a);
+        assert!(SteamWatchGuard::claim("900001").is_some(), "released when the watcher ends");
     }
 }
