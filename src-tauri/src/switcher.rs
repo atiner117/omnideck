@@ -377,6 +377,39 @@ fn gamescope_focused_window(conn: &RustConnection, root: Window) -> Option<Windo
     prop.value32().and_then(|mut v| v.next()).filter(|&w| w != 0)
 }
 
+/// True when OmniDeck's own window is the one gamescope presents — or when there is no
+/// gamescope focus property to consult (plain desktop, older gamescope). The pad→UI path
+/// gates on this: a Steam game is never owned (see header), so the navpad stays out of
+/// it, but without this check every press in the game was ALSO forwarded to the hidden
+/// dashboard — on the couch box (2026-09-13) each Cross in KH3 fired the focused tile
+/// behind the game (Jellyfin, then Assassin's Creed) and the focus flips wedged Steam
+/// Input. Cached for 50 ms: gilrs delivers axis events at pad rate.
+pub fn omnideck_in_front() -> bool {
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    let mut cache = crate::sync::lock_or_recover(&CACHE, "switcher.IN_FRONT");
+    if let Some((at, v)) = *cache {
+        if at.elapsed() < Duration::from_millis(50) {
+            return v;
+        }
+    }
+    let me = std::process::id();
+    let v = with_x11(|conn, root| match gamescope_focused_window(conn, root) {
+        Some(focused) => window_pid(conn, focused) == Some(me),
+        None => true,
+    })
+    .unwrap_or(true);
+    *cache = Some((Instant::now(), v));
+    v
+}
+
+/// `_NET_WM_PID` of a window, if it carries one.
+fn window_pid(conn: &RustConnection, win: Window) -> Option<u32> {
+    let atom = conn.intern_atom(false, b"_NET_WM_PID").ok()?.reply().ok()?.atom;
+    let prop = conn.get_property(false, win, atom, AtomEnum::CARDINAL, 0, 1).ok()?.reply().ok()?;
+    prop.value32().and_then(|mut v| v.next())
+}
+
 /// Toggle the launched app(s): if any owned window is visible, hide them all (focus falls
 /// back to OmniDeck); else re-show whatever the last toggle hid. Returns a short description
 /// of what happened, or None if there was nothing to act on.

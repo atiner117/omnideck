@@ -315,7 +315,14 @@ fn cmdline_is_steam_launch(cmdline: &[u8], appid: &str) -> bool {
     let mut args = cmdline.split(|b| *b == 0);
     while let Some(a) = args.next() {
         if a == b"SteamLaunch" {
-            return args.next().map(|n| n == want.as_bytes()).unwrap_or(false);
+            if args.next().map(|n| n == want.as_bytes()) != Some(true) {
+                return false;
+            }
+            // Steam's install-script evaluator uses the SAME reaper shape with one extra
+            // token — `SteamLaunch AppId=<id> Install=1 -- … iscriptevaluator.exe` — and runs
+            // for a few seconds BEFORE the real launch. Couch box 2026-09-13: the watcher saw
+            // it, then its absence, and declared the game exited 4 s before its exe started.
+            return args.next().is_none_or(|x| x != b"Install=1");
         }
     }
     false
@@ -360,13 +367,18 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
         // Once the process has been seen, its absence is a confirmed exit — no registry
         // needed. Before that, fall back to the registry (None = unknown).
         let mut seen_process = false;
+        let mut absent_polls = 0u32;
         let mut running = || -> Option<bool> {
             if steam_app_process_running(&appid) {
                 seen_process = true;
+                absent_polls = 0;
                 return Some(true);
             }
             if seen_process {
-                return Some(false);
+                // One missed poll is not an exit (proc scan racing a Steam relaunch, a
+                // reaper re-exec); three in a row is.
+                absent_polls += 1;
+                return Some(absent_polls < 3);
             }
             reg.as_deref()
                 .and_then(|r| std::fs::read_to_string(r).ok())
@@ -451,6 +463,12 @@ mod tests {
         assert!(!cmdline_is_steam_launch(b"/games/KH3.exe -AppId=2552450 ", "2552450"));
         // SteamLaunch with nothing after it must not panic or match.
         assert!(!cmdline_is_steam_launch(b"reaper SteamLaunch ", "2552450"));
+        // Steam's pre-launch install-script evaluator: same reaper, extra Install=1 token.
+        assert!(!cmdline_is_steam_launch(
+            b"reaper SteamLaunch AppId=2552450 Install=1 -- /x/iscriptevaluator.exe ",
+            "2552450"
+        ));
+        assert!(cmdline_is_steam_launch(b"reaper SteamLaunch AppId=2552450 -- /x/game.exe ", "2552450"));
         assert!(!cmdline_is_steam_launch(b"", "2552450"));
     }
 
