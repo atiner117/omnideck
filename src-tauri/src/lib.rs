@@ -41,6 +41,28 @@ mod testhook;
 mod update;
 mod watchdog;
 
+/// Start Steam early in the console session so Steam Input has created its virtual controller
+/// before the first game process enumerates XInput slot 0. A cold `steam://rungameid` launch can
+/// start the game before that device exists, leaving single-player games keyboard-only until
+/// they are restarted. `-silent` initializes the client without replacing OmniDeck's UI.
+fn warm_steam_if_session() {
+    if !crate::session::in_session() {
+        return;
+    }
+    std::thread::spawn(
+        || match std::process::Command::new("steam").arg("-silent").spawn() {
+            Ok(mut child) => {
+                tracing::info!(
+                    pid = child.id(),
+                    "started Steam silently for session input readiness"
+                );
+                let _ = child.wait();
+            }
+            Err(error) => tracing::warn!(%error, "could not start Steam silently"),
+        },
+    );
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Logging before anything that can warn (config parse errors surface in CLI runs too):
@@ -117,6 +139,7 @@ pub fn run() {
             remote::set_remote_enabled
         ])
         .setup(|app| {
+            warm_steam_if_session();
             let handle = app.handle().clone();
             std::thread::spawn(move || gamepad::gamepad_loop(handle));
             // Event-driven Now Playing: one session-bus watcher pushes `media-changed` events.

@@ -15,6 +15,14 @@ edition = "2021"
 name = "omnideck_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Production assets must be the default even for direct `cargo build --release` invocations.
+# Tauri's CLI also enables this feature explicitly, but without a default a direct Cargo build
+# silently points the webview at build.devUrl (localhost:1420), yielding a grey connection-error
+# screen when deployed to the couch session.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
