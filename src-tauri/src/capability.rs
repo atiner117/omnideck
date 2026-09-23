@@ -97,6 +97,7 @@ fn probe_uncached() -> Capability {
     let gamescope = in_path("gamescope");
     let gamescope_session_plus = in_path("gamescope-session-plus") || in_path("gamescope-fg");
     let cage = in_path("cage");
+    let webview_audio = gst_autoaudiosink_present();
 
     let tier1_capable = has_real_gpu && kms_active;
     let tier = if tier1_capable {
@@ -141,6 +142,18 @@ fn probe_uncached() -> Capability {
                     .into(),
             );
         }
+    }
+
+    // Sound is a webview feature: WebKitGTK plays Web Audio (nav blips, ambient pad) through
+    // GStreamer's `autoaudiosink`, which ships in gst-plugins-good — NOT a webkit2gtk
+    // dependency on Arch. Couch box 2026-09-23: everything else worked and the menu was just
+    // silent; no error anywhere, the WebProcess simply never opened an audio stream.
+    if webview_audio == Some(false) {
+        diagnostics.push(
+            "WebKitGTK has no GStreamer audio sink (autoaudiosink missing) — navigation \
+             sounds and ambient music will be silent. Install `gst-plugins-good`."
+                .into(),
+        );
     }
 
     Capability {
@@ -247,6 +260,35 @@ fn read_trim<P: AsRef<Path>>(p: P) -> Option<String> {
     fs::read_to_string(p).ok().map(|s| s.trim().to_string())
 }
 
+/// Is GStreamer's `autoaudiosink` (the element WebKitGTK builds its audio output on)
+/// installed? `None` when no GStreamer plugin directory exists at all — a layout this probe
+/// doesn't know (Flatpak, AppImage) rather than evidence of a missing plugin.
+fn gst_autoaudiosink_present() -> Option<bool> {
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("GST_PLUGIN_PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    dirs.extend(
+        [
+            "/usr/lib/gstreamer-1.0",
+            "/usr/lib64/gstreamer-1.0",
+            "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
+            "/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
+            "/usr/local/lib/gstreamer-1.0",
+        ]
+        .map(std::path::PathBuf::from),
+    );
+    gst_autoaudiosink_present_in(&dirs)
+}
+
+fn gst_autoaudiosink_present_in(dirs: &[std::path::PathBuf]) -> Option<bool> {
+    let existing: Vec<&std::path::PathBuf> = dirs.iter().filter(|d| d.is_dir()).collect();
+    if existing.is_empty() {
+        return None;
+    }
+    // libgstautodetect.so is the plugin that registers autoaudiosink (gst-plugins-good).
+    Some(existing.iter().any(|d| d.join("libgstautodetect.so").is_file()))
+}
+
 fn in_path(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file()))
@@ -285,4 +327,41 @@ pub fn report(c: &Capability) -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gst_autoaudiosink_present_in;
+    use std::path::PathBuf;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("omnideck-gst-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn no_plugin_dir_at_all_is_unknown_not_missing() {
+        let ghost = std::env::temp_dir().join("omnideck-gst-no-such-dir");
+        assert_eq!(gst_autoaudiosink_present_in(&[ghost]), None);
+    }
+
+    #[test]
+    fn plugin_dir_without_autodetect_is_missing() {
+        let d = scratch("empty");
+        std::fs::write(d.join("libgstpipewire.so"), b"").unwrap(); // a sink, but not autodetect
+        assert_eq!(gst_autoaudiosink_present_in(std::slice::from_ref(&d)), Some(false));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn autodetect_in_any_listed_dir_is_present() {
+        let empty = scratch("first");
+        let good = scratch("second");
+        std::fs::write(good.join("libgstautodetect.so"), b"").unwrap();
+        assert_eq!(gst_autoaudiosink_present_in(&[empty.clone(), good.clone()]), Some(true));
+        let _ = std::fs::remove_dir_all(empty);
+        let _ = std::fs::remove_dir_all(good);
+    }
 }

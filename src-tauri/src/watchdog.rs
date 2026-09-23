@@ -72,6 +72,11 @@ pub fn return_home() -> bool {
     // and reached nobody. The switcher holds the per-member identity records that make
     // signalling those survivors verified rather than blind.
     any |= crate::switcher::close_stopped_groups();
+    // ...and a running Steam game. Steam launches are never in LIVE_GROUPS (the `steam
+    // steam://rungameid/…` leader exits at once; the game lives under Steam's own reaper), so
+    // until 2026-09 a Guide hold over a Steam game closed nothing — the one app the couch
+    // launches most was the one the close chord could not reach.
+    any |= close_steam_games();
     // Only report success if a signal actually reached something — otherwise the caller would
     // emit "app-closed" / swallow the Guide press while the window is still on screen.
     any
@@ -342,6 +347,76 @@ fn steam_app_process_running(appid: &str) -> bool {
     })
 }
 
+/// `(ppid, starttime)` from /proc/<pid>/stat — same field discipline as `proc_start_time`
+/// (parse after the LAST ')' so a comm with spaces/parens can't shift the fields).
+fn proc_ppid_and_start(pid: u32) -> Option<(u32, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.rsplit_once(')')?.1;
+    let mut f = rest.split_whitespace();
+    let ppid = f.nth(1)?.parse().ok()?; // state, PPID
+    let start = f.nth(17)?.parse().ok()?; // …, starttime (field 22)
+    Some((ppid, start))
+}
+
+/// Every process under Steam's launch reaper(s) for `appid` — the reaper, the game, and
+/// anything the game forked — **deepest first**, each with its kernel start time so the
+/// caller can signal it recycle-safely via `signal_pid_verified`.
+///
+/// Deepest first matters: SIGTERM the reaper before the game and the game is reparented
+/// to Steam (a subreaper) and keeps running with nothing left that knows it belongs to
+/// this launch. One /proc walk builds the parent map; roots are the cmdline matches.
+fn steam_app_process_tree(appid: &str) -> Vec<(u32, u64)> {
+    let Ok(rd) = std::fs::read_dir("/proc") else { return Vec::new() };
+    let mut roots = Vec::new();
+    let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    let mut start: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    for e in rd.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let Some((ppid, st)) = proc_ppid_and_start(pid) else { continue };
+        start.insert(pid, st);
+        children.entry(ppid).or_default().push(pid);
+        if std::fs::read(e.path().join("cmdline")).is_ok_and(|c| cmdline_is_steam_launch(&c, appid)) {
+            roots.push(pid);
+        }
+    }
+    // Breadth-first from the roots, then reversed: parents come before children in `order`,
+    // so the reverse is deepest-first. A pid reached twice (impossible in a tree, cheap to
+    // guard) is kept once.
+    let mut order: Vec<u32> = Vec::new();
+    let mut queue: std::collections::VecDeque<u32> = roots.into_iter().collect();
+    while let Some(pid) = queue.pop_front() {
+        if order.contains(&pid) {
+            continue;
+        }
+        order.push(pid);
+        if let Some(kids) = children.get(&pid) {
+            queue.extend(kids.iter().copied());
+        }
+    }
+    order.into_iter().rev().filter_map(|pid| start.get(&pid).map(|&st| (pid, st))).collect()
+}
+
+/// SIGTERM every Steam game a watcher currently tracks (see `watch_steam_game`): the whole
+/// reaper subtree, deepest first, each pid verified against the start time read moments
+/// ago. Returns true if any signal landed. The watcher then sees the reaper gone for three
+/// polls and emits `app-exited` exactly as it does for a normal quit — no special path.
+pub(crate) fn close_steam_games() -> bool {
+    let watched: Vec<String> =
+        STEAM_WATCHED.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
+    let mut any = false;
+    for appid in watched {
+        let tree = steam_app_process_tree(&appid);
+        if tree.is_empty() {
+            continue; // still launching (no reaper yet) or already gone
+        }
+        tracing::info!(appid, procs = tree.len(), "watchdog: closing the Steam game's process tree");
+        for (pid, st) in tree {
+            any |= signal_pid_verified(pid, st, libc::SIGTERM);
+        }
+    }
+    any
+}
+
 /// Exit watchdog for a Steam launch (M2): the `steam://` URI returns immediately, so we
 /// poll for the game's `reaper SteamLaunch AppId=` process (registry.vdf's "Running" flag
 /// as a fallback for older clients) — wait for it to appear (cold start can be slow), then
@@ -429,7 +504,10 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
 
 #[cfg(test)]
 mod tests {
-    use super::{cmdline_is_steam_launch, steam_app_running, SteamWatchGuard};
+    use super::{
+        close_steam_games, cmdline_is_steam_launch, proc_start_time, steam_app_process_tree,
+        steam_app_running, SteamWatchGuard,
+    };
     const SAMPLE: &str = r#"
 "Registry" { "HKCU" { "Software" { "Valve" { "Steam" { "apps" {
   "570"   { "running"  "1"  "installed"  "1" }
@@ -479,5 +557,47 @@ mod tests {
         assert!(SteamWatchGuard::claim("900002").is_some(), "other appids unaffected");
         drop(a);
         assert!(SteamWatchGuard::claim("900001").is_some(), "released when the watcher ends");
+    }
+
+    /// Guide hold must reach a Steam game (couch box 2026-09-15: it closed nothing). The
+    /// stand-in for `reaper SteamLaunch AppId=<id> -- game` is `sh` carrying the marker in
+    /// its argv as unused positional parameters, with a forked child like the real reaper.
+    /// The tree must come back deepest first and the close must take BOTH processes.
+    #[test]
+    fn close_steam_games_terminates_the_whole_reaper_tree_deepest_first() {
+        let appid = format!("9{}", std::process::id()); // unique per test process
+        let _guard = SteamWatchGuard::claim(&appid).expect("appid not yet watched");
+        // Two commands, so sh must stay resident as the parent (a lone `sleep` gets exec'd).
+        let mut sh = std::process::Command::new("sh")
+            .args(["-c", "sleep 30; sleep 30", "SteamLaunch", &format!("AppId={appid}")])
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        let wait_for = |mut f: Box<dyn FnMut() -> bool>| -> bool {
+            for _ in 0..300 {
+                if f() {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            false
+        };
+        let a = appid.clone();
+        assert!(wait_for(Box::new(move || steam_app_process_tree(&a).len() >= 2)), "sh never forked sleep");
+        let tree = steam_app_process_tree(&appid);
+        assert_eq!(tree.len(), 2, "sh + its sleep child: {tree:?}");
+        assert_eq!(tree[1].0, sh.id(), "the root (sh) must come LAST (deepest first)");
+        assert_ne!(tree[0].0, sh.id());
+
+        assert!(close_steam_games(), "no signal landed");
+        // sh dies on SIGTERM (default action) — reap it so the pid can't linger as a zombie.
+        assert!(wait_for(Box::new(move || sh.try_wait().ok().flatten().is_some())), "sh survived SIGTERM");
+        let (kid, kid_start) = tree[0];
+        assert!(
+            wait_for(Box::new(move || proc_start_time(kid) != Some(kid_start))),
+            "the forked sleep survived SIGTERM"
+        );
+        // Nothing tracked any more: a second close is a no-op, not a blind kill.
+        assert!(!close_steam_games());
     }
 }
