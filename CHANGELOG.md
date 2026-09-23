@@ -351,6 +351,26 @@ All notable changes to OmniDeck are documented here. Format follows
   overwriting a same-named entry; empty/symbol-only names are rejected.
 
 ### Fixed
+- **Guide hold closes a running Steam game**: Steam launches never sat in the launcher's own
+  process-group registry (the `steam://rungameid` leader exits at once; the game lives under
+  Steam's reaper), so the close chord signalled every owned app and left the game — the app the
+  couch launches most — untouched. `return_home` now also SIGTERMs every watched Steam game's
+  launch tree, **deepest process first** (TERM the reaper before the game and Steam's subreaper
+  adopts the game, which then runs on with nothing tracking it), each pid verified against the
+  start time read moments earlier so a recycled pid is never signalled. The existing watcher then
+  reports the exit exactly as it does for a normal quit.
+- **Session teardown no longer strands frozen apps**: gamescope SIGTERMs its client on exit, and
+  the default disposition killed the launcher before the `RunEvent::Exit` thaw could run — every
+  SIGSTOPped hidden app stayed stopped, invisible, and unable to notice its X display was gone,
+  so gamescope sat waiting on it (couch box, 2026-09-15, thawed by hand). A self-pipe signal
+  handler (`signals.rs`, SIGTERM/SIGINT/SIGHUP) now thaws every frozen group on a dedicated
+  thread and re-raises the signal with the default action, so the process still dies "by
+  SIGTERM" as the sender expects. Regressed by a new `term-thaw` step in `test-session.sh`.
+- **A silent couch box is diagnosed, not shrugged at**: WebKitGTK plays the UI's sounds through
+  GStreamer's `autoaudiosink`, which lives in `gst-plugins-good` — a package `webkit2gtk-4.1`
+  does not depend on. Without it the nav blips and ambient pad are silent with no error anywhere
+  (r2d2, 2026-09-23). `omnideck probe` now reports the missing sink under *diagnostics*,
+  `install-session.sh` warns about it, and the PKGBUILD depends on `gst-plugins-good`.
 - **Launch failures say what actually went wrong**: raw OS errors from `spawn()` are mapped
   at the spawn site into actionable messages ("not found on `PATH`", permission denied, …)
   instead of surfacing an errno. Done as error mapping rather than a `PATH` pre-flight on
