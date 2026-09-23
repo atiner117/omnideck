@@ -14,6 +14,8 @@
 #   6. pad-pick    A on the focused card brings the app back
 #   7. pad-close   Guide hold closes it AT the 800 ms threshold, while still held
 #   8. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
+#   9. term-thaw   SIGTERM to OmniDeck (= gamescope session teardown) thaws a frozen hidden
+#                  app before the process dies (signals.rs) — the app must leave state 'T'
 #
 # Still bare-metal only: display-mode/165 Hz (real EDID), real Steam launch + focus return
 # (STEAM_GAME atom), suspend, SDDM login. Everything else regresses HERE first.
@@ -60,7 +62,11 @@ wait_for() {
 }
 
 cleanup() {
-  [ -p "$FIFO" ] && { echo quit > "$FIFO"; } 2>/dev/null &
+  # Only ask a LIVE launcher to quit: a FIFO writer with no reader blocks in open() forever,
+  # and after the term-thaw step the launcher is gone by design.
+  if [ -p "$FIFO" ] && { [ -z "${APP_PID:-}" ] || kill -0 "$APP_PID" 2>/dev/null; }; then
+    { echo quit > "$FIFO"; } 2>/dev/null &
+  fi
   sleep 1
   [ -n "${GS_PID:-}" ] && kill "$GS_PID" 2>/dev/null
   [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null
@@ -89,6 +95,7 @@ echo "  nested display: $NESTED   (log: $GSLOG)"
 # ── 1. boot: window mapped + non-black paint ──
 if wait_for 30 "xdotool search --onlyvisible --name '^omnideck$' | grep -q ."; then
   APP_WID="$(xdotool search --onlyvisible --name '^omnideck$' | head -1)"
+  APP_PID="$(xdotool getwindowpid "$APP_WID" 2>/dev/null || true)"   # _NET_WM_PID = the launcher
   if wait_for 30 "import -silent -window '$APP_WID' '$RUN/boot.png' &&
                   magick '$RUN/boot.png' -format '%[fx:mean>0.02?1:0]' info: | grep -qx 1"; then
     ok "boot: OmniDeck window painted (not black)"
@@ -181,6 +188,33 @@ if [ -w /dev/uinput ]; then
     fi
   else
     bad "pad: stub app never appeared on relaunch"
+  fi
+
+  # ── 9. term-thaw: session teardown must not strand a frozen app ──
+  # Guide tap hides the stub; it is silent, so the switcher SIGSTOPs it (state 'T'). Then
+  # SIGTERM the launcher itself — exactly what gamescope does on teardown. signals.rs must
+  # thaw the stub before the process dies: a stopped X client can't notice its display going
+  # away, and gamescope then waits on it forever. LAST step: the launcher is gone afterwards.
+  echo "── termination thaw (SIGTERM = session teardown) ──"
+  stub_state() { awk '{ sub(/.*\) /, ""); print substr($0, 1, 1) }' "/proc/${STUB_PID:-0}/stat" 2>/dev/null; }
+  if [ -z "${APP_PID:-}" ]; then
+    bad "term-thaw: launcher pid unknown (no _NET_WM_PID on its window)"
+  elif stub_launch; then
+    if toggle_expect "$PAD guide-short" hidden && wait_for 4 "[ \"\$(stub_state)\" = T ]"; then
+      kill -TERM "$APP_PID"
+      if wait_for 6 "[ -n \"\$(stub_state)\" ] && [ \"\$(stub_state)\" != T ]"; then
+        ok "term-thaw: SIGTERM to the launcher thawed the frozen hidden app (state $(stub_state))"
+      else
+        bad "term-thaw: hidden app still SIGSTOPped after the launcher got SIGTERM (state '$(stub_state)')"
+      fi
+      wait_for 6 "! kill -0 $APP_PID" && ok "term-thaw: launcher exited on SIGTERM" \
+        || bad "term-thaw: launcher still alive 6 s after SIGTERM"
+    else
+      bad "term-thaw: stub was not hidden+frozen by the Guide tap (state '$(stub_state)') — nothing to thaw"
+    fi
+    stub_kill
+  else
+    bad "term-thaw: stub app never appeared"
   fi
 else
   echo "  – skipped: no write access to /dev/uinput (add yourself to the 'input' group)"

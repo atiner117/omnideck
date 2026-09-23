@@ -74,13 +74,17 @@ profiles when the hardware can handle it.
   a fixed-rate DAC / LDAC (both default off).
 - 🃏 **App switcher, iOS-style** (session) — tap **Guide** (or `Ctrl+Alt+Home`) for a row of
   cards, one per running app: pick one to jump to it, **Select** (or the ✕) to close it,
-  **B** to drop back to the dashboard. Guide-**hold** still closes everything at once.
+  **B** to drop back to the dashboard. Guide-**hold** still closes everything at once —
+  including a running Steam game (its whole launch tree, deepest process first).
 - 🎮➡️🖱️ **Controller drives launched apps too** (session) — while a launched PWA/browser/
   app is in front, the pad becomes a virtual keyboard+mouse (`/dev/uinput`): **right stick =
   mouse pointer** (the primary way to navigate any web UI), `A`/cross = click, dpad/left
   stick = arrow keys with console-style repeat (Jellyfin-web and every TV-style UI is
   arrow-driven), `X` = Enter, `B` = Back/Esc, `Y` = play/pause, `R2` = click-and-hold,
   `L1`/`R1` = scroll — the PlayStation-browser experience. Needs your user in the `input` group.
+  A DualShock 4 / DualSense **touchpad** also works as a plain mouse in the session (the kernel
+  exposes it as a touchpad device and gamescope drives the pointer from it directly) — handy
+  for the few PWAs that need a real click where the stick pointer feels slow.
 - 🧊 **Silent hidden apps are frozen** (session) — switching away keeps *audible* apps
   running (background music is a feature), but a hidden app with no active audio stream
   is SIGSTOPped until you switch back — a hidden software-rendering PWA no longer burns
@@ -106,6 +110,9 @@ profiles when the hardware can handle it.
 
 - Linux (X11 or Wayland). A browser (Brave/Chromium/Firefox) for streaming launchers.
 - Build deps: `webkit2gtk-4.1`, `libudev` (gamepad input), Rust (1.80+), Node 20+ or Bun.
+- Runtime: `gst-plugins-good` — WebKitGTK's audio output (`autoaudiosink`) lives there and
+  `webkit2gtk-4.1` does not pull it in; without it the navigation sounds and ambient music
+  are silent with no error anywhere. `omnideck probe` lists it under *diagnostics* if missing.
 - Optional: `gamescope` (for the 10-foot **session** — install it with
   `packaging/install-session.sh`, which runs a *plain* gamescope session; no
   `gamescope-session-plus` required); `cage` (media-kiosk tier on GPU-less hosts);
