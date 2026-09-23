@@ -1518,9 +1518,11 @@ mod tests {
     /// Held by every test that touches the process-wide registries (`STOPPED`, watchdog's
     /// `LIVE_GROUPS`). Cargo runs tests as threads in ONE process, and `return_home` signals
     /// every group in those registries — so without this, the close-all test would SIGTERM the
-    /// thaw test's leader out from under it. Poison-tolerant like the rest of the codebase: a
-    /// failing test must not turn its neighbour into a second, misleading failure.
-    static REGISTRIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// thaw test's leader out from under it. It is watchdog's lock, not a private one, because
+    /// close-all also reaches watchdog's own Steam-close test processes. Poison-tolerant like
+    /// the rest of the codebase: a failing test must not turn its neighbour into a second,
+    /// misleading failure.
+    use crate::watchdog::TEST_REGISTRIES as REGISTRIES;
 
     /// Held by every test that arms a guard or takes the transition locks. GUARD_EPOCH is
     /// process-wide, so a neighbour's epoch bump would cancel this test's guard for the wrong
@@ -1754,7 +1756,7 @@ mod tests {
     /// restored, and it must still be running after the freeze step.
     #[test]
     fn a_group_restored_mid_hide_is_never_frozen() {
-        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "watchdog.TEST_REGISTRIES");
         let (a, b) = (11, 22);
         // Phase 1 saw both A and B; by phase 3, A has a viewable window again.
         assert_eq!(super::still_hidden(&[(1, a), (2, a), (3, b)], &[a]), vec![(3, b)]);
@@ -2086,7 +2088,7 @@ mod tests {
     #[test]
     fn frozen_group_is_thawed_after_its_leader_dies() {
         use std::os::unix::process::CommandExt as _;
-        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "watchdog.TEST_REGISTRIES");
 
         let mut leader = std::process::Command::new("sh")
             .args(["-c", "sleep 30"])
@@ -2209,7 +2211,7 @@ mod tests {
     /// "frozen and invisible" to "running and unclosable".
     #[test]
     fn a_leaderless_group_re_shown_from_the_deck_can_still_be_closed() {
-        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "watchdog.TEST_REGISTRIES");
         let (mut leader, mut member_child, group, member_pid) =
             spawn_group_with_outside_parented_member();
         let _cleanup = KillGroup(group);
@@ -2271,7 +2273,7 @@ mod tests {
     #[test]
     fn close_all_reaches_a_frozen_group_that_lost_its_leader() {
         use std::os::unix::process::CommandExt as _;
-        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "switcher.tests.REGISTRIES");
+        let _serial = crate::sync::lock_or_recover(&REGISTRIES, "watchdog.TEST_REGISTRIES");
 
         let mut leader = std::process::Command::new("sh")
             .args(["-c", "sleep 30"])

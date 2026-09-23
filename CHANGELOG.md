@@ -351,14 +351,18 @@ All notable changes to OmniDeck are documented here. Format follows
   overwriting a same-named entry; empty/symbol-only names are rejected.
 
 ### Fixed
-- **Guide hold closes a running Steam game**: Steam launches never sat in the launcher's own
+- **Explicit close ends a running Steam game**: Steam launches never sat in the launcher's own
   process-group registry (the `steam://rungameid` leader exits at once; the game lives under
-  Steam's reaper), so the close chord signalled every owned app and left the game — the app the
-  couch launches most — untouched. `return_home` now also SIGTERMs every watched Steam game's
-  launch tree, **deepest process first** (TERM the reaper before the game and Steam's subreaper
-  adopts the game, which then runs on with nothing tracking it), each pid verified against the
-  start time read moments earlier so a recycled pid is never signalled. The existing watcher then
-  reports the exit exactly as it does for a normal quit.
+  Steam's reaper), so the close-all (`Ctrl+Alt+End`, "Close & return") signalled every owned app
+  and left the game — the app the couch launches most — untouched. `return_home` now also
+  SIGTERMs the launch tree of every Steam game OmniDeck launched and is watching, **deepest
+  process first** (TERM the reaper before the game and Steam's subreaper adopts the game, which
+  then runs on with nothing tracking it), each pid verified against the start time read moments
+  earlier so a recycled pid is never signalled. The Steam client, OmniDeck itself and anything
+  under them are pruned from the tree; signals go to single pids, never a process group. The
+  Guide button never takes this path (tap switches, hold opens the overview). One switch,
+  `watchdog::CLOSE_ALL_ENDS_STEAM_GAMES`, turns it off. The existing watcher then reports the
+  exit exactly as it does for a normal quit.
 - **Session teardown no longer strands frozen apps**: gamescope SIGTERMs its client on exit, and
   the default disposition killed the launcher before the `RunEvent::Exit` thaw could run — every
   SIGSTOPped hidden app stayed stopped, invisible, and unable to notice its X display was gone,
