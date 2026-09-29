@@ -479,7 +479,11 @@ pub fn home_toggle() -> SwitchResult {
     let Some((front, on_deck)) = state else { return SwitchResult::Unchanged };
     if let Some(group) = front {
         remember_group(group);
-        return if hide_all() { SwitchResult::Home } else { SwitchResult::Unchanged };
+        if hide_all() {
+            deck_home(); // tap commits Home; a later overview cancel must not reopen the app
+            return SwitchResult::Home;
+        }
+        return SwitchResult::Unchanged;
     }
     if !on_deck { return SwitchResult::Unchanged; }
     for app in recent_apps() {
@@ -488,65 +492,7 @@ pub fn home_toggle() -> SwitchResult {
     SwitchResult::Unchanged
 }
 
-/// Toggle the launched app(s): if any owned window is visible, hide them all (focus falls
-/// back to OmniDeck); else re-show whatever the last toggle hid. Returns a short description
-/// of what happened, or None if there was nothing to act on.
-pub fn toggle() -> Option<&'static str> {
-    // Session-only, enforced at the chokepoint for every caller (UI command, Guide press,
-    // hotkey): on a desktop, unmapping would hide the app's window from the real WM, which
-    // has its own idea of window management. (OMNIDECK_FORCE_HOTKEY tests on desktop X11.)
-    if !session_ok() {
-        return None;
-    }
-    with_x11(toggle_inner).flatten()
-}
-
-fn toggle_inner(conn: &RustConnection, root: Window) -> Option<&'static str> {
-    let groups = crate::watchdog::live_groups();
-    let visible = visible_owned(conn, root, &groups);
-
-    if !visible.is_empty() {
-        // Hide: unmap every owned visible toplevel; gamescope refocuses OmniDeck.
-        let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
-        let failed = set_mapped(conn, &wins, false);
-        if !failed.is_empty() {
-            tracing::warn!("switcher: {} window(s) resisted unmap", failed.len());
-        }
-        {
-            let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
-            // APPEND (don't overwrite): an app launched while another was hidden must not
-            // orphan the first one's windows — the next show brings the whole set back.
-            for &(win, _) in &visible {
-                if !hidden.contains(&win) && !failed.contains(&win) {
-                    hidden.push(win);
-                }
-            }
-        }
-        freeze_silent_groups(&visible, &failed);
-        return Some("hidden — OmniDeck focused");
-    }
-
-    // Nothing visible: continue every frozen group BEFORE mapping, so the re-shown
-    // windows can actually repaint and take focus.
-    resume_stopped_groups();
-
-    // Re-show the set we hid (skip windows that died while hidden).
-    let hidden: Vec<Window> =
-        std::mem::take(&mut *crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN"));
-    if hidden.is_empty() {
-        return None;
-    }
-    let failed = set_mapped(conn, &hidden, true);
-    if !failed.is_empty() {
-        // Put the strays back so the next toggle retries instead of stranding the app
-        // invisible with an empty HIDDEN list (Guide would then do nothing forever).
-        tracing::warn!("switcher: {} window(s) did not remap — kept for retry", failed.len());
-        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN").extend(failed);
-    }
-    Some("re-shown — app focused")
-}
-
-/// Session gate shared by every window-touching entry point (toggle, deck, navpad, hotkey):
+/// Session gate shared by every window-touching entry point (Home, deck, navpad, hotkey):
 /// on a desktop, unmapping/injecting into foreign windows belongs to the real WM.
 pub(crate) fn session_ok() -> bool {
     crate::session::in_session() || std::env::var_os("OMNIDECK_FORCE_HOTKEY").is_some()
@@ -559,7 +505,7 @@ static LAST_HIDE: Mutex<(Vec<Window>, Vec<u32>, Option<u32>)> = Mutex::new((Vec:
 
 /// Hide EVERY launched app so OmniDeck (and the deck overlay) is what's on screen — the
 /// deck-switcher's "open" step. Same as toggle's hide half: unmap owned toplevels, remember
-/// them, freeze the silent ones. Returns true if anything was hidden.
+/// them, freeze the silent ones. Returns true once Home is foreground (including empty overview).
 pub fn hide_all() -> bool {
     if !session_ok() {
         return false;
@@ -568,9 +514,11 @@ pub fn hide_all() -> bool {
         let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
         let front = foreground_group(conn, root, &visible);
         if front.is_none() {
-            // Opening the overview from Home is valid even with zero live cards. Preserve
-            // any previous snapshot: it may be the only recovery path for leaderless survivors.
-            return deck_is_focused(conn, root);
+            if !deck_is_focused(conn, root) { return false; }
+            // Overview opened from Home: cancel stays Home. STOPPED/LEADERLESS retain
+            // their own identity-checked records for close-all and session-exit recovery.
+            deck_home();
+            return true;
         }
         let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
         let failed = set_mapped(conn, &wins, false);
@@ -614,19 +562,35 @@ pub fn deck_cancel() -> bool {
         let owned = windows_of_group(conn, root, group);
         let restore: Vec<Window> = wins.into_iter().filter(|w| owned.contains(w)).collect();
         if restore.is_empty() {
-            *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
-            return true; // exited while overview was open
+            // A failed X query and an exited app look identical here. Only discard the
+            // snapshot after the tracked group AND any frozen/leaderless survivors are gone.
+            let tracked = crate::watchdog::live_groups().contains(&group)
+                || crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").iter().any(|f| f.group == group)
+                || crate::sync::lock_or_recover(&LEADERLESS, "switcher.LEADERLESS").iter().any(|f| f.group == group);
+            if tracked { return false; }
+            deck_home();
+            return true; // verified exit while overview was open
         }
         let failed = set_mapped(conn, &restore, true);
-        if !failed.is_empty() { return false; } // keep snapshot and STOPPED for retry
-        if groups.contains(&group) {
-            if !cont_group(group) {
-                let _ = set_mapped(conn, &restore, false);
-                return false;
-            }
-            crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+        if !failed.is_empty() {
+            let succeeded: Vec<Window> = restore.iter().copied().filter(|w| !failed.contains(w)).collect();
+            let _ = set_mapped(conn, &succeeded, false);
+            return false; // keep snapshot and STOPPED for retry
         }
-        if !wait_for_group_focus(conn, root, group) { return false; }
+        let prior = if groups.contains(&group) {
+            crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
+                .iter().find(|f| f.group == group).cloned()
+        } else { None };
+        if prior.is_some() && !cont_group(group) {
+            let _ = set_mapped(conn, &restore, false);
+            return false;
+        }
+        if !wait_for_group_focus(conn, root, group) {
+            let _ = set_mapped(conn, &restore, false);
+            repark_after_failed_focus(conn, &restore, group, prior);
+            return false; // retain LAST_HIDE for retry
+        }
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
         remember_group(group);
         *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
         crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN").retain(|w| !restore.contains(w));
@@ -647,6 +611,23 @@ fn wait_for_group_focus(conn: &RustConnection, root: Window, group: u32) -> bool
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     false
+}
+
+/// A failed focus transfer after SIGCONT must not leave a stale STOPPED record for a
+/// running process, or lose the only identity-checked handle when its leader vanished.
+fn repark_after_failed_focus(conn: &RustConnection, wins: &[Window], group: u32, prior: Option<Frozen>) {
+    let Some(prior) = prior else { return };
+    let still_viewable = wins.iter().any(|w| conn.get_window_attributes(*w).ok()
+        .and_then(|c| c.reply().ok()).is_some_and(|a| a.map_state == MapState::VIEWABLE));
+    let refrozen = if still_viewable { None } else { stop_group(group) };
+    let mut stopped = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED");
+    stopped.retain(|f| f.group != group);
+    if let Some(f) = refrozen { stopped.push(f); }
+    else {
+        drop(stopped);
+        remember_leaderless(&prior); // close-all can still reach verified survivors
+        tracing::warn!("switcher: could not re-freeze group {group} after failed focus");
+    }
 }
 
 fn rollback_show(conn: &RustConnection, wins: &[Window], was_visible: &[Window]) {
@@ -685,24 +666,18 @@ pub fn show_group(group: u32) -> bool {
             rollback_show(conn, &wins, &was_visible);
             return false;
         }
-        let was_stopped = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
-            .iter().any(|f| f.group == group);
+        let prior = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
+            .iter().find(|f| f.group == group).cloned();
         if !cont_group(group) {
             rollback_show(conn, &wins, &was_visible);
             return false; // preserve STOPPED and cancel snapshot for retry
         }
-        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
         if on_deck && !wait_for_group_focus(conn, root, group) {
             rollback_show(conn, &wins, &was_visible);
-            let still_viewable = wins.iter().any(|w| conn.get_window_attributes(*w).ok()
-                .and_then(|c| c.reply().ok()).is_some_and(|a| a.map_state == MapState::VIEWABLE));
-            if was_stopped && !still_viewable {
-                if let Some(f) = stop_group(group) {
-                    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").push(f);
-                }
-            }
+            repark_after_failed_focus(conn, &wins, group, prior);
             return false;
         }
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
         remember_group(group);
         *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
         crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")

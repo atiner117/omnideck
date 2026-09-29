@@ -112,6 +112,8 @@ stub_launch() {
   # Track liveness by pid (from the window), never by pgrep -f: a command-line pattern
   # can match unrelated processes — including the shell running this script.
   STUB_PID="$(xdotool getwindowpid "$(xdotool search --name omnideck-harness-stub | head -1)")"
+  # Viewable precedes focus in gamescope. Wait for the app to settle before pressing Guide.
+  wait_for 8 "stable active_stub"
 }
 stub_visible() { xdotool search --onlyvisible --name omnideck-harness-stub 2>/dev/null | grep -q .; }
 stub_alive()   { [ -n "${STUB_PID:-}" ] && kill -0 "$STUB_PID" 2>/dev/null; }
@@ -190,6 +192,14 @@ if command -v tesseract >/dev/null; then
     else
       bad "category-tap: previous category remained selected"
     fi
+    $KEY ctrl+alt+Insert
+    sleep 0.5
+    $KEY Escape
+    if wait_for 6 "active_deck && ! stub_visible" && stub_alive; then
+      ok "category-cancel: overview opened from Home stays Home on dismiss"
+    else
+      bad "category-cancel: stale snapshot reopened app from Home"
+    fi
     toggle_expect "$KEY ctrl+alt+Home" shown
     toggle_expect "$KEY ctrl+alt+Insert" hidden
     $KEY Left Return
@@ -235,8 +245,12 @@ else
 fi
 
 # ── 5-7. gamepad Guide button (virtual pad over uinput) ──
+# Steam on the desktop sees global uinput and can open Big Picture over the nested test;
+# run keyboard-only rather than touching the user's Steam session in that case.
 echo "── gamepad Guide (virtual pad) ──"
-if [ -w /dev/uinput ]; then
+if [ "${OMNIDECK_TEST_KEYBOARD_ONLY:-0}" = 1 ]; then
+  echo "  – skipped: keyboard-only requested (desktop Steam can intercept the virtual Guide)"
+elif [ -w /dev/uinput ]; then
   PAD="$PAD_BIN"
   if stub_launch; then
     toggle_expect "$PAD guide-short" hidden && ok "pad-home: Guide tap hid the app" || bad "pad-home: app still visible"
