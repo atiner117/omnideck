@@ -9,8 +9,11 @@ import * as api from "./backend";
 describe("task overview IPC contract", () => {
   beforeEach(() => { invoke.mockReset(); listen.mockReset(); });
 
-  it("taps switch Home / last app without a launch id", async () => {
-    await api.switchApp();
+  it("taps switch Home / last app without a launch id and reports direction", async () => {
+    invoke.mockResolvedValueOnce("home").mockResolvedValueOnce("app").mockResolvedValueOnce("unchanged");
+    expect(await api.switchApp()).toBe("home");
+    expect(await api.switchApp()).toBe("app");
+    expect(await api.switchApp()).toBe("unchanged");
     expect(invoke).toHaveBeenCalledWith("switch_app", { id: null });
   });
 

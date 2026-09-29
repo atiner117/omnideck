@@ -259,30 +259,40 @@ fn deck_is_focused(conn: &RustConnection) -> bool {
     false
 }
 
+/// Direction of a Guide tap. The webview needs to select its dashboard ONLY when the
+/// backend actually returned from an app, not when it restored an app or failed to switch.
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwitchResult {
+    Home,
+    App,
+    Unchanged,
+}
+
 /// Tap: from a focused owned app go Home; from a focused Home return to the most recent
 /// running owned app. Foreign/Steam windows cannot be controlled by this ownership path.
-pub fn home_toggle() -> bool {
+pub fn home_toggle() -> SwitchResult {
     if !session_ok() {
-        return false;
+        return SwitchResult::Unchanged;
     }
     let focused = with_x11(|conn, root| {
         let owned = visible_owned(conn, root, &crate::watchdog::live_groups());
         (foreground_group(conn, &owned), deck_is_focused(conn))
     });
-    let Some((visible, on_deck)) = focused else { return false };
+    let Some((visible, on_deck)) = focused else { return SwitchResult::Unchanged };
     if let Some(group) = visible {
         remember_group(group);
-        return hide_all();
+        return if hide_all() { SwitchResult::Home } else { SwitchResult::Unchanged };
     }
-    if !on_deck { return false; }
+    if !on_deck { return SwitchResult::Unchanged; }
     // Home -> most recently used *running* group. Never remap the entire hidden set:
     // multiple apps may be suspended, and only one should return to the foreground.
     for app in recent_apps() {
         if show_group(app.group) {
-            return true;
+            return SwitchResult::App;
         }
     }
-    false
+    SwitchResult::Unchanged
 }
 
 /// Session gate shared by every window-touching entry point (Home, deck, navpad, hotkey):
@@ -402,6 +412,25 @@ pub fn deck_home() {
     *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
 }
 
+/// Undo an unsuccessful card selection: windows that were hidden stay hidden, and windows
+/// originally mapped behind Home are restored. Never leave a formerly visible app unmapped
+/// just because gamescope did not accept its attempted focus transfer.
+fn rollback_show(conn: &RustConnection, wins: &[Window], was_visible: &[Window]) {
+    let newly_shown: Vec<Window> = wins.iter().copied().filter(|w| !was_visible.contains(w)).collect();
+    let failed_hide = set_mapped(conn, &newly_shown, false);
+    if !failed_hide.is_empty() {
+        tracing::warn!("switcher: rollback could not re-hide {} app window(s)", failed_hide.len());
+    }
+    let failed_restore = set_mapped(conn, was_visible, true);
+    if !failed_restore.is_empty() {
+        let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+        for win in failed_restore {
+            if !hidden.contains(&win) { hidden.push(win); }
+        }
+        tracing::warn!("switcher: could not restore a previously mapped app window");
+    }
+}
+
 /// Bring ONE launched app group to the front (the deck-switcher's "open this card"): map
 /// its toplevels, then resume it if frozen. Other apps stay hidden. Returns true on success.
 pub fn show_group(group: u32) -> bool {
@@ -416,6 +445,23 @@ pub fn show_group(group: u32) -> bool {
         if wins.is_empty() {
             return false;
         }
+        let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
+        let already_focused = foreground_group(conn, &visible) == Some(group);
+        let on_deck = deck_is_focused(conn);
+        if !on_deck && !already_focused {
+            return false; // never raise an owned app over a focused Steam/foreign window
+        }
+        // A background app can be viewable behind Home. Mapping a VIEWABLE window is a
+        // no-op in gamescope: force a targeted unmap/remap so the compositor refocuses it.
+        // This is only done from OmniDeck, never while that app is already foreground.
+        let was_visible: Vec<Window> = visible.iter().filter(|&&(_, g)| g == group).map(|&(w, _)| w).collect();
+        if on_deck && !was_visible.is_empty() {
+            let resisted = set_mapped(conn, &was_visible, false);
+            if !resisted.is_empty() {
+                rollback_show(conn, &wins, &was_visible);
+                return false;
+            }
+        }
 
         // Map BEFORE thawing. The map requests come from OUR connection (steamcompmgr does the
         // actual mapping), so a SIGSTOPped client doesn't block them — and if every map fails
@@ -423,18 +469,43 @@ pub fn show_group(group: u32) -> bool {
         // dismiss snapshot intact, not thawed-and-invisible with no record to re-freeze it.
         let failed = set_mapped(conn, &wins, true);
         if failed.len() == wins.len() {
+            rollback_show(conn, &wins, &was_visible);
             return false;
         }
 
         // At least one window is up — resume the group so it can repaint and take focus.
-        remember_group(group);
+        let was_stopped = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").contains(&group);
         if thaw_group(group) {
             crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|&g| g != group);
             crate::sync::lock_or_recover(&FROZEN_MEMBERS, "switcher.FROZEN_MEMBERS").remove(&group);
         } else if crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").contains(&group) {
-            let _ = set_mapped(conn, &wins, false);
+            rollback_show(conn, &wins, &was_visible);
             return false; // still frozen: preserve the card and record for a retry
         }
+        // Mapping alone is not proof of a successful switch: gamescope can leave a
+        // viewable app behind Home. Wait briefly for the mapped group to receive X focus.
+        if on_deck {
+            let mut focused = false;
+            for _ in 0..10 {
+                let now_visible = visible_owned(conn, root, &[group]);
+                if foreground_group(conn, &now_visible) == Some(group) {
+                    focused = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if !focused {
+                rollback_show(conn, &wins, &was_visible);
+                if was_stopped && !wins.iter().any(|w| {
+                    conn.get_window_attributes(*w).ok().and_then(|c| c.reply().ok())
+                        .is_some_and(|a| a.map_state == MapState::VIEWABLE)
+                }) && stop_group(group) {
+                    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").push(group);
+                }
+                return false; // preserve cancellation snapshot for recovery
+            }
+        }
+        remember_group(group);
         // A card was chosen — the deck's dismiss snapshot no longer applies.
         *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
         // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
@@ -616,7 +687,7 @@ fn set_mapped(
 
 #[cfg(test)]
 mod tests {
-    use super::{order_apps, parent_and_pgid};
+    use super::{order_apps, parent_and_pgid, SwitchResult};
     use crate::watchdog::LiveApp;
 
     #[test]
@@ -625,6 +696,13 @@ mod tests {
         // Check the readable parent instead of assuming every namespace has a nonzero pgid.
         assert_ne!(parent_and_pgid(std::process::id()).0, 0);
         assert_eq!(parent_and_pgid(0), (0, 0)); // /proc/0 never exists
+    }
+
+    #[test]
+    fn guide_tap_result_reports_direction_for_dashboard_reset() {
+        assert_eq!(serde_json::to_string(&SwitchResult::Home).unwrap(), "\"home\"");
+        assert_eq!(serde_json::to_string(&SwitchResult::App).unwrap(), "\"app\"");
+        assert_eq!(serde_json::to_string(&SwitchResult::Unchanged).unwrap(), "\"unchanged\"");
     }
 
     #[test]

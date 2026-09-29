@@ -114,6 +114,12 @@ stub_launch() {
 stub_visible() { xdotool search --onlyvisible --name omnideck-harness-stub 2>/dev/null | grep -q .; }
 stub_alive()   { [ -n "${STUB_PID:-}" ] && kill -0 "$STUB_PID" 2>/dev/null; }
 stub_kill()    { [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null; }
+active_deck() { [ "$(xdotool getactivewindow 2>/dev/null)" = "$APP_WID" ]; }
+active_stub() {
+  local win
+  win="$(xdotool search --onlyvisible --name omnideck-harness-stub 2>/dev/null | head -1)"
+  [ -n "$win" ] && [ "$(xdotool getactivewindow 2>/dev/null)" = "$win" ]
+}
 
 # True once `eval $1` holds across a 0.5 s gap — i.e. the state has actually settled, not
 # just flickered true for one X round-trip. The switcher unmap and gamescope's focus refollow
@@ -161,6 +167,30 @@ if stub_launch; then
   sleep 0.5
 else
   bad "kbd: stub app never appeared (test hook / launch path broken?)"
+fi
+
+# An app may be mapped *behind* an already-focused dashboard. Mapping it again is a no-op;
+# the return-to-app path must explicitly perform a targeted focus-following map transition.
+echo "── mapped background app focus ──"
+if stub_launch; then
+  xdotool windowunmap "$APP_WID"
+  sleep 0.2
+  xdotool windowmap "$APP_WID"
+  if wait_for 5 "active_deck && stub_visible"; then
+    $KEY ctrl+alt+Home
+    if wait_for 6 "active_stub" && stub_alive; then
+      ok "mapped-back: Guide shortcut refocused an already-mapped app"
+    else
+      bad "mapped-back: visible app stayed behind dashboard"
+    fi
+  else
+    bad "mapped-back: test setup could not focus dashboard over visible stub"
+  fi
+  $KEY ctrl+alt+Home
+  $KEY ctrl+alt+End
+  wait_for 6 "! stub_alive" || stub_kill
+else
+  bad "mapped-back: stub app never appeared"
 fi
 
 # ── 5-7. gamepad Guide button (virtual pad over uinput) ──

@@ -608,8 +608,9 @@ pub fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-/// Close the currently-foregrounded launched app and return to OmniDeck (UI/keyboard path;
-/// the gamepad Guide button does the same). Returns true if an app was running.
+/// Explicitly close OmniDeck-launched app groups and return to OmniDeck (UI / Ctrl+Alt+End).
+/// The gamepad Guide button NEVER closes apps: tap switches, hold opens the overview.
+/// Returns true if a signal reached a tracked app.
 #[tauri::command]
 pub fn close_current_app() -> bool {
     watchdog::return_home()
@@ -619,13 +620,17 @@ pub fn close_current_app() -> bool {
 /// `id` (a Now Playing card's entry), bring THAT app's group forward like a deck card.
 /// A stale id must never fall through to a different app.
 #[tauri::command]
-pub async fn switch_app(id: Option<String>) -> bool {
+pub async fn switch_app(id: Option<String>) -> crate::switcher::SwitchResult {
+    use crate::switcher::SwitchResult;
     blocking(move || match id.as_deref() {
-        Some(key) => watchdog::group_of_id(key).map(crate::switcher::show_group).unwrap_or(false),
+        Some(key) if watchdog::group_of_id(key).is_some_and(crate::switcher::show_group) => {
+            SwitchResult::App
+        }
+        Some(_) => SwitchResult::Unchanged,
         None => crate::switcher::home_toggle(),
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(SwitchResult::Unchanged)
 }
 
 /// True when OmniDeck is running as a gamescope session (vs. a window on the desktop). Lets

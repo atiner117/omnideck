@@ -58,14 +58,16 @@ export function cardActions(
       label: "Switch to app",
       title: "Switch to the app",
       aria: "Switch to app",
-      run: () => { api.switchApp(c.id).catch((e) => o.onerror("Couldn't switch app", e)); after(); },
+      run: () => { api.switchApp(c.id).then((result) => {
+        if (result !== "app") o.onerror("Couldn't switch app", "The app is no longer available.");
+      }).catch((e) => o.onerror("Couldn't switch app", e)); after(); },
     });
   if (c.kind === "app")
     a.push({
       kind: "app",
       icon: "↩",
       label: "Close & return",
-      title: "Close & return (Guide hold / Ctrl+Alt+End)",
+      title: "Close & return (Ctrl+Alt+End; Guide hold opens recent apps)",
       aria: "Close app and return",
       run: () => { api.closeCurrentApp().catch((e) => o.onerror("Couldn't close app", e)); after(); },
     });

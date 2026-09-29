@@ -595,7 +595,7 @@
     deckBusy = true;
     try {
       if (a) await api.deckShow(a.group);
-      else await api.deckHome();
+      else { await api.deckHome(); goHome(); }
       deckOpen = false;
     } catch (e) { reportError(a ? "Couldn't open app" : "Couldn't go Home", e); }
     finally { deckBusy = false; }
@@ -1152,7 +1152,10 @@
     // A tap dismisses an open overview, otherwise toggles Home / last owned app.
     api.onGuideTap(() => {
       if (deckOpen) closeDeck();
-      else if (!deckBusy) api.switchApp().catch((e) => reportError("Couldn't switch app", e));
+      else if (!deckBusy) api.switchApp().then((target) => {
+        if (target === "home") goHome();
+        else if (target === "unchanged") reportError("Couldn't switch app", "No supported app could be brought to the foreground.");
+      }).catch((e) => reportError("Couldn't switch app", e));
     }).then((u) => off.push(u));
     api.onGuideHold(() => { if (!deckOpen) openDeck(); }).then((u) => off.push(u));
     // MPRIS Now Playing is event-driven (backend zbus watcher). One initial fetch covers the
