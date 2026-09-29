@@ -3,10 +3,11 @@ title: "Recent-apps switcher tickets"
 kind: ticket
 status: in-progress
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-29
 thread: t3code/0075e72c
 ---
 
 1. [Input and state semantics](input-and-state/index.md) — first slice, backend event and owned app focus logic.
 2. [Task overview UX and tests](overview-ux/index.md) — depends on input and state semantics.
-3. [Steam game control feasibility](steam-game-control/index.md) — separate live-validated follow-up; no unproven game kill in first PR.
+3. [Steam Guide coexistence on owned apps](input-and-state/fixup-steam-guide-coexistence/index.md) — physical PS tap can expose Steam Big Picture instead of Home even from Jellyfin; separate from game takeover.
+4. [Steam game control feasibility](steam-game-control/index.md) — separate live-validated follow-up; no unproven game kill in first PR.
