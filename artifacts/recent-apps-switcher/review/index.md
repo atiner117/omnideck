@@ -3,7 +3,7 @@ title: "Recent-app switcher independent review"
 kind: review
 status: done
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-29
 thread: t3code/0075e72c
 ---
 
@@ -22,3 +22,7 @@ Reviewer's final targeted verdict: **PASS** on P1 findings after fixes; the `/pr
 Validation: Rust release clippy and tests (113 pass, one pre-existing ignored), frontend check/build/tests (50 pass), Tauri no-bundle release build, ts-rs export, and nested gamescope harness (10/10) pass. The nested harness initially failed because it kept an older overview open between independent keyboard/pad cases and only logged axis events *after* navpad consumed them; it now dismisses the overview before the next case and logs axis before routing. `cargo audit` reports three existing lockfile advisories (quick-xml 0.39.4 ×2, rustls 0.23.40); libc was already locked and this PR only adds it as a direct dependency. `cargo deny` is not installed locally. Full-tree `cargo fmt --check` is not baseline-clean, so no unrelated formatting was applied.
 
 Remaining product gap, deliberately not mislabeled as implemented: Steam games (e.g. GTA V) are Steam-owned, not OmniDeck-owned, so they cannot yet be safely focused/closed through this overview. A separate feasibility ticket covers a gamescope-safe focus path and game-only stop operation.
+
+## 2026-09-29 dashboard/focus fixup review
+
+Independent reviewer inspected the uncommitted fixup against `tickets/input-and-state/fixup-dashboard-focus/index.md`. Initial verdict **HOLD (P2)**: `show_group` could unmap an already-visible app, fail remapping or focus verification, then leave its window hidden while reporting failure. Coordinator added `rollback_show` to restore original map state on unmap/map/thaw/focus errors, record failed restores for retry, and refreeze the previously stopped group only if no group window remains viewable. Reviewer re-read all failure branches and returned **PASS**, no remaining concrete P1/P2 findings. Caveats: compositor focus may race a 500ms verification timeout; failure injection and dashboard visual assertions are not automated by the nested harness. Live r2d2 still runs an older binary; source review is not evidence of deployment.

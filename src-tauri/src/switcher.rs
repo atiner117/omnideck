@@ -920,7 +920,7 @@ fn set_mapped(
 #[cfg(test)]
 mod tests {
     use super::{
-        cont_frozen, cont_group, group_members, pgid_of, stop_group, Thaw, LEADERLESS, STOPPED,
+        cont_frozen, cont_group, group_members, pgid_of, stop_group, SwitchResult, Thaw, LEADERLESS, STOPPED,
     };
 
     /// Held by every test that touches the process-wide registries (`STOPPED`, watchdog's
@@ -929,6 +929,13 @@ mod tests {
     /// thaw test's leader out from under it. Poison-tolerant like the rest of the codebase: a
     /// failing test must not turn its neighbour into a second, misleading failure.
     static REGISTRIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn guide_tap_result_reports_direction_for_dashboard_reset() {
+        assert_eq!(serde_json::to_string(&SwitchResult::Home).unwrap(), "\"home\"");
+        assert_eq!(serde_json::to_string(&SwitchResult::App).unwrap(), "\"app\"");
+        assert_eq!(serde_json::to_string(&SwitchResult::Unchanged).unwrap(), "\"unchanged\"");
+    }
 
     #[test]
     fn pgid_of_self_is_nonzero_and_bogus_pid_is_zero() {
