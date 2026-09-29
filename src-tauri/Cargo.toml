@@ -59,6 +59,8 @@ argon2 = { version = "0.5", features = ["std"] } # std → rand_core/getrandom f
 # launched PWAs/browsers console-style; also examples/virtual-pad.rs (uinput gamepad
 # injector for the nested-session harness — gilrs sees it as a real evdev pad)
 evdev = "0.12"
+# Direct, identity-checked group signals; shelling out to kill introduced a PGID-reuse race.
+libc = "0.2"
 
 [dev-dependencies]
 ts-rs = "12.0.1"

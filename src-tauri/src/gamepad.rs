@@ -2,8 +2,42 @@
 // on NVIDIA): gilrs reads evdev on a dedicated std thread (gilrs is !Send, so it cannot live
 // in a tokio task) and forwards typed events to the webview via Tauri events.
 use serde::Serialize;
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
+
+/// One gesture across all connected controllers. A second pad's release cannot dismiss the
+/// first pad's hold, and the hold event fires only once even if two buttons remain down.
+struct GuideGesture<Id> {
+    pressed: HashMap<Id, Instant>,
+    held: bool,
+}
+
+impl<Id: Eq + Hash> GuideGesture<Id> {
+    fn new() -> Self { Self { pressed: HashMap::new(), held: false } }
+
+    fn press(&mut self, id: Id, now: Instant) {
+        if self.pressed.is_empty() { self.held = false; }
+        self.pressed.entry(id).or_insert(now);
+    }
+
+    fn release(&mut self, id: &Id) -> bool {
+        let was_pressed = self.pressed.remove(id).is_some();
+        was_pressed && self.pressed.is_empty() && !self.held
+    }
+
+    fn disconnect(&mut self, id: &Id) { self.pressed.remove(id); }
+
+    fn tick(&mut self, now: Instant, threshold: Duration) -> bool {
+        if self.held || !self.pressed.values().any(|t| now.duration_since(*t) >= threshold) {
+            return false;
+        }
+        self.held = true;
+        true
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -78,18 +112,12 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         std::collections::HashMap::new();
     const AXIS_EPS: f32 = 0.05;
 
-    // Guide/Home button, console-style: SHORT press switches between OmniDeck and the
-    // launched app (it keeps running — music keeps playing); LONG hold (default 800 ms,
-    // config `[input] guide_hold_ms`) closes it. The close fires the moment the hold
-    // crosses the threshold — while the button is still down, like a console power chord —
-    // not at release (M2 feedback: release-time close feels laggy and unconfirmed). The
-    // short-press switch still decides at release (that's the only way to know it STAYED
-    // short). gilrs reads evdev directly, so all of this works even while the launched app
-    // holds window focus. The threshold is read ONCE at thread start (normalize() clamped
-    // it 200–5000 ms) — a boot-time knob isn't worth config I/O on a 125 Hz loop.
-    let guide_hold_close =
-        std::time::Duration::from_millis(crate::config::load_or_create().input.guide_hold_ms);
-    let mut guide_down: Option<std::time::Instant> = None; // Some = held, hold not yet fired
+    // Guide/Home: tap toggles Home / the last running app; hold opens the task overview
+    // at the threshold, while still pressed. Neither gesture kills an app. Track presses per
+    // controller: a release from a second (or virtual) pad must not turn another pad's hold
+    // into a tap. One gesture emits only once even when two pads overlap.
+    let guide_hold = Duration::from_millis(crate::config::load_or_create().input.guide_hold_ms);
+    let mut guide = GuideGesture::<gilrs::GamepadId>::new();
 
     // Virtual keyboard/mouse bridge: while a launched app is in front, the pad drives IT
     // (arrows/Enter/Esc, pointer on the right stick — see navpad.rs). None when /dev/uinput
@@ -130,23 +158,28 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
             let name = gilrs.gamepad(id).name().to_string();
             match &event {
                 gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) => {
-                    guide_down = Some(std::time::Instant::now());
-                    saw_input = true; // swallowed below, but it's still user activity
-                    continue; // swallow; acted on at threshold (close) or release (switch)
+                    guide.press(id, Instant::now());
+                    saw_input = true;
+                    continue;
                 }
                 gilrs::EventType::ButtonReleased(gilrs::Button::Mode, _) => {
                     saw_input = true;
-                    // None here means the hold already fired (or a stray release) — ignore.
-                    if guide_down.take().is_some() {
-                        // Short press opens/closes the deck switcher (iOS-style app cards);
-                        // the frontend owns the overlay and calls deck_open (which hides the
-                        // apps so the overlay shows). Guide HOLD still closes-all below.
-                        tracing::info!("guide: tap — toggle deck");
+                    if guide.release(&id) {
+                        tracing::info!("guide: tap — Home / last app");
                         let _ = handle.emit("guide-tap", ());
                     }
-                    continue; // swallow; never forward Guide as a UI event
+                    continue; // Guide is never forwarded to a launched app
+                }
+                gilrs::EventType::Disconnected => {
+                    guide.disconnect(&id); // don't hold forever after Bluetooth drops
                 }
                 _ => {}
+            }
+            // Keep axis diagnostics observable even when the navpad consumes the event.
+            // The nested-session stick test drives a focused app, so logging only on the
+            // dashboard forwarding path would incorrectly report that gilrs never saw it.
+            if let gilrs::EventType::AxisChanged(a, v, _) = &event {
+                tracing::debug!("axis {a:?} = {v:.2}");
             }
             // App in front → the pad drives the app through the uinput bridge, and the
             // event is CONSUMED. The hidden dashboard's handler has no app-in-front gate,
@@ -187,9 +220,6 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     ("button_changed".to_string(), format!("{b:?}"), v)
                 }
                 gilrs::EventType::AxisChanged(a, v, _) => {
-                    // debug-level so RUST_LOG can expose the normalized sign convention
-                    // (gilrs: +Y = up) when chasing per-controller inversion reports.
-                    tracing::debug!("axis {a:?} = {v:.2}");
                     ("axis_changed".to_string(), format!("{a:?}"), v)
                 }
                 gilrs::EventType::Connected => ("connected".to_string(), String::new(), 0.0),
@@ -209,16 +239,12 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                 },
             );
         }
-        // Threshold check AFTER draining the queue (the loop wakes every 8 ms): a release
-        // already sitting in the queue must win — otherwise a ~790 ms press whose release
-        // we haven't read yet would misfire as a hold. Fire the close mid-hold and consume
-        // the press so the eventual release is a no-op.
-        if guide_down.is_some_and(|t| t.elapsed() >= guide_hold_close) {
-            guide_down = None;
-            if crate::watchdog::return_home() {
-                tracing::info!("guide (hold): closed the current app");
-                let _ = handle.emit("app-closed", ());
-            }
+        // Check after draining the queue: a release already queued must win over a hold.
+        // Keep the pressed entries until release, so a hold can fire once while held and
+        // every subsequent release is a no-op.
+        if guide.tick(Instant::now(), guide_hold) {
+            tracing::info!("guide: hold — task overview");
+            let _ = handle.emit("guide-hold", ());
         }
         // Bridge housekeeping each tick: arrow auto-repeat, right-stick pointer motion,
         // and releasing anything held if the app vanished mid-press.
@@ -252,5 +278,38 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GuideGesture;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn tap_and_hold_are_exclusive_and_hold_fires_before_release() {
+        let start = Instant::now();
+        let mut guide = GuideGesture::<u8>::new();
+        guide.press(1, start);
+        assert!(!guide.tick(start + Duration::from_millis(799), Duration::from_millis(800)));
+        assert!(guide.release(&1));
+        guide.press(1, start);
+        assert!(guide.tick(start + Duration::from_millis(800), Duration::from_millis(800)));
+        assert!(!guide.tick(start + Duration::from_secs(2), Duration::from_millis(800)));
+        assert!(!guide.release(&1));
+    }
+
+    #[test]
+    fn overlapping_pads_and_disconnect_never_emit_a_stray_tap() {
+        let start = Instant::now();
+        let mut guide = GuideGesture::<u8>::new();
+        guide.press(1, start);
+        guide.press(2, start + Duration::from_millis(100));
+        assert!(!guide.release(&2));
+        assert!(guide.tick(start + Duration::from_millis(800), Duration::from_millis(800)));
+        guide.disconnect(&1);
+        assert!(!guide.release(&1));
+        guide.press(2, start + Duration::from_secs(1));
+        assert!(guide.release(&2));
     }
 }

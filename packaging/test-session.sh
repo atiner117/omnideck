@@ -10,9 +10,9 @@
 #   2. kbd-hide    Ctrl+Alt+Home hides a launched app  (X grab → switcher unmap)
 #   3. kbd-show    Ctrl+Alt+Home again brings it back  (remap)
 #   4. kbd-close   Ctrl+Alt+End closes it              (watchdog pgid kill)
-#   5. pad-deck    Guide short-press opens the deck (hides the app)  (uinput pad → gilrs)
-#   6. pad-pick    A on the focused card brings the app back
-#   7. pad-close   Guide hold closes it AT the 800 ms threshold, while still held
+#   5. pad-home    Guide tap hides the app; next tap restores it without relaunch
+#   6. pad-deck    Guide hold opens overview AT the threshold; app stays alive
+#   7. pad-pick    A on the focused recent-app card brings it back
 #   8. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
 #
 # Still bare-metal only: display-mode/165 Hz (real EDID), real Steam launch + focus return
@@ -130,7 +130,14 @@ toggle_expect() {
   eval "$press"
   deadline=$((SECONDS + 6))
   until stable "$cond"; do
-    [ $SECONDS -ge $deadline ] && return 1
+    if [ $SECONDS -ge $deadline ]; then
+      echo "  diagnostic: wanted $want; stub windows / X map state:" >&2
+      xdotool search --name omnideck-harness-stub 2>/dev/null | while read -r win; do
+        xwininfo -id "$win" 2>/dev/null | sed -n '/Map State:/p' >&2
+      done
+      echo "  diagnostic: active X window: $(xdotool getactivewindow getwindowname 2>&1)" >&2
+      return 1
+    fi
     sleep 0.3
   done
   sleep 0.5   # let the compositor's focus refollow finish before the next chord
@@ -141,14 +148,17 @@ toggle_expect() {
 echo "── keyboard chords ──"
 KEY="xdotool key --clearmodifiers"
 if stub_launch; then
-  # Ctrl+Alt+Home opens the deck switcher (a global X grab, so it's reliable here); the deck
-  # hides every app so its overlay shows. Card SELECTION via a plain key (Enter) needs the
-  # webview to hold X focus after the hide, which nested-gamescope XTEST can't guarantee — the
-  # gamepad path (pad-pick below, evdev-direct) covers selection end to end. So the keyboard
-  # section verifies open + Ctrl+Alt+End close, both grab-based and focus-independent.
-  toggle_expect "$KEY ctrl+alt+Home" hidden && ok "kbd-deck: Ctrl+Alt+Home opened the deck (app hidden)" || bad "kbd-deck: app still visible"
+  # The grabbed Home chord goes home and then returns to the SAME live app. Insert opens
+  # the overview; End is a separately invoked explicit close shortcut.
+  toggle_expect "$KEY ctrl+alt+Home" hidden && ok "kbd-home: Ctrl+Alt+Home hid the app" || bad "kbd-home: app still visible"
+  toggle_expect "$KEY ctrl+alt+Home" shown && ok "kbd-back: Ctrl+Alt+Home restored the app" || bad "kbd-back: app did not remap"
+  toggle_expect "$KEY ctrl+alt+Insert" hidden && ok "kbd-overview: Insert opened recent apps" || bad "kbd-overview: app still visible"
   $KEY ctrl+alt+End
   if wait_for 8 "! stub_alive"; then ok "kbd-close: Ctrl+Alt+End closed the app (from the deck)"; else bad "kbd-close: process still running"; stub_kill; fi
+  # Explicit close does not dismiss the overview. Clear it before the independent pad tests:
+  # otherwise their first Guide tap cancels the OLD deck instead of toggling the NEW app.
+  $KEY Escape
+  sleep 0.5
 else
   bad "kbd: stub app never appeared (test hook / launch path broken?)"
 fi
@@ -158,19 +168,18 @@ echo "── gamepad Guide (virtual pad) ──"
 if [ -w /dev/uinput ]; then
   PAD="$PAD_BIN"
   if stub_launch; then
-    # Guide tap opens the deck switcher (hides apps for the overlay); A/South on the focused
-    # card brings that app back — this exercises deck_open (hide_all) + deck_show end to end.
-    toggle_expect "$PAD guide-short" hidden && ok "pad-deck: Guide tap opened the deck (app hidden)" || bad "pad-deck: app still visible"
-    toggle_expect "$PAD press-south" shown  && ok "pad-pick: A on the card re-showed the app" || bad "pad-pick: app did not remap"
-    # Hold long (3 s): the close must fire AT the 800 ms threshold — i.e. while the button
-    # is still down — so the stub dies while the injector process is still holding.
+    toggle_expect "$PAD guide-short" hidden && ok "pad-home: Guide tap hid the app" || bad "pad-home: app still visible"
+    toggle_expect "$PAD guide-short" shown && ok "pad-back: Guide tap restored the app" || bad "pad-back: app did not remap"
+    # Hold long (3 s): overview opens at the threshold while still held; never close the
+    # process. Guide release must not count as a short tap and undo the overview.
     eval "$PAD guide-hold 3000" & PAD_PID=$!
-    if wait_for 6 "! stub_alive" && kill -0 "$PAD_PID" 2>/dev/null; then
-      ok "pad-close: Guide hold closed the app at the threshold (while held)"
+    if wait_for 6 "grep -q 'guide: hold — task overview' '$GSLOG' && ! stub_visible" && stub_alive && kill -0 "$PAD_PID" 2>/dev/null; then
+      ok "pad-overview: Guide hold opened task overview while app stayed alive"
     else
-      bad "pad-close: app survived the hold, or it only closed after release"; stub_kill
+      bad "pad-overview: hold failed to show overview or unexpectedly closed app"
     fi
     wait "$PAD_PID" 2>/dev/null
+    toggle_expect "$PAD press-south" shown && ok "pad-pick: A on recent card restored the app" || bad "pad-pick: app did not remap"
     # Stick sign convention end to end: raw ABS_Y min (= physically up) must reach the app
     # as gilrs LeftStickY +1 — the value the UI (negating once) turns into "move up".
     eval "$PAD stick-up"

@@ -20,8 +20,9 @@
     ["Help", "? / F1", "—"],
   ];
   const sessionRows: Array<[string, string, string]> = [
-    ["Switch app ⇄ OmniDeck", "Ctrl+Alt+Home", "Guide press"],
-    ["Close the running app", "Ctrl+Alt+End", "Guide hold"],
+    ["Home ⇄ last app", "Ctrl+Alt+Home", "Guide tap"],
+    ["Recent apps / task overview", "Ctrl+Alt+Insert", "Guide hold"],
+    ["Close apps (explicit shortcut)", "Ctrl+Alt+End", "Overview: Select"],
   ];
 </script>
 

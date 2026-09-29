@@ -103,6 +103,7 @@ pub fn run() {
             commands::deck_show,
             commands::deck_close,
             commands::deck_cancel,
+            commands::deck_home,
             audio::audio_outputs,
             audio::audio_set_output,
             gamepad::notify_activity,

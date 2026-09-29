@@ -15,6 +15,10 @@ pub struct LiveApp {
     pub name: String,
     #[cfg_attr(test, ts(optional = nullable))]
     pub id: Option<String>,
+    /// Kernel starttime of the group leader at launch; internal, never sent to the webview.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub starttime: u64,
 }
 
 /// ALL still-running launched apps. The switcher matches session windows to these groups
@@ -71,19 +75,40 @@ pub fn close_group(group: u32) -> bool {
     let ok = signal_group(group);
     // The group is going away — its pgid must not linger in the switcher's freeze list,
     // where the exit hook's blanket SIGCONT could later hit a recycled pgid.
-    crate::switcher::forget_stopped(group);
+    if ok { crate::switcher::forget_stopped(group); }
     ok
 }
 
-/// SIGTERM a whole process group (CONT first so a switcher-frozen group can act on it).
-/// Browsers fork a persistent main process, so signalling the GROUP (-pid) reaches every
-/// helper; fall back to the bare pid.
+/// Kernel start time from /proc/<pid>/stat field 22 (after the LAST `)` in comm).
+/// A PID reused for a different process must not inherit an old app card's authority.
+pub(crate) fn proc_start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+}
+
+/// Check group membership and leader identity immediately before each signal. Never signal
+/// pgid 0 (which means our own group) or an unknown/recycled process group.
+pub(crate) fn signal_group_verified(group: u32, sig: i32) -> bool {
+    if group <= 1 || group > i32::MAX as u32 { return false; }
+    let recorded = crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS")
+        .iter().find(|a| a.group == group).map(|a| a.starttime);
+    let Some(starttime) = recorded.filter(|&t| t != 0) else { return false; };
+    if proc_start_time(group) != Some(starttime) { return false; }
+    // Direct syscall avoids shell startup between the identity check and the signal.
+    unsafe { libc::kill(-(group as i32), sig) == 0 }
+}
+
+/// Thaw a member even after its process-group leader is gone, never a recycled PID.
+pub(crate) fn signal_pid_verified(pid: u32, starttime: u64, sig: i32) -> bool {
+    if pid <= 1 || pid > i32::MAX as u32 || starttime == 0 { return false; }
+    if proc_start_time(pid) != Some(starttime) { return false; }
+    unsafe { libc::kill(pid as i32, sig) == 0 }
+}
+
+/// SIGTERM the verified launched group, CONT first if the overview froze it.
 fn signal_group(pid: u32) -> bool {
-    let grp = format!("-{pid}");
-    let _ = std::process::Command::new("kill").args(["-CONT", &grp]).status();
-    let grp_ok = std::process::Command::new("kill").args(["-TERM", &grp]).status().map(|s| s.success()).unwrap_or(false);
-    let pid_ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map(|s| s.success()).unwrap_or(false);
-    grp_ok || pid_ok
+    let _ = signal_group_verified(pid, libc::SIGCONT);
+    signal_group_verified(pid, libc::SIGTERM)
 }
 
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
@@ -94,6 +119,7 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
         group: pid,
         name: name.clone(),
         id: id.clone(),
+        starttime: proc_start_time(pid).unwrap_or(0),
     });
     // The frontend correlates Now Playing entries by this launch id (the tile id), falling back
     // to the name for any legacy caller, so two same-named launchables don't clobber on exit.
@@ -103,6 +129,8 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
         let _ = child.wait();
         // Clear only if a newer launch hasn't already replaced us as the current app.
         crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|a| a.group != pid);
+        crate::switcher::forget_recent(pid);
+        crate::switcher::forget_stopped(pid);
         let _ = app.emit("app-exited", exit_key);
     });
 }
@@ -248,7 +276,7 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
 
 #[cfg(test)]
 mod tests {
-    use super::steam_app_running;
+    use super::{proc_start_time, signal_group_verified, steam_app_running};
     const SAMPLE: &str = r#"
 "Registry" { "HKCU" { "Software" { "Valve" { "Steam" { "apps" {
   "570"   { "running"  "1"  "installed"  "1" }
@@ -268,5 +296,12 @@ mod tests {
     fn quoted_appid_does_not_match_substring() {
         // "57" must NOT match the "570"/"12570" blocks (quote-anchored).
         assert_eq!(steam_app_running(SAMPLE, "57"), None);
+    }
+
+    #[test]
+    fn signals_reject_unknown_and_zero_groups() {
+        assert!(proc_start_time(std::process::id()).is_some());
+        assert!(!signal_group_verified(0, libc::SIGTERM));
+        assert!(!signal_group_verified(std::process::id(), libc::SIGTERM));
     }
 }
