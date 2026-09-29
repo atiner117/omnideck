@@ -31,6 +31,25 @@ use x11rb::rust_connection::RustConnection;
 /// Windows we unmapped on the last "hide" — remapped on the next toggle.
 static HIDDEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
+/// Most recently foregrounded owned groups, newest first. Intersect with live apps at use.
+static RECENT: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+fn remember_group(group: u32) {
+    let mut recent = crate::sync::lock_or_recover(&RECENT, "switcher.RECENT");
+    recent.retain(|&g| g != group);
+    recent.insert(0, group);
+}
+pub fn recent_apps() -> Vec<crate::watchdog::LiveApp> {
+    let mut apps = crate::watchdog::live_apps();
+    let recent = crate::sync::lock_or_recover(&RECENT, "switcher.RECENT");
+    apps.sort_by_key(|a| recent.iter().position(|&g| g == a.group).unwrap_or(usize::MAX));
+    let known = apps.iter().take_while(|a| recent.contains(&a.group)).count();
+    apps[known..].reverse();
+    apps
+}
+pub(crate) fn forget_recent(group: u32) {
+    crate::sync::lock_or_recover(&RECENT, "switcher.RECENT").retain(|&g| g != group);
+}
+
 /// Shared X11 connection for the polled entry points. The navpad's activation gate calls
 /// `any_app_visible` ~3×/s from the gamepad thread; opening a fresh connection per check
 /// (socket + auth + setup exchange, a new FD each time) was pure churn. Cached here and
@@ -410,6 +429,65 @@ fn window_pid(conn: &RustConnection, win: Window) -> Option<u32> {
     prop.value32().and_then(|mut v| v.next())
 }
 
+/// Resolve the foreground group using gamescope's actual presented X window. A mapped
+/// background app is not foreground; a Steam-tagged window is never in `visible`.
+fn foreground_group(conn: &RustConnection, root: Window, visible: &[(Window, u32)]) -> Option<u32> {
+    if let Some(win) = gamescope_focused_window(conn, root) {
+        return visible.iter().find(|&&(w, _)| w == win).map(|&(_, group)| group);
+    }
+    // Older gamescope / nested desktop: X input focus may be a child of the toplevel.
+    let mut win = conn.get_input_focus().ok()?.reply().ok()?.focus;
+    for _ in 0..16 {
+        if let Some(&(_, group)) = visible.iter().find(|&&(w, _)| w == win) { return Some(group); }
+        let parent = conn.query_tree(win).ok()?.reply().ok()?.parent;
+        if parent == 0 || parent == win { break; }
+        win = parent;
+    }
+    None
+}
+
+fn deck_is_focused(conn: &RustConnection, root: Window) -> bool {
+    if let Some(win) = gamescope_focused_window(conn, root) {
+        return window_pid(conn, win) == Some(std::process::id());
+    }
+    let Ok(Ok(focus)) = conn.get_input_focus().map(|c| c.reply()) else { return false };
+    let mut win = focus.focus;
+    for _ in 0..16 {
+        if let Some(pid) = window_pid(conn, win) { return pid == std::process::id(); }
+        let Ok(Ok(tree)) = conn.query_tree(win).map(|c| c.reply()) else { return false };
+        if tree.parent == 0 || tree.parent == win { break; }
+        win = tree.parent;
+    }
+    false
+}
+
+/// Navpad compatibility: keep HEAD's gamescope focus gate and Steam exclusion.
+pub fn owned_app_focused() -> bool { any_app_visible() }
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwitchResult { Home, App, Unchanged }
+
+/// Tap from an owned foreground app returns Home; tap from Home returns the most recent
+/// *running* owned app. Never raise an owned window over Steam or another foreign window.
+pub fn home_toggle() -> SwitchResult {
+    if !session_ok() { return SwitchResult::Unchanged; }
+    let state = with_x11(|conn, root| {
+        let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
+        (foreground_group(conn, root, &visible), deck_is_focused(conn, root))
+    });
+    let Some((front, on_deck)) = state else { return SwitchResult::Unchanged };
+    if let Some(group) = front {
+        remember_group(group);
+        return if hide_all() { SwitchResult::Home } else { SwitchResult::Unchanged };
+    }
+    if !on_deck { return SwitchResult::Unchanged; }
+    for app in recent_apps() {
+        if show_group(app.group) { return SwitchResult::App; }
+    }
+    SwitchResult::Unchanged
+}
+
 /// Toggle the launched app(s): if any owned window is visible, hide them all (focus falls
 /// back to OmniDeck); else re-show whatever the last toggle hid. Returns a short description
 /// of what happened, or None if there was nothing to act on.
@@ -477,7 +555,7 @@ pub(crate) fn session_ok() -> bool {
 /// What the most recent `hide_all()` actually did — the windows it unmapped and the groups
 /// it froze — so dismissing the deck (rather than picking a card) can put exactly that state
 /// back. Consumed by `deck_cancel`; cleared when a card is chosen instead.
-static LAST_HIDE: Mutex<(Vec<Window>, Vec<u32>)> = Mutex::new((Vec::new(), Vec::new()));
+static LAST_HIDE: Mutex<(Vec<Window>, Vec<u32>, Option<u32>)> = Mutex::new((Vec::new(), Vec::new(), None));
 
 /// Hide EVERY launched app so OmniDeck (and the deck overlay) is what's on screen — the
 /// deck-switcher's "open" step. Same as toggle's hide half: unmap owned toplevels, remember
@@ -488,11 +566,19 @@ pub fn hide_all() -> bool {
     }
     with_x11(|conn, root| {
         let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
-        if visible.is_empty() {
-            return false;
+        let front = foreground_group(conn, root, &visible);
+        if front.is_none() {
+            // Opening the overview from Home is valid even with zero live cards. Preserve
+            // any previous snapshot: it may be the only recovery path for leaderless survivors.
+            return deck_is_focused(conn, root);
         }
         let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
         let failed = set_mapped(conn, &wins, false);
+        if !failed.is_empty() {
+            let succeeded: Vec<_> = wins.iter().copied().filter(|w| !failed.contains(w)).collect();
+            let _ = set_mapped(conn, &succeeded, true);
+            return false; // never freeze or claim Home on a partial unmap
+        }
         {
             let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
             for &(win, _) in &visible {
@@ -505,9 +591,10 @@ pub fn hide_all() -> bool {
         // Snapshot THIS hide's effect (not the whole HIDDEN/STOPPED backlog): a deck dismissed
         // without picking a card restores exactly what opening it took away — apps hidden on an
         // earlier deck round stay hidden.
-        let hidden_now: Vec<Window> =
-            visible.iter().map(|&(w, _)| w).filter(|w| !failed.contains(w)).collect();
-        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (hidden_now, frozen_now);
+        let hidden_now: Vec<Window> = visible.iter().filter(|&&(_, group)| Some(group) == front)
+            .map(|&(win, _)| win).collect();
+        let frozen_front: Vec<u32> = frozen_now.into_iter().filter(|g| Some(*g) == front).collect();
+        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (hidden_now, frozen_front, front);
         true
     })
     .unwrap_or(false)
@@ -521,63 +608,103 @@ pub fn deck_cancel() -> bool {
     if !session_ok() {
         return false;
     }
-    // Connection established FIRST, like every sibling (with_x11 proves it before the
-    // closure runs): failing after the snapshot was taken and the groups thawed would
-    // strand the windows unmapped with the restore state already destroyed.
-    with_x11(|conn, _root| {
-        let (wins, groups) = std::mem::take(&mut *crate::sync::lock_or_recover(
-            &LAST_HIDE,
-            "switcher.LAST_HIDE",
-        ));
-        if wins.is_empty() && groups.is_empty() {
-            return false;
+    with_x11(|conn, root| {
+        let (wins, groups, foreground) = crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE").clone();
+        let Some(group) = foreground else { return true; }; // overview opened from Home
+        let owned = windows_of_group(conn, root, group);
+        let restore: Vec<Window> = wins.into_iter().filter(|w| owned.contains(w)).collect();
+        if restore.is_empty() {
+            *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
+            return true; // exited while overview was open
         }
-        // Resume before mapping, same as toggle: the windows must be able to repaint/take focus.
-        // Only groups whose thaw actually landed are forgotten — dropping a record whose members
-        // are still stopped would leave them frozen with nothing left to retry from.
-        let thawed: Vec<u32> = groups.iter().copied().filter(|&g| cont_group(g)).collect();
-        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
-            .retain(|f| !thawed.contains(&f.group));
-        let failed = set_mapped(conn, &wins, true);
-        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
-            .retain(|w| !wins.contains(w) || failed.contains(w));
+        let failed = set_mapped(conn, &restore, true);
+        if !failed.is_empty() { return false; } // keep snapshot and STOPPED for retry
+        if groups.contains(&group) {
+            if !cont_group(group) {
+                let _ = set_mapped(conn, &restore, false);
+                return false;
+            }
+            crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+        }
+        if !wait_for_group_focus(conn, root, group) { return false; }
+        remember_group(group);
+        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
+        crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN").retain(|w| !restore.contains(w));
         true
     })
     .unwrap_or(false)
 }
 
+/// Explicit Home selection retains hidden groups but drops the cancel snapshot.
+pub fn deck_home() {
+    *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
+}
+
+fn wait_for_group_focus(conn: &RustConnection, root: Window, group: u32) -> bool {
+    for _ in 0..10 {
+        let visible = visible_owned(conn, root, &[group]);
+        if foreground_group(conn, root, &visible) == Some(group) { return true; }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+fn rollback_show(conn: &RustConnection, wins: &[Window], was_visible: &[Window]) {
+    let newly_shown: Vec<Window> = wins.iter().copied().filter(|w| !was_visible.contains(w)).collect();
+    let failed_hide = set_mapped(conn, &newly_shown, false);
+    if !failed_hide.is_empty() { tracing::warn!("switcher: rollback could not re-hide {} window(s)", failed_hide.len()); }
+    let failed_restore = set_mapped(conn, was_visible, true);
+    if !failed_restore.is_empty() {
+        let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+        for win in failed_restore { if !hidden.contains(&win) { hidden.push(win); } }
+        tracing::warn!("switcher: could not restore a previously mapped window");
+    }
+}
+
 /// Bring ONE launched app group to the front (the deck-switcher's "open this card"): map
 /// its toplevels, then resume it if frozen. Other apps stay hidden. Returns true on success.
 pub fn show_group(group: u32) -> bool {
-    if !session_ok() {
-        return false;
-    }
+    if !session_ok() || !crate::watchdog::live_groups().contains(&group) { return false; }
     with_x11(|conn, root| {
-        // Find the windows FIRST: if the app has none left (died while frozen, transient X
-        // failure), leave its STOPPED entry alone — thawing before this check left the group
-        // running invisibly with no record to ever re-freeze it.
         let wins = windows_of_group(conn, root, group);
-        if wins.is_empty() {
-            return false;
+        if wins.is_empty() { return false; }
+        let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
+        let already_focused = foreground_group(conn, root, &visible) == Some(group);
+        let on_deck = deck_is_focused(conn, root);
+        if !on_deck && !already_focused { return false; } // never raise over Steam/foreign focus
+        let was_visible: Vec<Window> = visible.iter().filter(|&&(_, g)| g == group).map(|&(w, _)| w).collect();
+        if on_deck && !was_visible.is_empty() {
+            let resisted = set_mapped(conn, &was_visible, false);
+            if !resisted.is_empty() {
+                rollback_show(conn, &wins, &was_visible);
+                return false;
+            }
         }
-
-        // Map BEFORE thawing. The map requests come from OUR connection (steamcompmgr does the
-        // actual mapping), so a SIGSTOPped client doesn't block them — and if every map fails
-        // (wedged compositor), the group must stay frozen with its STOPPED entry and the deck's
-        // dismiss snapshot intact, not thawed-and-invisible with no record to re-freeze it.
         let failed = set_mapped(conn, &wins, true);
         if failed.len() == wins.len() {
+            rollback_show(conn, &wins, &was_visible);
             return false;
         }
-
-        // At least one window is up — resume the group so it can repaint and take focus.
-        // Keep the record if members are still stopped, so a later toggle retries the thaw.
-        if cont_group(group) {
-            crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+        let was_stopped = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED")
+            .iter().any(|f| f.group == group);
+        if !cont_group(group) {
+            rollback_show(conn, &wins, &was_visible);
+            return false; // preserve STOPPED and cancel snapshot for retry
         }
-        // A card was chosen — the deck's dismiss snapshot no longer applies.
-        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new());
-        // Drop the now-shown windows from the hidden set (keep any that failed to map for retry).
+        crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+        if on_deck && !wait_for_group_focus(conn, root, group) {
+            rollback_show(conn, &wins, &was_visible);
+            let still_viewable = wins.iter().any(|w| conn.get_window_attributes(*w).ok()
+                .and_then(|c| c.reply().ok()).is_some_and(|a| a.map_state == MapState::VIEWABLE));
+            if was_stopped && !still_viewable {
+                if let Some(f) = stop_group(group) {
+                    crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").push(f);
+                }
+            }
+            return false;
+        }
+        remember_group(group);
+        *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
         crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN")
             .retain(|w| !wins.contains(w) || failed.contains(w));
         true

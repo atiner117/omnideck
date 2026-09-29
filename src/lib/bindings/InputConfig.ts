@@ -7,13 +7,12 @@
  */
 export type InputConfig = { 
 /**
- * Guide-button long-hold threshold in ms: hold this long to close the current app
- * (short press switches). Clamped 200–5000 — below 200 every tap "closes", above 5000
- * the hold reads as broken.
+ * Guide-button long-hold threshold in ms: hold this long to open the task overview
+ * (short press switches Home / last app). Clamped 200–5000 to distinguish taps.
  */
 guide_hold_ms: bigint, 
 /**
- * Grab Ctrl+Alt+Home/End inside the gamescope session (keyboard escape hatch —
+ * Grab Ctrl+Alt+Home/Insert/End inside the gamescope session (keyboard escape hatch —
  * hotkey.rs). False = no global grabs, for users whose media keyboard needs the chord.
  */
 session_hotkeys: boolean, };

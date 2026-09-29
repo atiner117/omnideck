@@ -1,6 +1,7 @@
 // OmniDeck — global session hotkeys:
-//   Ctrl+Alt+Home = switch between OmniDeck and the launched app (hide/show — it keeps running)
-//   Ctrl+Alt+End  = close the launched app and return home
+//   Ctrl+Alt+Home   = switch between OmniDeck and the last app (keeps running)
+//   Ctrl+Alt+Insert = open the recent-app task overview
+//   Ctrl+Alt+End    = explicitly close launched apps and return home
 //
 // Inside a gamescope session a launched fullscreen app (browser PWA, native player) takes
 // window focus, so nothing typed on the keyboard ever reaches OmniDeck's webview — a
@@ -23,6 +24,8 @@ const XK_HOME: u32 = 0xff50; // nav-cluster Home
 const XK_KP_HOME: u32 = 0xff95; // numpad Home (7 with NumLock off)
 const XK_END: u32 = 0xff57; // nav-cluster End
 const XK_KP_END: u32 = 0xff9c; // numpad End (1 with NumLock off)
+const XK_INSERT: u32 = 0xff63;
+const XK_KP_INSERT: u32 = 0xff9e;
 
 pub fn spawn_if_session(app: tauri::AppHandle) {
     let in_gamescope = crate::session::in_session();
@@ -50,6 +53,7 @@ struct Grabs {
     conn: x11rb::rust_connection::RustConnection,
     home_keycodes: Vec<u8>,
     end_keycodes: Vec<u8>,
+    overview_keycodes: Vec<u8>,
 }
 
 /// Connect to $DISPLAY and grab Ctrl+Alt+{Home,End} on the root window. Keycodes are
@@ -74,32 +78,34 @@ fn connect_and_grab() -> Result<Grabs, Box<dyn std::error::Error>> {
     };
     let home_keycodes = keycodes_for(&[XK_HOME, XK_KP_HOME]);
     let end_keycodes = keycodes_for(&[XK_END, XK_KP_END]);
-    if home_keycodes.is_empty() && end_keycodes.is_empty() {
-        return Err("keyboard has no Home/End keys".into());
+    let overview_keycodes = keycodes_for(&[XK_INSERT, XK_KP_INSERT]);
+    if home_keycodes.is_empty() && end_keycodes.is_empty() && overview_keycodes.is_empty() {
+        return Err("keyboard has no Home/Insert/End keys".into());
     }
 
     let base = ModMask::CONTROL | ModMask::M1;
-    for &keycode in home_keycodes.iter().chain(&end_keycodes) {
+    for &keycode in home_keycodes.iter().chain(&end_keycodes).chain(&overview_keycodes) {
         for locks in [ModMask::from(0u16), ModMask::M2, ModMask::LOCK, ModMask::M2 | ModMask::LOCK] {
             conn.grab_key(true, root, base | locks, keycode, GrabMode::ASYNC, GrabMode::ASYNC)?;
         }
     }
     conn.flush()?;
-    Ok(Grabs { conn, home_keycodes, end_keycodes })
+    Ok(Grabs { conn, home_keycodes, end_keycodes, overview_keycodes })
 }
 
 fn run(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let grabs = connect_and_grab()?;
-    tracing::info!("hotkey: grabbed Ctrl+Alt+Home (switch) and Ctrl+Alt+End (close app)");
+    tracing::info!("hotkey: grabbed Ctrl+Alt+Home (switch), Insert (overview), End (close)");
 
     loop {
         // Only our grabbed chords are delivered here; the keycode says which one.
         let Event::KeyPress(e) = grabs.conn.wait_for_event()? else { continue };
         if grabs.home_keycodes.contains(&e.detail) {
-            // Parity with the gamepad Guide tap: open/close the deck switcher (the frontend
-            // owns the overlay and calls deck_open, which hides apps so it shows).
-            tracing::info!("hotkey: Ctrl+Alt+Home — toggle deck");
+            tracing::info!("hotkey: Ctrl+Alt+Home — Home / last app");
             let _ = app.emit("guide-tap", ());
+        } else if grabs.overview_keycodes.contains(&e.detail) {
+            tracing::info!("hotkey: Ctrl+Alt+Insert — task overview");
+            let _ = app.emit("guide-hold", ());
         } else if grabs.end_keycodes.contains(&e.detail) {
             let closed = crate::watchdog::return_home();
             tracing::info!("hotkey: Ctrl+Alt+End — {}", if closed { "closed the current app" } else { "no app to close" });
@@ -122,7 +128,7 @@ mod tests {
     #[ignore]
     fn grab_smoke() {
         let grabs = connect_and_grab().expect("connect + grab failed");
-        for (chord, expected) in [("ctrl+alt+Home", &grabs.home_keycodes), ("ctrl+alt+End", &grabs.end_keycodes)] {
+        for (chord, expected) in [("ctrl+alt+Home", &grabs.home_keycodes), ("ctrl+alt+Insert", &grabs.overview_keycodes), ("ctrl+alt+End", &grabs.end_keycodes)] {
             std::process::Command::new("xdotool")
                 .args(["key", chord])
                 .status()
