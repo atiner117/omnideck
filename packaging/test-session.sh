@@ -10,16 +10,18 @@
 #   2. kbd-hide    Ctrl+Alt+Home hides a launched app  (X grab → switcher unmap)
 #   3. kbd-show    Ctrl+Alt+Home again brings it back  (remap)
 #   4. kbd-close   Ctrl+Alt+End closes it              (watchdog pgid kill)
-#   5. pad-home    Guide tap hides the app; next tap restores it without relaunch
-#   6. pad-deck    Guide hold opens overview AT the threshold; app stays alive
-#   7. pad-pick    A on the focused recent-app card brings it back
-#   8. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
+#   5. category    app→Home and overview Home reset the selected category (when OCR available)
+#   6. mapped-back already-viewable app behind Home receives X focus on return
+#   7. pad-home    Guide tap hides the app; next tap restores it without relaunch
+#   8. pad-deck    Guide hold opens overview AT the threshold; app stays alive
+#   9. pad-pick    A on the focused recent-app card brings it back
+#  10. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
 #
 # Still bare-metal only: display-mode/165 Hz (real EDID), real Steam launch + focus return
 # (STEAM_GAME atom), suspend, SDDM login. Everything else regresses HERE first.
 #
 # Needs: gamescope, xdotool, imagemagick, cargo (test tools), /dev/uinput write access
-# (input group). Steam note: the virtual pad is a real evdev device — a running desktop
+# (input group). Optional: tesseract for visual Home dashboard assertions. Steam note: the virtual pad is a real evdev device — a running desktop
 # Steam may also see its Guide presses; close Steam for a clean run.
 #
 # Usage: ./packaging/test-session.sh [/path/to/omnideck-binary]
@@ -115,6 +117,13 @@ stub_visible() { xdotool search --onlyvisible --name omnideck-harness-stub 2>/de
 stub_alive()   { [ -n "${STUB_PID:-}" ] && kill -0 "$STUB_PID" 2>/dev/null; }
 stub_kill()    { [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null; }
 active_deck() { [ "$(xdotool getactivewindow 2>/dev/null)" = "$APP_WID" ]; }
+selected_category() {
+  import -silent -window "$APP_WID" "$RUN/category.png" || return 1
+  # OCR the selected label alone: full-screen OCR misses it among large game titles.
+  magick "$RUN/category.png" -crop 320x120+360+330 +repage -resize 200% png:- |
+    tesseract stdin stdout --psm 6 2>/dev/null |
+    awk -v label="$1" '$0 == label { found=1 } END { exit !found }'
+}
 active_stub() {
   local win
   win="$(xdotool search --onlyvisible --name omnideck-harness-stub 2>/dev/null | head -1)"
@@ -167,6 +176,38 @@ if stub_launch; then
   sleep 0.5
 else
   bad "kbd: stub app never appeared (test hook / launch path broken?)"
+fi
+
+# The backend's direction result must drive the UI category, not just expose OmniDeck's
+# window with the old Games rail still selected. OCR is optional on hosts without tesseract.
+if command -v tesseract >/dev/null; then
+  echo "── Home dashboard category ──"
+  $KEY h Right
+  if wait_for 6 "selected_category Games" && stub_launch; then
+    toggle_expect "$KEY ctrl+alt+Home" hidden
+    if wait_for 6 "active_deck && selected_category Home"; then
+      ok "category-tap: app-to-Home selected dashboard"
+    else
+      bad "category-tap: previous category remained selected"
+    fi
+    toggle_expect "$KEY ctrl+alt+Home" shown
+    toggle_expect "$KEY ctrl+alt+Insert" hidden
+    $KEY Left Return
+    if wait_for 6 "active_deck && selected_category Home" && stub_alive; then
+      ok "category-overview: Home card selected dashboard without closing app"
+    else
+      bad "category-overview: Home card did not select dashboard"
+    fi
+    $KEY ctrl+alt+End
+    wait_for 6 "! stub_alive" || stub_kill
+  else
+    if [ -f "$RUN/category.png" ]; then
+      echo "  diagnostic: selected label OCR: $(magick "$RUN/category.png" -crop 320x120+360+330 +repage -resize 200% png:- | tesseract stdin stdout --psm 6 2>/dev/null | tr '\n' ',')" >&2
+    fi
+    bad "category: could not select Games or launch test app"
+  fi
+else
+  echo "  – skipped category visual check: tesseract unavailable"
 fi
 
 # An app may be mapped *behind* an already-focused dashboard. Mapping it again is a no-op;
