@@ -72,9 +72,12 @@ profiles when the hardware can handle it.
   can't be auto-probed), set `[media_server] display_fps = 165.08` so the set bakes your real
   refresh instead of the 60 fallback; `audio_samplerate = 96000` forces mpv's output rate for
   a fixed-rate DAC / LDAC (both default off).
-- 🃏 **App switcher, iOS-style** (session) — tap **Guide** (or `Ctrl+Alt+Home`) for a row of
-  cards, one per running app: pick one to jump to it, **Select** (or the ✕) to close it,
-  **B** to drop back to the dashboard. Guide-**hold** still closes everything at once.
+- 🃏 **Home + recent apps** (session) — tap **Guide** (or `Ctrl+Alt+Home`) to switch between
+  Home and the last OmniDeck-launched app without closing it. Hold **Guide** (or press
+  `Ctrl+Alt+Insert`) for a task overview: select Home or a recent running app, **Select**
+  (or ✕) to close only that card, **B** to return to the previous foreground app. Steam
+  games are not yet actionable cards; Steam/Proton game focus and close need separate
+  gamescope-safe handling, not a blind signal to the Steam process tree.
 - 🎮➡️🖱️ **Controller drives launched apps too** (session) — while a launched PWA/browser/
   app is in front, the pad becomes a virtual keyboard+mouse (`/dev/uinput`): **right stick =
   mouse pointer** (the primary way to navigate any web UI), `A`/cross = click, dpad/left
@@ -155,14 +158,15 @@ bun run tauri build --no-bundle    # release binary -> src-tauri/target/release/
 | Add apps | `A` | △ / Y (North) |
 | Settings | `P` | Start / Options |
 | Back / close panel / cancel | Esc | ◯ / B (East) |
-| Open the app-switcher deck (session) | `Ctrl+Alt+Home` | Guide (press) |
-| Close all launched apps & return (session) | `Ctrl+Alt+End` | Guide (hold ≥ 0.8 s) |
+| Home ⇄ last OmniDeck-launched app (session) | `Ctrl+Alt+Home` | Guide (tap) |
+| Open recent-app task overview (session) | `Ctrl+Alt+Insert` | Guide (hold ≥ 0.8 s) |
+| Close all OmniDeck-launched apps (explicit emergency chord) | `Ctrl+Alt+End` | — |
 
 Power (Exit / Suspend / Restart / Shut down) is in the **⏻** menu in the top bar.
-The deck/close rows work **while the launched app has focus** — the Guide button reads the
-controller hardware directly, and the chords are global X grabs in the session. The switcher
-hides apps instead of killing them: audible apps (music) keep playing in the background while
-you browse, and a card brings any app back exactly where you left it.
+For **OmniDeck-launched** apps, Guide reads controller hardware directly and the keyboard
+chords are session-wide X grabs. The switcher hides apps instead of killing them: audible apps
+(music) keep playing, and a card restores that app. A Steam game is not yet an owned app card;
+its gamescope focus path differs and is being validated separately.
 
 On a controller, **Select** opens search with an **on-screen keyboard** (D-pad to move,
 ✕/A to type, bumpers to pick a result) — search and launch without a keyboard.

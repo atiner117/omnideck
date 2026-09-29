@@ -550,11 +550,12 @@
     },
   });
 
-  // Deck switcher (iOS-style app cards): Guide tap opens it (backend hides the apps so this
-  // overlay is what shows); pick a card to bring that app forward, Select to close it.
+  // Guide hold opens the overview; tap toggles Home / last owned foreground app.
+  // Home is position 0, followed by live cards in the backend's most-recent-first order.
   let deckOpen = $state(false);
   let deckApps = $state<LiveApp[]>([]);
   let deckFocus = $state(0);
+  let deckBusy = false;
   // An app's launcher icon/emoji for its card, matched by launch id then name (games show 🎮).
   function deckIcon(a: LiveApp): string {
     // Launch ids are `tileId#seq` ($lib/launchId) — match the tile id, then fall back to name.
@@ -563,37 +564,54 @@
     return app?.icon ?? "🎮";
   }
   async function openDeck() {
-    try { deckApps = await api.deckOpen(); } catch (e) { deckApps = []; console.debug("[omnideck] deck open failed", e); }
-    if (deckApps.length === 0) return; // nothing running — don't show an empty deck
-    deckFocus = 0;
-    deckOpen = true;
+    if (deckOpen || deckBusy) return;
+    deckBusy = true;
+    try {
+      deckApps = await api.deckOpen(); // backend owns MRU ordering; do not sort by card index
+      deckFocus = deckApps.length ? 1 : 0;
+      deckOpen = true; // Home remains actionable even with no running apps
+    } catch (e) { reportError("Couldn't open overview", e); }
+    finally { deckBusy = false; }
   }
-  // Dismiss = put back what opening the deck took away: deck_open hid (and possibly froze)
-  // the foreground app, so a tap-tap round trip must land back in it, not strand it hidden.
-  function closeDeck() {
-    deckOpen = false;
-    api.deckCancel().catch((e) => console.debug("[omnideck] deck cancel failed", e));
+  // Dismiss restores the pre-open foreground app; selecting Home must NOT use this path.
+  async function closeDeck() {
+    if (!deckOpen || deckBusy) return;
+    deckBusy = true;
+    try {
+      const restored = await api.deckCancel();
+      if (!restored && deckApps.length) {
+        reportError("Couldn't restore the previous app", "Choose a card or Home instead.");
+        return;
+      }
+      deckOpen = false;
+    } catch (e) { reportError("Couldn't dismiss overview", e); }
+    finally { deckBusy = false; }
   }
-  function deckMove(d: number) { if (deckApps.length) deckFocus = clamp(deckFocus + d, 0, deckApps.length - 1); }
-  async function deckSelect() {
-    const a = deckApps[deckFocus];
-    deckOpen = false;
-    if (a) await api.deckShow(a.group).catch((e) => reportError("Couldn't open app", e));
+  function deckMove(d: number) { deckFocus = clamp(deckFocus + d, 0, deckApps.length); }
+  async function deckSelect(index = deckFocus) {
+    if (!deckOpen || deckBusy) return;
+    const a = index === 0 ? null : deckApps[index - 1];
+    if (index > 0 && !a) return;
+    deckBusy = true;
+    try {
+      if (a) await api.deckShow(a.group);
+      else { await api.deckHome(); goHome(); }
+      deckOpen = false;
+    } catch (e) { reportError(a ? "Couldn't open app" : "Couldn't go Home", e); }
+    finally { deckBusy = false; }
   }
-  async function deckKill() {
-    const a = deckApps[deckFocus];
-    if (!a) return;
+  async function deckKill(index = deckFocus) {
+    const a = index === 0 ? null : deckApps[index - 1];
+    if (!deckOpen || deckBusy || !a) return; // Home cannot be closed
+    deckBusy = true;
     try {
       await api.deckClose(a.group);
+      deckApps = deckApps.filter((x) => x.group !== a.group);
+      deckFocus = clamp(index, 0, deckApps.length);
     } catch (e) {
-      // Keep the card: the app is still running, and silently dropping it claimed a close
-      // that didn't happen (reopening the deck resurrected the "closed" card).
+      // Keep the card on failure: silently dropping it would claim a close that never happened.
       reportError("Couldn't close app", e);
-      return;
-    }
-    deckApps = deckApps.filter((x) => x.group !== a.group);
-    if (deckApps.length === 0) { deckOpen = false; return; }
-    deckFocus = clamp(deckFocus, 0, deckApps.length - 1);
+    } finally { deckBusy = false; }
   }
   // Posters for the rows around the focus (windowed like the game rail's art loading).
   // Stays in the page: $effect needs a component root and artUrl is page-local.
@@ -825,14 +843,22 @@
       stickX: (d) => overscanCal?.nudge(d),
     },
     {
-      // Deck switcher: arrows/L-R pick a card, Enter/A/X opens, Del/Select closes it,
-      // Esc/B/Guide dismisses.
+      // Overview: Home (0) + MRU app cards. Arrows select; Enter/A opens;
+      // Delete/Select closes an app only; Esc/B/Guide dismisses to prior foreground.
       open: () => deckOpen,
       key: (e) => {
+        if (["ArrowLeft", "ArrowRight", "Enter", "Delete", "Backspace", "Escape"].includes(e.key)) e.preventDefault();
         if (e.key === "ArrowLeft" && navGate()) deckMove(-1);
         else if (e.key === "ArrowRight" && navGate()) deckMove(1);
-        else if (e.key === "Enter") deckSelect();
-        else if (e.key === "Delete" || e.key === "Backspace") deckKill();
+        else if (e.key === "Enter") {
+          // Enter on a keyboard-focused Close button must not also open its card.
+          const close = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-deck-close]");
+          if (close) deckKill(Number(close.dataset.deckClose)); else deckSelect();
+        }
+        else if (e.key === "Delete" || e.key === "Backspace") {
+          const close = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-deck-close]");
+          deckKill(close ? Number(close.dataset.deckClose) : deckFocus);
+        }
         else if (e.key === "Escape") closeDeck();
       },
       pad: (c) => {
@@ -1121,10 +1147,17 @@
       const id = String(e.payload ?? "");
       nowList = nowList.filter((x) => x.id !== id);
       // Keep the deck honest if an app dies while it's open (e.g. we just closed one).
-      if (deckOpen) api.deckList().then((a) => { deckApps = a; if (a.length === 0) deckOpen = false; else deckFocus = clamp(deckFocus, 0, a.length - 1); }).catch(() => {});
+      if (deckOpen) api.deckList().then((a) => { deckApps = a; deckFocus = clamp(deckFocus, 0, a.length); }).catch(() => {});
     }).then((u) => off.push(u));
-    // Guide tap (gamepad) or Ctrl+Alt+Home → toggle the deck switcher.
-    api.onGuideTap(() => { if (deckOpen) closeDeck(); else openDeck(); }).then((u) => off.push(u));
+    // A tap dismisses an open overview, otherwise toggles Home / last owned app.
+    api.onGuideTap(() => {
+      if (deckOpen) closeDeck();
+      else if (!deckBusy) api.switchApp().then((target) => {
+        if (target === "home") goHome();
+        else if (target === "unchanged") reportError("Couldn't switch app", "No supported app could be brought to the foreground.");
+      }).catch((e) => reportError("Couldn't switch app", e));
+    }).then((u) => off.push(u));
+    api.onGuideHold(() => { if (!deckOpen) openDeck(); }).then((u) => off.push(u));
     // MPRIS Now Playing is event-driven (backend zbus watcher). One initial fetch covers the
     // window between mount and the listener attaching; after that, `media-changed` pushes
     // every track/status change in ms (works for native players + browser PWAs).

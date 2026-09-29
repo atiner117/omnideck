@@ -388,18 +388,17 @@ pub async fn save_appearance(appearance: config::Appearance) -> Result<(), Strin
 /// Async: hide_all's unmap-verify loop can sleep ~400 ms and the freeze policy shells out
 /// to pactl — none of that may run inline on the main thread (sync commands do).
 #[tauri::command]
-pub async fn deck_open() -> Vec<watchdog::LiveApp> {
+pub async fn deck_open() -> Result<Vec<watchdog::LiveApp>, String> {
     blocking(|| {
-        // Same gate show_group enforces: outside a session the hide can't work and every
-        // card select is refused — opening an inert deck just swallowed controller input.
         if !crate::switcher::session_ok() {
-            return Vec::new();
+            return Err("task overview requires a gamescope session".to_string());
         }
-        crate::switcher::hide_all();
-        watchdog::live_apps()
+        if !crate::switcher::hide_all() {
+            return Err("could not bring OmniDeck to the foreground".to_string());
+        }
+        Ok(crate::switcher::recent_apps())
     })
-    .await
-    .unwrap_or_default()
+    .await?
 }
 
 /// Deck dismissed without picking a card (second Guide tap, B, Escape, scrim): restore what
@@ -412,7 +411,13 @@ pub async fn deck_cancel() -> bool {
 /// Current live-app cards without touching window state (e.g. refreshing after one closes).
 #[tauri::command]
 pub fn deck_list() -> Vec<watchdog::LiveApp> {
-    watchdog::live_apps()
+    crate::switcher::recent_apps()
+}
+
+/// Choose Home instead of cancelling the overview back to the foreground app.
+#[tauri::command]
+pub fn deck_home() {
+    crate::switcher::deck_home();
 }
 
 /// Only group ids the watchdog is actually tracking may reach `kill`: the id comes from the
@@ -603,27 +608,29 @@ pub fn quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-/// Close the currently-foregrounded launched app and return to OmniDeck (UI/keyboard path;
-/// the gamepad Guide button does the same). Returns true if an app was running.
+/// Explicitly close OmniDeck-launched app groups and return to OmniDeck (UI / Ctrl+Alt+End).
+/// The gamepad Guide button NEVER closes apps: tap switches, hold opens the overview.
+/// Returns true if a signal reached a tracked app.
 #[tauri::command]
 pub fn close_current_app() -> bool {
     watchdog::return_home()
 }
 
-/// Switch between OmniDeck and a launched app without closing it. With a launch `id` (a Now
-/// Playing card's entry), brings THAT app's group forward like a deck card — the global
-/// toggle re-mapped EVERY hidden app at once, so a per-app ⇄ button surfaced them all. A
-/// STALE id (the app just exited, its card not yet removed) is a no-op for the same reason:
-/// falling through to the toggle would surface every hidden app. Only an ABSENT id (legacy
-/// callers) means the global toggle.
+/// Switch between Home and the last running owned app without closing it. With a launch
+/// `id` (a Now Playing card's entry), bring THAT app's group forward like a deck card.
+/// A stale id must never fall through to a different app.
 #[tauri::command]
-pub async fn switch_app(id: Option<String>) -> bool {
+pub async fn switch_app(id: Option<String>) -> crate::switcher::SwitchResult {
+    use crate::switcher::SwitchResult;
     blocking(move || match id.as_deref() {
-        Some(key) => watchdog::group_of_id(key).map(crate::switcher::show_group).unwrap_or(false),
-        None => crate::switcher::toggle().is_some(),
+        Some(key) if watchdog::group_of_id(key).is_some_and(crate::switcher::show_group) => {
+            SwitchResult::App
+        }
+        Some(_) => SwitchResult::Unchanged,
+        None => crate::switcher::home_toggle(),
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(SwitchResult::Unchanged)
 }
 
 /// True when OmniDeck is running as a gamescope session (vs. a window on the desktop). Lets
