@@ -5,7 +5,8 @@
 
 [advisories]
 version = 2
-# RustSec vulnerabilities + unsound advisories error by default in v2.
+# RustSec vulnerabilities error at any depth. Unsound advisories default to workspace scope
+# (cargo-deny 0.20 advisories/cfg.rs): transitive ones, e.g. glib 0.18 RUSTSEC-2024-0429, only warn.
 # Unmaintained: only fail for OUR direct dependencies. The transitive tree is pinned by
 # Tauri v2's Linux stack (gtk-rs GTK3 bindings ×10, unic-* via tauri's templating,
 # proc-macro-error) — unfixable until Tauri moves to GTK4; enumerating those advisories
