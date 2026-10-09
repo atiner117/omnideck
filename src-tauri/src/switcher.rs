@@ -472,6 +472,81 @@ fn own_toplevels(conn: &RustConnection, root: Window) -> Vec<Window> {
     }).collect()
 }
 
+/// Deck toplevels unmapped by `raise_deck` and not yet confirmed re-mapped. An unmapped
+/// window is invisible to `own_toplevels`, so this is the only handle a retry has: without it
+/// a swallowed map request would leave OmniDeck off screen until logout.
+static DECK_WINS: Mutex<Vec<Window>> = Mutex::new(Vec::new());
+
+/// Map any deck window `raise_deck` left unmapped. True once none is pending.
+fn remap_deck(conn: &RustConnection) -> bool {
+    let wins = crate::sync::lock_or_recover(&DECK_WINS, "switcher.DECK_WINS").clone();
+    if wins.is_empty() { return true; }
+    for _ in 0..5 {
+        if set_mapped(conn, &wins, true).is_empty() {
+            crate::sync::lock_or_recover(&DECK_WINS, "switcher.DECK_WINS").clear();
+            return true;
+        }
+    }
+    tracing::error!("switcher: deck window still unmapped; will retry on the next Guide press");
+    false
+}
+
+/// Bumped by every deliberate move — a card shown, an overview cancelled, a launch, a new
+/// Home. An armed post-Home guard (`guard_from_steam`) exits as soon as it changes, so
+/// it never undoes something the user just chose (a Big Picture tile, Home → app).
+static GUARD_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn cancel_home_guard() {
+    GUARD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Is any Steam game live — launched by OmniDeck (SteamWatchGuard) or from Big Picture, which
+/// OmniDeck never sees? Every Linux Steam launch runs under `reaper SteamLaunch AppId=…`, and
+/// game windows carry their own STEAM_GAME appid (Big Picture's is 769). While one is live,
+/// the deck is never re-mapped: that would put OmniDeck over the game.
+fn steam_game_present(conn: &RustConnection, root: Window) -> bool {
+    if crate::watchdog::steam_game_active() { return true; }
+    if let (Some(atom), Ok(Ok(tree))) = (steam_game_atom(conn), conn.query_tree(root).map(|c| c.reply())) {
+        let me = std::process::id();
+        let game_window = tree.children.iter().any(|&win| {
+            conn.get_window_attributes(win).ok().and_then(|c| c.reply().ok())
+                .is_some_and(|a| a.map_state == MapState::VIEWABLE)
+                && window_pid(conn, win) != Some(me)
+                && conn.get_property(false, win, atom, AtomEnum::CARDINAL, 0, 1).ok()
+                    .and_then(|c| c.reply().ok())
+                    .and_then(|p| p.value32().and_then(|mut v| v.next()))
+                    .is_some_and(|id| id != 0 && id != 769)
+        });
+        if game_window { return true; }
+    }
+    let Ok(dir) = std::fs::read_dir("/proc") else { return false };
+    dir.flatten()
+        .filter(|e| e.file_name().to_str().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())))
+        .any(|e| std::fs::read(e.path().join("cmdline"))
+            .is_ok_and(|c| c.split(|b| *b == 0).any(|a| a == b"SteamLaunch")))
+}
+
+/// Make OmniDeck the most recently mapped window again (unmap + map its own toplevel), then
+/// wait for gamescope to focus it. Sleeps happen outside the shared X lock so the gamepad's
+/// front-ness checks are never stuck behind them.
+fn raise_deck() -> bool {
+    tracing::info!("switcher: a Steam client window took focus on Home; re-mapping the deck");
+    let mapped = with_x11(|conn, root| {
+        if !remap_deck(conn) { return false; }
+        let mine = own_toplevels(conn, root);
+        if mine.is_empty() { return false; }
+        *crate::sync::lock_or_recover(&DECK_WINS, "switcher.DECK_WINS") = mine.clone();
+        let _ = set_mapped(conn, &mine, false);
+        remap_deck(conn)
+    });
+    if mapped != Some(true) { return false; }
+    for _ in 0..10 {
+        if with_x11(deck_is_focused) == Some(true) { return true; }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
 /// After hiding `hidden`, make sure the screen went to Home rather than a foreign window.
 ///
 /// gamescope without `-e` gives every X window an app id and focuses the most recently
@@ -479,36 +554,30 @@ fn own_toplevels(conn: &RustConnection, root: Window) -> Vec<Window> {
 /// an owned app handed the screen to Steam instead of Home (r2d2 couch, 2026-09-29: PS tap
 /// from Jellyfin showed Big Picture). Re-mapping OmniDeck's own toplevel makes it the newest
 /// window again — the compositor's own focus rule, and nothing foreign is touched. Only a
-/// Steam *client* window is taken back; any other foreign focus reports failure.
-fn settle_on_deck(conn: &RustConnection, root: Window, hidden: &[Window]) -> bool {
-    let settled = || {
-        let focused = gamescope_focused_window(conn, root);
-        focused.is_none_or(|w| !hidden.contains(&w))
-    };
+/// Steam *client* window is taken back, and never while a Steam game is live; any other
+/// foreign focus reports failure. Must be called WITHOUT the X lock held.
+fn settle_on_deck(hidden: &[Window]) -> bool {
     for _ in 0..10 {
-        if settled() { break; }
+        let settled = with_x11(|conn, root| {
+            gamescope_focused_window(conn, root).is_none_or(|w| !hidden.contains(&w))
+        });
+        if settled != Some(false) { break; }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    if deck_is_focused(conn, root) { return true; }
-    // An app launched in the meantime is the user moving on, not a stolen Home.
-    let live = crate::watchdog::live_groups();
-    if foreground_group(conn, root, &visible_owned(conn, root, &live)).is_some() { return true; }
-    // Only the Steam client is taken back; a Steam game in front is not ours to cover.
-    if !steam_client_focused(conn, root) { return false; }
-    let mine = own_toplevels(conn, root);
-    if mine.is_empty() { return false; }
-    tracing::info!("switcher: a foreign window took focus on Home; re-mapping the deck");
-    let stuck = set_mapped(conn, &mine, false);
-    let unmapped: Vec<Window> = mine.iter().copied().filter(|w| !stuck.contains(w)).collect();
-    if !set_mapped(conn, &unmapped, true).is_empty() {
-        tracing::error!("switcher: could not re-map the deck window");
-        return false;
+    let verdict = with_x11(|conn, root| {
+        // No focus property (desktop / older gamescope): nothing to verify, as before.
+        if gamescope_focused_window(conn, root).is_none() || deck_is_focused(conn, root) { return Some(true); }
+        // An app launched in the meantime is the user moving on, not a stolen Home.
+        let live = crate::watchdog::live_groups();
+        if foreground_group(conn, root, &visible_owned(conn, root, &live)).is_some() { return Some(true); }
+        if !steam_client_focused(conn, root) || steam_game_present(conn, root) { return Some(false); }
+        None
+    });
+    match verdict {
+        Some(Some(v)) => v,
+        Some(None) => raise_deck(),
+        None => false,
     }
-    for _ in 0..10 {
-        if deck_is_focused(conn, root) { return true; }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    false
 }
 
 /// Is gamescope presenting a Steam *client* window (Big Picture / the Steam window, stamped
@@ -522,23 +591,58 @@ fn steam_client_focused(conn: &RustConnection, root: Window) -> bool {
             .and_then(|p| p.value32().and_then(|mut v| v.next())) == Some(769)
 }
 
-/// Steam also answers the PS/Guide button itself: ~1 s after OmniDeck has gone Home it maps
-/// Big Picture over the deck (nested repro 2026-10-09, r2d2 couch 2026-09-29; the "Guide
-/// Button Focuses Steam" option is not in this Steam build). For a short window after a
-/// Home, take the deck back ONCE if a Steam client window grabs focus. Never while a Steam
-/// game is launching/running — there the Guide press is Steam's.
-fn guard_home_from_steam() {
-    std::thread::spawn(|| {
+/// Re-map one owned app's viewable windows so it is the newest mapped window again (same
+/// focus rule as `raise_deck`), then wait for gamescope to focus it.
+fn raise_group(group: u32) -> bool {
+    let mapped = with_x11(|conn, root| {
+        let wins: Vec<Window> = visible_owned(conn, root, &[group]).into_iter().map(|(w, _)| w).collect();
+        if wins.is_empty() { return false; }
+        let _ = set_mapped(conn, &wins, false);
+        let failed = set_mapped(conn, &wins, true);
+        if !failed.is_empty() {
+            // Recoverable from the overview like any hidden app.
+            let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
+            for win in failed { if !hidden.contains(&win) { hidden.push(win); } }
+            return false;
+        }
+        true
+    });
+    if mapped != Some(true) { return false; }
+    for _ in 0..10 {
+        let focused = with_x11(|conn, root| {
+            let visible = visible_owned(conn, root, &[group]);
+            foreground_group(conn, root, &visible) == Some(group)
+        });
+        if focused == Some(true) { return true; }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+/// Steam also answers the PS/Guide button itself: ~0.4–0.6 s after OmniDeck has acted on a
+/// press it maps Big Picture over whatever OmniDeck put in front — Home *or* the app a second
+/// tap returned to (nested repro 2026-10-09, r2d2 couch 2026-09-29; the "Guide Button Focuses
+/// Steam" option is not in this Steam build). For a short window after a Guide action, put
+/// `target` (the deck, or `Some(group)`) back ONCE if a Steam client window grabs focus —
+/// unless the user has moved on (GUARD_EPOCH) or a Steam game is live, where the press is
+/// Steam's.
+fn guard_from_steam(target: Option<u32>) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let epoch = GUARD_EPOCH.fetch_add(1, SeqCst) + 1;
+    std::thread::spawn(move || {
         for _ in 0..25 {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            if crate::watchdog::steam_game_active() { return; }
-            let took = with_x11(|conn, root| {
-                if !steam_client_focused(conn, root) { return false; }
-                tracing::info!("switcher: Steam answered the Guide press; taking Home back");
-                settle_on_deck(conn, root, &[]);
-                true
+            if GUARD_EPOCH.load(SeqCst) != epoch { return; }
+            let stolen = with_x11(|conn, root| {
+                steam_client_focused(conn, root) && !steam_game_present(conn, root)
             });
-            if took == Some(true) { return; }
+            if stolen != Some(true) { continue; }
+            if GUARD_EPOCH.load(SeqCst) != epoch { return; }
+            tracing::info!("switcher: Steam answered the Guide press; restoring {}",
+                if target.is_some() { "the app" } else { "Home" });
+            let ok = match target { Some(group) => raise_group(group), None => raise_deck() };
+            if !ok { tracing::warn!("switcher: could not take the screen back from Steam"); }
+            return;
         }
     });
 }
@@ -554,6 +658,7 @@ pub enum SwitchResult { Home, App, Unchanged }
 /// *running* owned app. Never raise an owned window over Steam or another foreign window.
 pub fn home_toggle() -> SwitchResult {
     if !session_ok() { return SwitchResult::Unchanged; }
+    let _ = with_x11(|conn, _| remap_deck(conn)); // finish any re-map an earlier press lost
     let state = with_x11(|conn, root| {
         let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
         (foreground_group(conn, root, &visible), deck_is_focused(conn, root))
@@ -563,23 +668,24 @@ pub fn home_toggle() -> SwitchResult {
         remember_group(group);
         if hide_all() {
             deck_home(); // tap commits Home; a later overview cancel must not reopen the app
-            guard_home_from_steam();
             return SwitchResult::Home;
         }
         return SwitchResult::Unchanged;
     }
     if !on_deck {
         // Big Picture in front (Steam answered an earlier press, or a Steam tile): Guide goes
-        // Home. A Steam game in front is not ours to cover.
-        if crate::watchdog::steam_game_active() { return SwitchResult::Unchanged; }
-        let home = with_x11(|conn, root| steam_client_focused(conn, root) && settle_on_deck(conn, root, &[]));
-        if home != Some(true) { return SwitchResult::Unchanged; }
+        // Home. Never while a Steam game is live — that screen is not ours to cover.
+        let steam = with_x11(|conn, root| steam_client_focused(conn, root) && !steam_game_present(conn, root));
+        if steam != Some(true) || !raise_deck() { return SwitchResult::Unchanged; }
         deck_home();
-        guard_home_from_steam();
+        guard_from_steam(None);
         return SwitchResult::Home;
     }
     for app in recent_apps() {
-        if show_group(app.group) { return SwitchResult::App; }
+        if show_group(app.group) {
+            guard_from_steam(Some(app.group)); // after show_group's own epoch bump
+            return SwitchResult::App;
+        }
     }
     SwitchResult::Unchanged
 }
@@ -602,38 +708,50 @@ pub fn hide_all() -> bool {
     if !session_ok() {
         return false;
     }
-    with_x11(|conn, root| {
+    let _ = with_x11(|conn, _| remap_deck(conn));
+    // Phase 1 (X lock): unmap the foreground owned app's windows.
+    let hidden = with_x11(|conn, root| {
         let visible = visible_owned(conn, root, &crate::watchdog::live_groups());
         let front = foreground_group(conn, root, &visible);
         if front.is_none() {
-            if !deck_is_focused(conn, root) { return false; }
+            if !deck_is_focused(conn, root) { return Err(false); }
             // Overview opened from Home: cancel stays Home. STOPPED/LEADERLESS retain
             // their own identity-checked records for close-all and session-exit recovery.
             deck_home();
-            return true;
+            return Err(true);
         }
         let wins: Vec<Window> = visible.iter().map(|&(w, _)| w).collect();
         let failed = set_mapped(conn, &wins, false);
         if !failed.is_empty() {
             let succeeded: Vec<_> = wins.iter().copied().filter(|w| !failed.contains(w)).collect();
             let _ = set_mapped(conn, &succeeded, true);
-            return false; // never freeze or claim Home on a partial unmap
+            return Err(false); // never freeze or claim Home on a partial unmap
         }
-        if !settle_on_deck(conn, root, &wins) {
-            // Better the app back in front than a silent fall-through to Steam.
-            let _ = set_mapped(conn, &wins, true);
-            tracing::warn!("switcher: Home could not take focus; restored the app");
-            return false;
-        }
+        Ok((visible, front, wins))
+    });
+    let (visible, front, wins) = match hidden {
+        Some(Ok(v)) => v,
+        Some(Err(home)) => return home,
+        None => return false,
+    };
+    // Phase 2 (no lock): did the screen actually go Home, or to Steam?
+    if !settle_on_deck(&wins) {
+        // Better the app back in front than a silent fall-through to Steam.
+        let _ = with_x11(|conn, _| set_mapped(conn, &wins, true));
+        tracing::warn!("switcher: Home could not take focus; restored the app");
+        return false;
+    }
+    // Phase 3 (X lock): record and freeze what this hide took away.
+    let done = with_x11(|_, _| {
         {
             let mut hidden = crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN");
             for &(win, _) in &visible {
-                if !hidden.contains(&win) && !failed.contains(&win) {
+                if !hidden.contains(&win) {
                     hidden.push(win);
                 }
             }
         }
-        let frozen_now = freeze_silent_groups(&visible, &failed);
+        let frozen_now = freeze_silent_groups(&visible, &[]);
         // Snapshot THIS hide's effect (not the whole HIDDEN/STOPPED backlog): a deck dismissed
         // without picking a card restores exactly what opening it took away — apps hidden on an
         // earlier deck round stay hidden.
@@ -643,7 +761,9 @@ pub fn hide_all() -> bool {
         *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (hidden_now, frozen_front, front);
         true
     })
-    .unwrap_or(false)
+    .unwrap_or(false);
+    if done { guard_from_steam(None); } // Steam may answer the same Guide press with Big Picture
+    done
 }
 
 /// Undo the last `hide_all()` (deck dismissed without picking a card): SIGCONT the groups
@@ -654,6 +774,7 @@ pub fn deck_cancel() -> bool {
     if !session_ok() {
         return false;
     }
+    cancel_home_guard();
     with_x11(|conn, root| {
         let (wins, groups, foreground) = crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE").clone();
         let Some(group) = foreground else { return true; }; // overview opened from Home
@@ -689,6 +810,7 @@ pub fn deck_cancel() -> bool {
             return false; // retain LAST_HIDE for retry
         }
         crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").retain(|f| f.group != group);
+        cancel_home_guard();
         remember_group(group);
         *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (Vec::new(), Vec::new(), None);
         crate::sync::lock_or_recover(&HIDDEN, "switcher.HIDDEN").retain(|w| !restore.contains(w));

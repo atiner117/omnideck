@@ -144,7 +144,8 @@ stable() { eval "$1" >/dev/null 2>&1 && sleep 0.5 && eval "$1" >/dev/null 2>&1; 
 # each step waits for a settled state before returning, and the caller pauses between steps.
 toggle_expect() {
   local press="$1" want="$2" cond deadline
-  [ "$want" = hidden ] && cond="! stub_visible" || cond="stub_visible"
+  # "shown" means in FRONT, not merely mapped: a mapped app behind Big Picture is the bug.
+  [ "$want" = hidden ] && cond="! stub_visible" || cond="stub_visible && active_stub"
   eval "$press"
   deadline=$((SECONDS + 6))
   until stable "$cond"; do
@@ -263,6 +264,23 @@ if wait_for 8 "xdotool search --onlyvisible --name omnideck-fake-steam | grep -q
     fi
     toggle_expect "$KEY ctrl+alt+Home" shown && ok "steam-back: second tap restored the same app" \
       || bad "steam-back: app did not come back"
+    # A live Steam game (any `reaper SteamLaunch`, even one OmniDeck did not launch) means
+    # the deck must never be re-mapped over the screen: Home declines and the app stays.
+    sh -c 'sleep 30; true' SteamLaunch & FAKE_REAPER=$!
+    # Map order newest-first must be app, Steam, deck — the deck re-map above made it newer.
+    FAKE_WID="$(xdotool search --name omnideck-fake-steam | head -1)"
+    STUB_WID="$(xdotool search --name omnideck-harness-stub | head -1)"
+    xdotool windowunmap --sync "$FAKE_WID"; xdotool windowmap --sync "$FAKE_WID"
+    xdotool windowunmap --sync "$STUB_WID"; xdotool windowmap --sync "$STUB_WID"
+    wait_for 5 "stable active_stub"
+    eval "$KEY ctrl+alt+Home"
+    sleep 1.5
+    if active_stub; then
+      ok "steam-game: Home declined to cover the screen while a Steam game is live"
+    else
+      bad "steam-game: focus went to '$(xdotool getactivewindow getwindowname 2>&1)' with a game live"
+    fi
+    kill "$FAKE_REAPER" 2>/dev/null
     $KEY ctrl+alt+End
     wait_for 6 "! stub_alive" || stub_kill
   else
