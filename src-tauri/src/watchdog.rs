@@ -306,6 +306,11 @@ impl Drop for SteamWatchGuard {
     }
 }
 
+/// True while any Steam game OmniDeck launched is starting or running.
+pub(crate) fn steam_game_active() -> bool {
+    !STEAM_WATCHED.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
 /// Does `cmdline` (a /proc/<pid>/cmdline, NUL-separated) belong to Steam's launch wrapper
 /// for `appid`? Every Linux Steam launch since the 2022 client goes through
 /// `ubuntu12_32/reaper SteamLaunch AppId=<appid> -- <game>`, and that reaper outlives the

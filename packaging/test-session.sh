@@ -66,6 +66,7 @@ cleanup() {
   sleep 1
   [ -n "${GS_PID:-}" ] && kill "$GS_PID" 2>/dev/null
   [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null
+  [ -n "${FAKE_STEAM_PID:-}" ] && kill "$FAKE_STEAM_PID" 2>/dev/null
   # Keep the session log around when something failed — the temp dir is about to go.
   [ "${FAIL:-0}" -gt 0 ] && [ -f "$GSLOG" ] && cp "$GSLOG" /tmp/omnideck-test-last.log \
     && echo "  (session log saved to /tmp/omnideck-test-last.log)"
@@ -243,6 +244,35 @@ if stub_launch; then
 else
   bad "mapped-back: stub app never appeared"
 fi
+
+# Steam client coexistence (couch bug 2026-09-29): Steam Big Picture is an UNOWNED window,
+# stamped STEAM_GAME=769, mapped after OmniDeck. Without `-e`, gamescope gives every window an
+# app id and focuses the most recently mapped one — so unmapping an owned app handed the
+# screen to Steam, not Home. Stand-in: a stub started outside the launch hook (so the
+# watchdog does not own it) carrying the same atom.
+echo "── Steam client coexistence ──"
+"$STUB_BIN" omnideck-fake-steam >/dev/null 2>&1 & FAKE_STEAM_PID=$!
+if wait_for 8 "xdotool search --onlyvisible --name omnideck-fake-steam | grep -q ."; then
+  xprop -id "$(xdotool search --name omnideck-fake-steam | head -1)" -f STEAM_GAME 32c -set STEAM_GAME 769
+  if stub_launch; then
+    toggle_expect "$KEY ctrl+alt+Home" hidden
+    if wait_for 6 "stable active_deck"; then
+      ok "steam-home: Home reached OmniDeck over a newer Steam window"
+    else
+      bad "steam-home: focus went to '$(xdotool getactivewindow getwindowname 2>&1)', not OmniDeck"
+    fi
+    toggle_expect "$KEY ctrl+alt+Home" shown && ok "steam-back: second tap restored the same app" \
+      || bad "steam-back: app did not come back"
+    $KEY ctrl+alt+End
+    wait_for 6 "! stub_alive" || stub_kill
+  else
+    bad "steam: stub app never appeared"
+  fi
+else
+  bad "steam: fake Steam window never appeared"
+fi
+kill "$FAKE_STEAM_PID" 2>/dev/null; FAKE_STEAM_PID=
+wait_for 6 "active_deck" || true
 
 # ── 5-7. gamepad Guide button (virtual pad over uinput) ──
 # Steam on the desktop sees global uinput and can open Big Picture over the nested test;
