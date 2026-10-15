@@ -43,7 +43,10 @@ pub struct Settings {
     // Parental controls (pin.rs). Deterrence, not access control — see pin.rs header.
     pub pin_hash: String, // argon2 PHC hash of the parental PIN; empty = no lock. Only set_pin writes it; masked over IPC (see Config::has_pin).
     pub locked_categories: Vec<String>, // category ids the UI gates behind the PIN. Only set_locked_categories writes it (PIN-verified).
-    pub check_updates: bool, // boot-time release check (update.rs); manual check always works
+    // Privacy: both outbound lookups below are OFF unless the user turns them on (see the
+    // README "Privacy" section). A config file that predates a field gets the default here.
+    pub check_updates: bool, // boot-time GitHub release check (update.rs); manual check always works
+    pub fetch_remote_icons: bool, // fetch web-tile favicons (icons.rs: DuckDuckGo, then the site's own /favicon.ico)
     pub overscan_pct: f64, // TV safe-area inset per edge, percent of the screen (0–10; 0 = off)
 }
 
@@ -79,7 +82,10 @@ impl Default for Settings {
             ambient_volume: 0.35,
             pin_hash: String::new(),
             locked_categories: Vec::new(),
-            check_updates: true,
+            // Off by default so a fresh install makes no network call the user didn't ask
+            // for. A config.toml that already says `check_updates = true` keeps it.
+            check_updates: false,
+            fetch_remote_icons: false,
             overscan_pct: 0.0,
         }
     }
@@ -698,7 +704,7 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_backup, sanitize_for_backup, write_atomic, Appearance, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION, THEME_IDS};
+    use super::{defaults, parse_backup, sanitize_for_backup, write_atomic, Appearance, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION, THEME_IDS};
 
     #[test]
     fn appearance_normalize_resets_unknown_layout() {
@@ -845,6 +851,29 @@ grid_columns = 0
         i.normalize();
         assert_eq!(i.guide_hold_ms, 800); // default untouched
         assert!(i.session_hotkeys);
+    }
+
+    #[test]
+    fn outbound_lookups_default_off_and_existing_choices_survive() {
+        // Fresh defaults (Default and the first-run defaults()) make no optional network call.
+        for s in [Settings::default(), defaults().settings] {
+            assert!(!s.check_updates, "boot-time update check must be opt-in");
+            assert!(!s.fetch_remote_icons, "favicon fetching must be opt-in");
+        }
+        // A config written before these fields existed (or with them absent) reads as off.
+        let c: Config = toml::from_str("[settings]\ngrid_columns = 5\n").unwrap();
+        assert!(!c.settings.check_updates);
+        assert!(!c.settings.fetch_remote_icons);
+        assert_eq!(c.settings.grid_columns, 5);
+        // A user who explicitly opted in keeps the choice across the default flip.
+        let c: Config =
+            toml::from_str("[settings]\ncheck_updates = true\nfetch_remote_icons = true\n").unwrap();
+        assert!(c.settings.check_updates);
+        assert!(c.settings.fetch_remote_icons);
+        // And the field round-trips through the on-disk format.
+        let text = toml::to_string_pretty(&c).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert!(back.settings.fetch_remote_icons && back.settings.check_updates);
     }
 
     #[test]

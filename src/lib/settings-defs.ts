@@ -277,6 +277,18 @@ export const SETTING_DEFS: SettingDef[] = [
     get: (s) => s?.search_provider ?? "",
     set: (v) => ({ search_provider: v }),
   },
+  // Privacy: every optional outbound lookup is a row here, all off by default (README → Privacy).
+  { key: "hdr-privacy", label: "Privacy", type: "header" },
+  {
+    key: "siteicons", label: "Fetch site icons", type: "cycle",
+    value: (s) => (s.fetch_remote_icons ? "on" : "off"),
+    cycle: (s) => ({ fetch_remote_icons: !s.fetch_remote_icons }),
+  },
+  {
+    key: "updatecheck", label: "Check for updates at startup", type: "cycle",
+    value: (s) => (s.check_updates ? "on" : "off"),
+    cycle: (s) => ({ check_updates: !s.check_updates }),
+  },
   { key: "hdr-launchers", label: "Launchers", type: "header" },
   { key: "addcustom", label: "Add custom launcher", type: "action" },
 ];

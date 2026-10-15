@@ -146,6 +146,7 @@
   let iconColor = $state<Record<string, string>>({}); // dominant "r,g,b" per fetched icon (app bg gradient)
   let searchEngineIcon = $state(""); // favicon of the configured web-search provider
   const iconTried = new Set<string>();
+  let iconEpoch = $state(0); // bumped when site-icon fetching is enabled → icon effects re-run
   const artFailed = new Set<string>(); // appids whose local art file 404'd (don't re-request)
   const iconInflight = new Set<string>(); // ids with an in-flight fetch (avoid duplicate IPC calls)
   // native apps with no launch URL but a known site to pull an icon from
@@ -466,10 +467,11 @@
   // $state is fine-grained, so only the touched keys signal — this avoids the old cfg={...cfg}
   // full-rebuild that re-ran every derived (games re-sort, etc.) and re-fetched the background
   // image on every nudge. Snapshot before sending so Tauri serializes a plain object, not a proxy.
-  function patchSettings(patch: Partial<Settings>) {
-    if (!cfg) return;
+  // Resolves once the save has landed (callers that need the backend to see the new value).
+  function patchSettings(patch: Partial<Settings>): Promise<void> {
+    if (!cfg) return Promise.resolve();
     Object.assign(cfg.settings, patch);
-    api.saveSettings($state.snapshot(cfg.settings)).catch((e) => reportError("Couldn't save settings", e));
+    return api.saveSettings($state.snapshot(cfg.settings)).catch((e) => reportError("Couldn't save settings", e));
   }
   // D-pad ◀▶ nudge on a numeric row: step by the row's meta, then its side effect (volume blip).
   function adjustSetting(d: NumDef, dir: number) {
@@ -655,8 +657,11 @@
     if (!cfg) return;
     if (d.key === "layout") { cycleLayout(); return; } // appearance.layout — its own save path
     const patch = d.cycle(cfg.settings);
-    patchSettings(patch);
+    const saved = patchSettings(patch);
     if (patch.accent) accent = patch.accent;
+    // Site icons just turned on: once the backend can see the setting, forget the "no icon"
+    // answers it gave while fetching was off and let the icon effects ask again.
+    if (patch.fetch_remote_icons) saved.then(() => { iconTried.clear(); iconEpoch++; });
   }
   // Mouse click on a settings row (headers aren't rendered as buttons, so they never get here).
   function settingRowClick(d: SettingDef, i: number) {
@@ -1185,9 +1190,9 @@
 
   // fetch site icons for web/app tiles — windowed like game art, so a rail keypress costs
   // O(window) and a large library doesn't fan out icon IPC for every off-screen tile
-  $effect(() => { for (const t of winItems) if (t.kind === "app") loadAppIcon(t.app); });
+  $effect(() => { void iconEpoch; for (const t of winItems) if (t.kind === "app") loadAppIcon(t.app); });
   // the add-apps catalog is the one full-list pass (it's small + scrollable) — only while open
-  $effect(() => { if (!catalogOpen) return; for (const c of displayedCatalog) loadAppIcon(c); });
+  $effect(() => { void iconEpoch; if (!catalogOpen) return; for (const c of displayedCatalog) loadAppIcon(c); });
   // game art only for windowed rows — scrolling pulls art in just ahead of visibility
   $effect(() => { for (const t of winItems) if (t.kind === "game") loadArt(t.game); });
   // load the custom background image (data URL) when that mode is selected
@@ -1212,6 +1217,7 @@
   let provSeq = 0;
   $effect(() => {
     const prov = cfg?.settings?.search_provider;
+    void iconEpoch; // re-ask once site-icon fetching is turned on
     if (prov) { const seq = ++provSeq; api.appIcon(prov).then((d) => { if (seq === provSeq) searchEngineIcon = d ?? ""; }).catch((e) => console.debug("[omnideck] search-engine favicon fetch failed", e)); }
   });
 </script>

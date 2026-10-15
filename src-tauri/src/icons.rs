@@ -1,8 +1,14 @@
 // OmniDeck — site-icon (favicon) fetcher for browser/web app tiles.
-// Streaming/web tiles (Netflix, Spotify, …) ship with an emoji placeholder; this fills
-// in the real brand icon at runtime from DuckDuckGo's favicon service (privacy-friendly,
-// normalized PNGs). Results are cached on disk so each domain is fetched at most once.
-// We never bundle trademarked logos — icons are fetched on the user's machine on demand.
+// Streaming/web tiles (Netflix, Spotify, …) ship with an emoji placeholder; this can fill
+// in the real brand icon at runtime from DuckDuckGo's favicon service (normalized PNGs),
+// falling back to the site's own /favicon.ico. Results are cached on disk so each domain is
+// fetched at most once. We never bundle trademarked logos — icons are fetched on the user's
+// machine on demand.
+//
+// Privacy: fetching tells DuckDuckGo (and the site) which web tiles the user has, so it is
+// OPT-IN — `settings.fetch_remote_icons`, default false. With it off, only icons already in
+// the on-disk cache are shown and no request (not even the DNS lookup behind the SSRF check)
+// is made. There is deliberately no Google s2 fallback any more.
 use crate::http::is_blocked_host_resolved;
 use std::path::{Path, PathBuf};
 
@@ -41,33 +47,66 @@ fn root_domain(host: &str) -> Option<String> {
     }
 }
 
+/// What the cache alone can answer for a tile URL — computing it touches no network.
+#[derive(Debug, PartialEq)]
+enum Local {
+    /// No usable domain (bare binary, `localhost`, …): nothing to fetch.
+    NoDomain,
+    /// Already cached: the data URL.
+    Hit(String),
+    /// Not cached: the host to look up and the cache file to write it to.
+    Miss { host: String, path: PathBuf },
+}
+
+fn local_lookup(dir: &Path, url: &str) -> Local {
+    let Some(host) = domain_of(url) else { return Local::NoDomain };
+    let safe = host.replace(['/', ':'], "_");
+    let path = dir.join(format!("{safe}.img"));
+    if path.exists() {
+        if let Some(d) = to_data_url(&path) {
+            return Local::Hit(d);
+        }
+    }
+    Local::Miss { host, path }
+}
+
+/// Remote sources to try for a host, in order: DuckDuckGo, then the site's own
+/// /favicon.ico (recovers real logos DDG lacks, e.g. VLC's cone); host first, then root.
+/// Only the site itself and DuckDuckGo ever see the domain — no Google s2 fallback.
+fn candidate_urls(host: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for d in [Some(host.to_string()), root_domain(host)].into_iter().flatten() {
+        candidates.push(ddg_url(&d));
+        candidates.push(format!("https://{d}/favicon.ico"));
+    }
+    candidates
+}
+
 /// Fetch a site icon (cached) as a data URL, or None on no-domain / network error / no
-/// real image. DuckDuckGo sometimes returns junk for a subdomain, so we also try the root.
-pub async fn favicon(url: &str) -> Option<String> {
-    let host = domain_of(url)?;
+/// real image. `allow_network` is `settings.fetch_remote_icons`: when false only the
+/// on-disk cache is consulted. DuckDuckGo sometimes returns junk for a subdomain, so we
+/// also try the root.
+pub async fn favicon(url: &str, allow_network: bool) -> Option<String> {
+    favicon_in(&cache_dir()?, url, allow_network).await
+}
+
+async fn favicon_in(dir: &Path, url: &str, allow_network: bool) -> Option<String> {
+    let (host, path) = match local_lookup(dir, url) {
+        Local::Hit(d) => return Some(d),
+        Local::NoDomain => return None,
+        Local::Miss { host, path } => (host, path),
+    };
+    if !allow_network {
+        return None; // opt-in only: no request, no DNS lookup
+    }
     if is_blocked_host_resolved(&host) {
         // Don't probe internal/loopback services from a crafted tile URL (SSRF) — including
         // a public-looking domain that RESOLVES to an internal address (DNS rebinding).
         return None;
     }
-    let dir = cache_dir()?;
-    let _ = std::fs::create_dir_all(&dir);
-    let safe = host.replace(['/', ':'], "_");
-    let path = dir.join(format!("{safe}.img"));
-    if path.exists() {
-        return to_data_url(&path);
-    }
-    // Try, per domain: DDG → the site's own /favicon.ico → Google s2; host first, then root.
-    // DDG is privacy-friendly; the site's own favicon recovers real logos the services lack
-    // (e.g. VLC's cone); Google s2 is the normalized last resort.
-    let mut candidates: Vec<String> = Vec::new();
-    for d in [Some(host.clone()), root_domain(&host)].into_iter().flatten() {
-        candidates.push(ddg_url(&d));
-        candidates.push(format!("https://{d}/favicon.ico"));
-        candidates.push(google_url(&d));
-    }
+    let _ = std::fs::create_dir_all(dir);
     let mut bytes = None;
-    for url in candidates {
+    for url in candidate_urls(&host) {
         if let Some(b) = fetch_image(&url).await {
             bytes = Some(b);
             break;
@@ -80,9 +119,6 @@ pub async fn favicon(url: &str) -> Option<String> {
 
 fn ddg_url(domain: &str) -> String {
     format!("https://icons.duckduckgo.com/ip3/{domain}.ico")
-}
-fn google_url(domain: &str) -> String {
-    format!("https://www.google.com/s2/favicons?domain={domain}&sz=128")
 }
 
 /// GET a URL, buffering at most `max` bytes — guards against an OOM from a huge or buggy
@@ -106,9 +142,9 @@ async fn fetch_capped(url: &str, max: usize) -> Option<Vec<u8>> {
 }
 
 /// GET an icon URL; Some(bytes) only if the body is a recognized image that isn't a known
-/// placeholder. Google serves a 16x16 globe for unknown domains (caught by too_small), and
-/// DuckDuckGo serves a fixed 1478-byte 48x48 generic for domains it doesn't have — rejected
-/// here so unknown apps fall through to their real favicon or the emoji instead.
+/// placeholder. Tiny 16x16 favicons are caught by too_small, and DuckDuckGo serves a fixed
+/// 1478-byte 48x48 generic for domains it doesn't have — rejected here so unknown apps fall
+/// through to their real favicon or the emoji instead.
 async fn fetch_image(url: &str) -> Option<Vec<u8>> {
     let bytes = fetch_capped(url, 4 * 1024 * 1024).await?; // favicons are KB; 4 MiB is plenty
     let is_ddg = url.contains("icons.duckduckgo.com");
@@ -166,8 +202,73 @@ fn to_data_url(p: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::domain_of;
+    use super::{candidate_urls, domain_of, favicon_in, local_lookup, Local};
     use crate::http::is_blocked_host;
+
+    fn temp_cache(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("omnideck-icontest-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A 32x32 PNG header — enough for sniff/too_small/to_data_url (they read the IHDR only).
+    fn png_32() -> Vec<u8> {
+        let mut b = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        b.extend_from_slice(&32u32.to_be_bytes());
+        b.extend_from_slice(&32u32.to_be_bytes());
+        b.resize(128, 0);
+        b
+    }
+
+    #[test]
+    fn candidates_never_include_google() {
+        let c = candidate_urls("open.spotify.com");
+        assert_eq!(
+            c,
+            vec![
+                "https://icons.duckduckgo.com/ip3/open.spotify.com.ico",
+                "https://open.spotify.com/favicon.ico",
+                "https://icons.duckduckgo.com/ip3/spotify.com.ico",
+                "https://spotify.com/favicon.ico",
+            ]
+        );
+        assert!(c.iter().all(|u| !u.contains("google")), "{c:?}");
+    }
+
+    #[test]
+    fn local_lookup_serves_cache_and_reports_misses() {
+        let dir = temp_cache("lookup");
+        assert_eq!(local_lookup(&dir, "brave"), Local::NoDomain);
+        match local_lookup(&dir, "--app=https://www.netflix.com") {
+            Local::Miss { host, path } => {
+                assert_eq!(host, "www.netflix.com");
+                assert_eq!(path, dir.join("www.netflix.com.img"));
+            }
+            other => panic!("expected a miss, got {other:?}"),
+        }
+        std::fs::write(dir.join("www.netflix.com.img"), png_32()).unwrap();
+        match local_lookup(&dir, "--app=https://www.netflix.com") {
+            Local::Hit(d) => assert!(d.starts_with("data:image/png;base64,"), "{d}"),
+            other => panic!("expected a hit, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn network_disabled_uses_cache_only() {
+        let dir = temp_cache("gate");
+        // Uncached + network off: None without any request (a domain that cannot resolve,
+        // so a broken gate fails here rather than silently succeeding).
+        let miss = tauri::async_runtime::block_on(favicon_in(&dir, "https://omnideck-test.invalid", false));
+        assert_eq!(miss, None);
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing may be written");
+        // Cached + network off: the cached icon is still shown.
+        std::fs::write(dir.join("www.netflix.com.img"), png_32()).unwrap();
+        let hit = tauri::async_runtime::block_on(favicon_in(&dir, "https://www.netflix.com/", false));
+        assert!(hit.is_some_and(|d| d.starts_with("data:image/png;base64,")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn extracts_domain() {
         assert_eq!(domain_of("--app=https://www.netflix.com").as_deref(), Some("www.netflix.com"));
