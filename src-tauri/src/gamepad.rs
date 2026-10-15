@@ -51,6 +51,103 @@ pub fn emit_synthetic_button(handle: &tauri::AppHandle, code: &str) {
     }
 }
 
+/// Set to `1` to accept virtual (uinput) pads even while a physical pad is connected — the
+/// nested-session harness drives OmniDeck with its own uinput pad (examples/virtual-pad.rs).
+const ALLOW_VIRTUAL_PADS_ENV: &str = "OMNIDECK_ALLOW_VIRTUAL_PADS";
+
+/// One evdev input device as sysfs describes it: the kernel name plus USB-style ids, and
+/// whether it hangs off `/devices/virtual/` (uinput — Steam Input's "Microsoft X-Box 360
+/// pad 0", InputPlumber, our own harness pad) rather than real hardware.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputDev {
+    name: String,
+    vendor: Option<u16>,
+    product: Option<u16>,
+    is_virtual: bool,
+}
+
+/// Does a RESOLVED sysfs path (`realpath /sys/class/input/eventN`) belong to a virtual
+/// device? uinput devices are parented at `/sys/devices/virtual/input/inputN`; real pads sit
+/// under their bus (`/sys/devices/pci…/usb…`, `…/bluetooth/…`, `…/hid…`).
+fn is_virtual_sysfs_path(resolved: &std::path::Path) -> bool {
+    resolved.to_string_lossy().contains("/devices/virtual/")
+}
+
+/// Every `eventN` under `class_dir` (normally `/sys/class/input`), resolved and identified.
+/// Unreadable entries are skipped — this only ever narrows what we filter, never widens it.
+fn scan_input_devices(class_dir: &std::path::Path) -> Vec<InputDev> {
+    let Ok(rd) = std::fs::read_dir(class_dir) else {
+        return Vec::new();
+    };
+    let hex_id = |dev: &std::path::Path, f: &str| -> Option<u16> {
+        let s = std::fs::read_to_string(dev.join("id").join(f)).ok()?;
+        u16::from_str_radix(s.trim(), 16).ok()
+    };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        if !e.file_name().to_string_lossy().starts_with("event") {
+            continue;
+        }
+        let Ok(resolved) = std::fs::canonicalize(e.path()) else {
+            continue;
+        };
+        // eventN/device -> the parent inputN node, which carries name and id/.
+        let dev = e.path().join("device");
+        let Ok(name) = std::fs::read_to_string(dev.join("name")) else {
+            continue;
+        };
+        out.push(InputDev {
+            name: name.trim_end_matches('\n').to_string(),
+            vendor: hex_id(&dev, "vendor"),
+            product: hex_id(&dev, "product"),
+            is_virtual: is_virtual_sysfs_path(&resolved),
+        });
+    }
+    out
+}
+
+/// Is the gilrs pad `(os_name, vendor, product)` ONLY backed by virtual evdev devices?
+/// gilrs does not expose the device path, so match by kernel name + ids. Ambiguity resolves
+/// toward "physical": a pad is virtual only when at least one device matches and every
+/// match is virtual, so a real pad that happens to share a name is never dropped.
+fn pad_is_virtual(
+    name: &str,
+    vendor: Option<u16>,
+    product: Option<u16>,
+    devs: &[InputDev],
+) -> bool {
+    let id_ok =
+        |want: Option<u16>, got: Option<u16>| want.is_none() || got.is_none() || want == got;
+    let mut matches = devs
+        .iter()
+        .filter(|d| d.name == name && id_ok(vendor, d.vendor) && id_ok(product, d.product))
+        .peekable();
+    matches.peek().is_some() && matches.all(|d| d.is_virtual)
+}
+
+/// Drop events from a virtual pad while a physical one is connected. Steam Input re-emits
+/// the physical pad it is reading through a uinput "Microsoft X-Box 360 pad 0"; gilrs opens
+/// both, so every Steam-forwarded press arrived twice (r2d2 couch box) — and a doubled Guide
+/// tap is two `guide-tap`s, i.e. the deck opening and closing again. A virtual pad that is
+/// the ONLY pad (InputPlumber on a handheld hides the real device behind one) still works,
+/// and `OMNIDECK_ALLOW_VIRTUAL_PADS=1` keeps them all.
+fn ignore_virtual_pad(is_virtual: bool, any_physical: bool, allow_virtual: bool) -> bool {
+    is_virtual && any_physical && !allow_virtual
+}
+
+/// Classify one connected gilrs pad against a fresh sysfs scan.
+fn classify_pad(gilrs: &gilrs::Gilrs, id: gilrs::GamepadId) -> bool {
+    let pad = gilrs.gamepad(id);
+    let devs = scan_input_devices(std::path::Path::new("/sys/class/input"));
+    let virt = pad_is_virtual(pad.os_name(), pad.vendor_id(), pad.product_id(), &devs);
+    tracing::info!(
+        "gamepad: {id:?} '{}' is {}",
+        pad.os_name(),
+        if virt { "virtual (uinput)" } else { "physical" }
+    );
+    virt
+}
+
 pub fn gamepad_loop(handle: tauri::AppHandle) {
     let mut gilrs = match gilrs::Gilrs::new() {
         Ok(g) => g,
@@ -70,6 +167,14 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         "gamepad-status",
         format!("gilrs ready — {} pad(s) connected: {pads:?}", pads.len()),
     );
+
+    // Virtual-pad filter (see ignore_virtual_pad): which connected pads are uinput-backed.
+    // Re-classified on Connected (sysfs read), dropped on Disconnected — never per event.
+    let allow_virtual = std::env::var(ALLOW_VIRTUAL_PADS_ENV).is_ok_and(|v| v == "1");
+    let mut pad_virtual: std::collections::HashMap<gilrs::GamepadId, bool> = gilrs
+        .gamepads()
+        .map(|(id, _)| (id, classify_pad(&gilrs, id)))
+        .collect();
 
     // Coalesce noisy AxisChanged: a jittery resting stick streams ~125 events/s/axis; the
     // frontend only needs coarse values for its 0.6 deadband. Emit only when an axis has moved
@@ -127,6 +232,29 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
         // Any button/axis event this tick (post-epsilon) counts as screensaver activity.
         let mut saw_input = false;
         while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
+            match &event {
+                gilrs::EventType::Connected => {
+                    let v = classify_pad(&gilrs, id);
+                    pad_virtual.insert(id, v);
+                }
+                gilrs::EventType::Disconnected => {
+                    // Still let this Disconnected through below if the pad was in use.
+                    let was_virtual = pad_virtual.remove(&id).unwrap_or(false);
+                    let any_physical = pad_virtual.values().any(|v| !v);
+                    if ignore_virtual_pad(was_virtual, any_physical, allow_virtual) {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            // FIRST, before Guide handling: a duplicated Guide press would toggle twice.
+            if ignore_virtual_pad(
+                pad_virtual.get(&id).copied().unwrap_or(false),
+                pad_virtual.values().any(|v| !v),
+                allow_virtual,
+            ) {
+                continue;
+            }
             let name = gilrs.gamepad(id).name().to_string();
             match &event {
                 gilrs::EventType::ButtonPressed(gilrs::Button::Mode, _) => {
@@ -252,5 +380,138 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ignore_virtual_pad, is_virtual_sysfs_path, pad_is_virtual, scan_input_devices, InputDev,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn virtual_sysfs_path_predicate() {
+        // Steam Input's pad on the r2d2 couch box (uinput).
+        assert!(is_virtual_sysfs_path(Path::new(
+            "/sys/devices/virtual/input/input42/event21"
+        )));
+        // Real pads: USB and Bluetooth DualSense.
+        assert!(!is_virtual_sysfs_path(Path::new(
+            "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-4/1-4:1.3/0003:054C:0CE6.0007/input/input30/event18"
+        )));
+        assert!(!is_virtual_sysfs_path(Path::new(
+            "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-9/1-9:1.0/bluetooth/hci0/hci0:256/0005:054C:0CE6.000A/input/input35/event19"
+        )));
+        // An unresolved class link must not count: callers pass the realpath.
+        assert!(!is_virtual_sysfs_path(Path::new(
+            "/sys/class/input/event21"
+        )));
+    }
+
+    fn dev(name: &str, vendor: u16, product: u16, is_virtual: bool) -> InputDev {
+        InputDev {
+            name: name.into(),
+            vendor: Some(vendor),
+            product: Some(product),
+            is_virtual,
+        }
+    }
+
+    #[test]
+    fn pad_matching_resolves_ambiguity_toward_physical() {
+        let devs = [
+            dev(
+                "Sony Interactive Entertainment DualSense Wireless Controller",
+                0x054c,
+                0x0ce6,
+                false,
+            ),
+            dev("Microsoft X-Box 360 pad 0", 0x045e, 0x028e, true),
+        ];
+        assert!(pad_is_virtual(
+            "Microsoft X-Box 360 pad 0",
+            Some(0x045e),
+            Some(0x028e),
+            &devs
+        ));
+        assert!(!pad_is_virtual(
+            "Sony Interactive Entertainment DualSense Wireless Controller",
+            Some(0x054c),
+            Some(0x0ce6),
+            &devs
+        ));
+        // Unknown to sysfs -> treated as physical (never filter what we can't identify).
+        assert!(!pad_is_virtual("Mystery Pad", None, None, &devs));
+        // Same name on a real device and a virtual one -> physical.
+        let both = [dev("Pad", 1, 2, true), dev("Pad", 1, 2, false)];
+        assert!(!pad_is_virtual("Pad", Some(1), Some(2), &both));
+        // Ids disambiguate same-named devices.
+        let split = [dev("Pad", 1, 2, true), dev("Pad", 3, 4, false)];
+        assert!(pad_is_virtual("Pad", Some(1), Some(2), &split));
+        assert!(!pad_is_virtual("Pad", Some(3), Some(4), &split));
+    }
+
+    #[test]
+    fn ignore_policy() {
+        // Steam's duplicate next to the real pad: dropped.
+        assert!(ignore_virtual_pad(true, true, false));
+        // Only pad is virtual (InputPlumber handheld, harness): kept.
+        assert!(!ignore_virtual_pad(true, false, false));
+        // Override keeps everything; physical pads are never dropped.
+        assert!(!ignore_virtual_pad(true, true, true));
+        assert!(!ignore_virtual_pad(false, true, false));
+    }
+
+    #[test]
+    fn scan_reads_a_fake_sysfs_tree() {
+        let root = std::env::temp_dir().join(format!("omnideck-sysfs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mk =
+            |parent: &str, input: &str, event: &str, name: &str, vendor: &str, product: &str| {
+                let node = root.join(parent).join(input);
+                std::fs::create_dir_all(node.join("id")).unwrap();
+                std::fs::create_dir_all(node.join(event)).unwrap();
+                std::fs::write(node.join("name"), format!("{name}\n")).unwrap();
+                std::fs::write(node.join("id/vendor"), format!("{vendor}\n")).unwrap();
+                std::fs::write(node.join("id/product"), format!("{product}\n")).unwrap();
+                // eventN/device -> ../ (the inputN node), as in real sysfs.
+                std::os::unix::fs::symlink("..", node.join(event).join("device")).unwrap();
+                let class = root.join("class/input");
+                std::fs::create_dir_all(&class).unwrap();
+                std::os::unix::fs::symlink(node.join(event), class.join(event)).unwrap();
+            };
+        mk(
+            "devices/virtual/input",
+            "input42",
+            "event21",
+            "Microsoft X-Box 360 pad 0",
+            "045e",
+            "028e",
+        );
+        mk(
+            "devices/pci0000:00/usb1/1-4/input",
+            "input30",
+            "event18",
+            "DualSense",
+            "054c",
+            "0ce6",
+        );
+        let mut devs = scan_input_devices(&root.join("class/input"));
+        devs.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(
+            devs,
+            vec![
+                dev("DualSense", 0x054c, 0x0ce6, false),
+                dev("Microsoft X-Box 360 pad 0", 0x045e, 0x028e, true),
+            ]
+        );
+        assert!(pad_is_virtual(
+            "Microsoft X-Box 360 pad 0",
+            Some(0x045e),
+            Some(0x028e),
+            &devs
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

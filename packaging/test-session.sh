@@ -73,7 +73,8 @@ trap cleanup EXIT
 
 echo "── nested gamescope session (1280x720 window will appear) ──"
 # gamepad=debug exposes the normalized axis values in the log for the stick check.
-OMNIDECK_TEST_CONTROL="$FIFO" RUST_LOG="info,omnideck_lib::gamepad=debug" \
+# The harness pad is uinput (virtual): keep it even when a real pad is plugged into this box.
+OMNIDECK_TEST_CONTROL="$FIFO" OMNIDECK_ALLOW_VIRTUAL_PADS=1 RUST_LOG="info,omnideck_lib::gamepad=debug" \
   gamescope -W 1280 -H 720 --xwayland-count 1 \
   -- "$BIN" >"$GSLOG" 2>&1 &
 GS_PID=$!
