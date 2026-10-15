@@ -4,6 +4,17 @@ All notable changes to OmniDeck are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [Unreleased]
+
+### Changed
+- **Privacy: no network call you didn't ask for.** Web-tile icon fetching is now opt-in
+  (`settings.fetch_remote_icons`, default off; Settings → Privacy → *Fetch site icons*) and
+  the Google s2 favicon fallback is gone — with it on, only DuckDuckGo's icon service and the
+  site itself are asked. The startup update check (`check_updates`) now defaults to off; a
+  config that already says `check_updates = true` keeps it. With fetching off, previously
+  cached icons still show and no request (not even DNS) is made. The README's new
+  **Privacy** section lists every outbound connection OmniDeck can make.
+
 ## [0.2.0] — 2026-07-27
 
 ### Added

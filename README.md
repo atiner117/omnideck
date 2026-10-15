@@ -185,6 +185,8 @@ sound = true                            # subtle navigation sounds
 dashboard_recents = 8                   # recently-played games on Dashboard (0 = off)
 search_provider = "https://duckduckgo.com/?q="   # web-search prefix (e.g. a SearXNG URL)
 steamgriddb_key = ""                    # optional: free key from steamgriddb.com fills in box art
+fetch_remote_icons = false              # optional: fetch web-tile icons (DuckDuckGo + the site); see Privacy
+check_updates = false                   # optional: ask GitHub for a newer release at startup; see Privacy
 
 [[apps]]                                # reorder / remove / add your own tiles
 name = "Big Picture"
@@ -200,6 +202,35 @@ form for your own commands.
 Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
 `catalog`, `gridart <appid>`, `media`, `mediasrv`, `mpvprofiles`
 (and `omnideck --help` / `--version`).
+
+## Privacy
+
+OmniDeck has **no telemetry, no analytics, no crash reporting, no advertising ID, and no
+account**. It ships no third-party tracking or analytics SDKs, and its license (GPL-3.0) has no arbitration clause
+or terms of service. Logs stay on your machine.
+
+Every network connection OmniDeck can make, with the setting that controls it:
+
+| Connection | When | Who sees what | Control |
+|---|---|---|---|
+| **Your media server** (Jellyfin) | Only once you configure `[media_server]` (or have paired `jellyfin-mpv-shim`, whose pairing is reused) | Your own server sees browse/play/artwork requests | Off until configured |
+| **Sites and apps you launch** | When you open a tile (Netflix, YouTube, a SearXNG search, …) | That site, in the browser/app you launched | You choose what to open |
+| **Web-tile icons** | When a web tile without a cached icon is shown | `icons.duckduckgo.com` and the site itself learn the tile's domain | `fetch_remote_icons`, **off by default** (Settings → Privacy → *Fetch site icons*) |
+| **Update check** | At startup | `api.github.com` sees your IP and that you run OmniDeck | `check_updates`, **off by default** (Settings → Privacy → *Check for updates at startup*) |
+| **Box art** (SteamGridDB) | When a Steam game has no box art | `steamgriddb.com` sees the Steam app id and your API key | Off until you set `steamgriddb_key` |
+
+Notes:
+
+- With *Fetch site icons* off, tiles show their emoji (or an icon fetched earlier, from the
+  local cache) and no request is made — not even a DNS lookup. There is no Google fallback.
+- The **phone remote** (`[remote]`) is a LAN-only server *on* your machine, off by default;
+  it makes no outbound connections. To show its URL, OmniDeck asks the kernel which local
+  address routes outward (a UDP `connect()` that sends no packet).
+- Apps you launch — browsers, Steam, Heroic, mpv, `jellyfin-mpv-shim` — have their own
+  network behavior and privacy policies; OmniDeck does not add to or proxy their traffic.
+- Before this release `check_updates` defaulted to on. An existing `config.toml` that already
+  contains `check_updates = true` keeps that choice — set it to `false` (or use Settings) to
+  opt out.
 
 ## A note on streaming quality
 

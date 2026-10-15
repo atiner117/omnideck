@@ -162,7 +162,7 @@ pub async fn restore_config(src: String) -> Result<config::Config, String> {
 /// Check GitHub for a newer release (roadmap #4, check-only — acting on it is per-distro
 /// follow-up). Result is cached for the process lifetime (unauthed GitHub API = 60 req/hr);
 /// `force` bypasses the cache for a manual "Check now". The frontend gates the automatic
-/// boot-time call on `settings.check_updates`; a manual check always works.
+/// boot-time call on `settings.check_updates` (default false); a manual check always works.
 #[tauri::command]
 pub async fn check_update(force: bool) -> Result<crate::update::UpdateInfo, String> {
     crate::update::check(force).await
@@ -641,10 +641,13 @@ pub async fn grid_art(appid: String) -> Option<String> {
 }
 
 /// Fetch a web/streaming tile's site icon as a data URL (cached). `url` may be a bare
-/// URL or our `--app=<url>` exec token; returns None for non-web entries.
+/// URL or our `--app=<url>` exec token; returns None for non-web entries. Network lookups
+/// only happen when the user opted in (`settings.fetch_remote_icons`); otherwise only the
+/// on-disk cache answers.
 #[tauri::command]
 pub async fn app_icon(url: String) -> Option<String> {
-    icons::favicon(&url).await
+    let allow_network = config::load_or_create().settings.fetch_remote_icons;
+    icons::favicon(&url, allow_network).await
 }
 
 // --- Sleep timer (sleep_timer.rs) ---
