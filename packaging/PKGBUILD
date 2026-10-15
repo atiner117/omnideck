@@ -47,6 +47,7 @@ package() {
 
   # ship the session installer; the .install post_install message points users at it.
   install -Dm755 "packaging/install-session.sh"   "$pkgdir/usr/share/omnideck/install-session.sh"
+  install -Dm755 "packaging/omnideck-session-child.sh" "$pkgdir/usr/share/omnideck/omnideck-session-child.sh"
 
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 

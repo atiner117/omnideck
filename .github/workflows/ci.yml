@@ -74,6 +74,11 @@ jobs:
         working-directory: src-tauri
         run: cargo test --release
 
+      # The session client wrapper (thaws switcher-frozen apps after OmniDeck exits) against
+      # a gamescopereaper stand-in — no gamescope or display needed.
+      - name: Session wrapper tests (shell)
+        run: bash packaging/test-session-thaw.sh
+
       # The Rust structs are the source of truth for the TS types (ts-rs). Regenerate and
       # fail if the committed bindings drifted — a struct change must ship its bindings.
       - name: IPC bindings in sync (ts-rs)
