@@ -72,10 +72,26 @@ pub fn return_home() -> bool {
     // and reached nobody. The switcher holds the per-member identity records that make
     // signalling those survivors verified rather than blind.
     any |= crate::switcher::close_stopped_groups();
+    // ...and a running Steam game OmniDeck launched. Steam launches are never in LIVE_GROUPS
+    // (the `steam steam://rungameid/…` leader exits at once; the game lives under Steam's own
+    // reaper), so without this the explicit close reached every owned app except the one the
+    // couch launches most. Policy switch: see CLOSE_ALL_ENDS_STEAM_GAMES.
+    if CLOSE_ALL_ENDS_STEAM_GAMES {
+        any |= close_steam_games();
+    }
     // Only report success if a signal actually reached something — otherwise the caller would
-    // emit "app-closed" / swallow the Guide press while the window is still on screen.
+    // emit "app-closed" while the window is still on screen.
     any
 }
+
+/// Policy (Andrew's D1, 2026-11-14): does the explicit close-all — `Ctrl+Alt+End` and the
+/// UI's "Close & return", the only callers of [`return_home`] — also end a running Steam game
+/// that OmniDeck launched? The Guide button never reaches this path (tap switches, hold opens
+/// the overview), so this is never a side effect of a gamepad gesture.
+///
+/// To revert to "close never touches Steam", set this to `false`. Nothing else changes:
+/// [`close_steam_games`] and its tests stay, only `return_home` stops calling it.
+pub(crate) const CLOSE_ALL_ENDS_STEAM_GAMES: bool = true;
 
 /// Close a single launched app group (the deck switcher's per-card close). Same CONT-then-
 /// TERM discipline as return_home; the child's watch_child thread reaps + emits app-exited.
@@ -181,6 +197,15 @@ pub(crate) fn track_group_for_test(group: u32) {
 pub(crate) fn forget_group_for_test(group: u32) {
     crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|a| a.group != group);
 }
+
+/// Test-only: held by EVERY test, in any module, that puts a real process where close-all can
+/// reach it (`LIVE_GROUPS`, the switcher's `STOPPED`/`LEADERLESS`, `STEAM_WATCHED`) or that
+/// calls `return_home`/`close_steam_games`. Cargo runs tests as threads in ONE process and
+/// those registries are process-wide, so without one shared lock a close-all in one test
+/// SIGTERMs another test's stand-in out from under it (2026-11-14: the switcher's close-all
+/// tests killed the Steam-close test's `sh` — `cargo test` 137/138 on every full-stack run).
+#[cfg(test)]
+pub(crate) static TEST_REGISTRIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Emit a launched event, then watch the child and emit an exited event when it ends.
 /// (Lets the UI show a "now playing" state and know when focus returns.)
@@ -348,6 +373,93 @@ fn steam_app_process_running(appid: &str) -> bool {
     })
 }
 
+/// `(ppid, starttime)` from /proc/<pid>/stat — same field discipline as `proc_start_time`
+/// (parse after the LAST ')' so a comm with spaces/parens can't shift the fields).
+fn proc_ppid_and_start(pid: u32) -> Option<(u32, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.rsplit_once(')')?.1;
+    let mut f = rest.split_whitespace();
+    let ppid = f.nth(1)?.parse().ok()?; // state, PPID
+    let start = f.nth(17)?.parse().ok()?; // …, starttime (field 22)
+    Some((ppid, start))
+}
+
+/// Every process under Steam's launch reaper(s) for `appid` — the reaper, the game, and
+/// anything the game forked — **deepest first**, each with its kernel start time so the
+/// caller can signal it recycle-safely via `signal_pid_verified`.
+///
+/// Deepest first matters: SIGTERM the reaper before the game and the game is reparented
+/// to Steam (a subreaper) and keeps running with nothing left that knows it belongs to
+/// this launch. One /proc walk builds the parent map; roots are the cmdline matches.
+fn steam_app_process_tree(appid: &str) -> Vec<(u32, u64)> {
+    let Ok(rd) = std::fs::read_dir("/proc") else { return Vec::new() };
+    let mut roots = Vec::new();
+    let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    let mut start: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    for e in rd.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let Some((ppid, st)) = proc_ppid_and_start(pid) else { continue };
+        start.insert(pid, st);
+        children.entry(ppid).or_default().push(pid);
+        if std::fs::read(e.path().join("cmdline")).is_ok_and(|c| cmdline_is_steam_launch(&c, appid)) {
+            roots.push(pid);
+        }
+    }
+    // Breadth-first from the roots, then reversed: parents come before children in `order`,
+    // so the reverse is deepest-first. A pid reached twice (impossible in a tree, cheap to
+    // guard) is kept once. A pid that must never be signalled is pruned WITH its subtree:
+    // `steam://` handoffs can start the Steam client itself under a game when Steam was not
+    // already running, and whatever lives under that client is no part of this launch.
+    let mut order: Vec<u32> = Vec::new();
+    let mut queue: std::collections::VecDeque<u32> = roots.into_iter().collect();
+    while let Some(pid) = queue.pop_front() {
+        if order.contains(&pid) || never_close_as_steam_game(pid) {
+            continue;
+        }
+        order.push(pid);
+        if let Some(kids) = children.get(&pid) {
+            queue.extend(kids.iter().copied());
+        }
+    }
+    order.into_iter().rev().filter_map(|pid| start.get(&pid).map(|&st| (pid, st))).collect()
+}
+
+/// Process names that are the Steam client, not a game. Matched against `comm`, which exec
+/// sets from the executable's file name (not argv[0]), truncated to 15 bytes.
+const STEAM_CLIENT_COMMS: &[&[u8]] = &[b"steam", b"steamwebhelper", b"steam.sh"];
+
+/// Never part of "the Steam game being closed": init, OmniDeck itself, and the Steam client.
+fn never_close_as_steam_game(pid: u32) -> bool {
+    if pid <= 1 || pid == std::process::id() {
+        return true;
+    }
+    match std::fs::read(format!("/proc/{pid}/comm")) {
+        Ok(comm) => STEAM_CLIENT_COMMS.contains(&comm.strip_suffix(b"\n").unwrap_or(&comm)),
+        Err(_) => true, // gone or unreadable: nothing to verify against, so do not signal it
+    }
+}
+
+/// SIGTERM every Steam game a watcher currently tracks (see `watch_steam_game`): the whole
+/// reaper subtree, deepest first, each pid verified against the start time read moments
+/// ago. Returns true if any signal landed. The watcher then sees the reaper gone for three
+/// polls and emits `app-exited` exactly as it does for a normal quit — no special path.
+pub(crate) fn close_steam_games() -> bool {
+    let watched: Vec<String> =
+        STEAM_WATCHED.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
+    let mut any = false;
+    for appid in watched {
+        let tree = steam_app_process_tree(&appid);
+        if tree.is_empty() {
+            continue; // still launching (no reaper yet) or already gone
+        }
+        tracing::info!(appid, procs = tree.len(), "watchdog: closing the Steam game's process tree");
+        for (pid, st) in tree {
+            any |= signal_pid_verified(pid, st, libc::SIGTERM);
+        }
+    }
+    any
+}
+
 /// Exit watchdog for a Steam launch (M2): the `steam://` URI returns immediately, so we
 /// poll for the game's `reaper SteamLaunch AppId=` process (registry.vdf's "Running" flag
 /// as a fallback for older clients) — wait for it to appear (cold start can be slow), then
@@ -435,7 +547,33 @@ pub fn watch_steam_game(app: tauri::AppHandle, appid: String, name: String, id: 
 
 #[cfg(test)]
 mod tests {
-    use super::{cmdline_is_steam_launch, steam_app_running, SteamWatchGuard};
+    use super::{
+        close_steam_games, cmdline_is_steam_launch, proc_ppid_and_start, proc_start_time,
+        signal_pid_verified, steam_app_process_tree, steam_app_running, SteamWatchGuard,
+        TEST_REGISTRIES,
+    };
+
+    /// Poll `f` every 10 ms for up to 3 s.
+    fn wait_for(mut f: impl FnMut() -> bool) -> bool {
+        for _ in 0..300 {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Direct children of `pid`, from one /proc scan.
+    fn children_of(pid: u32) -> Vec<u32> {
+        std::fs::read_dir("/proc")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|&p| proc_ppid_and_start(p).is_some_and(|(ppid, _)| ppid == pid))
+            .collect()
+    }
     const SAMPLE: &str = r#"
 "Registry" { "HKCU" { "Software" { "Valve" { "Steam" { "apps" {
   "570"   { "running"  "1"  "installed"  "1" }
@@ -485,5 +623,77 @@ mod tests {
         assert!(SteamWatchGuard::claim("900002").is_some(), "other appids unaffected");
         drop(a);
         assert!(SteamWatchGuard::claim("900001").is_some(), "released when the watcher ends");
+    }
+
+    /// Explicit close-all must reach a Steam game OmniDeck launched (couch box 2026-09-15: the
+    /// close chord ended every owned app but the game). The stand-in for `reaper SteamLaunch
+    /// AppId=<id> -- game` is `sh` carrying the marker in its argv as unused positional
+    /// parameters, with a forked child like the real reaper. The tree must come back deepest
+    /// first and the close must take BOTH processes.
+    #[test]
+    fn close_steam_games_terminates_the_whole_reaper_tree_deepest_first() {
+        let _serial = crate::sync::lock_or_recover(&TEST_REGISTRIES, "watchdog.TEST_REGISTRIES");
+        let appid = format!("9{}", std::process::id()); // unique per test process
+        let _guard = SteamWatchGuard::claim(&appid).expect("appid not yet watched");
+        // Two commands, so sh must stay resident as the parent (a lone `sleep` gets exec'd).
+        let mut sh = std::process::Command::new("sh")
+            .args(["-c", "sleep 30; sleep 30", "SteamLaunch", &format!("AppId={appid}")])
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        assert!(wait_for(|| steam_app_process_tree(&appid).len() >= 2), "sh never forked sleep");
+        let tree = steam_app_process_tree(&appid);
+        assert_eq!(tree.len(), 2, "sh + its sleep child: {tree:?}");
+        assert_eq!(tree[1].0, sh.id(), "the root (sh) must come LAST (deepest first)");
+        assert_ne!(tree[0].0, sh.id());
+
+        assert!(close_steam_games(), "no signal landed");
+        // sh dies on SIGTERM (default action) — reap it so the pid can't linger as a zombie.
+        assert!(wait_for(|| sh.try_wait().ok().flatten().is_some()), "sh survived SIGTERM");
+        let (kid, kid_start) = tree[0];
+        assert!(wait_for(|| proc_start_time(kid) != Some(kid_start)), "the forked sleep survived SIGTERM");
+        // The launch tree is gone: a second close is a no-op, not a blind kill.
+        assert!(!close_steam_games());
+    }
+
+    /// Close ends the game, never the Steam client. A `steam://` handoff from inside a game
+    /// can start the client under the game's tree; that client — named `steam` here via a
+    /// symlink to sh, since `comm` comes from the exec'd file name — and everything under it
+    /// must be pruned, so the close signals the launch root alone.
+    #[test]
+    fn steam_close_never_signals_the_steam_client_or_its_children() {
+        let _serial = crate::sync::lock_or_recover(&TEST_REGISTRIES, "watchdog.TEST_REGISTRIES");
+        let appid = format!("8{}", std::process::id());
+        let _guard = SteamWatchGuard::claim(&appid).expect("appid not yet watched");
+        let dir = std::env::temp_dir().join(format!("omnideck-steam-comm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake_client = dir.join("steam");
+        std::os::unix::fs::symlink("/bin/sh", &fake_client).unwrap();
+        let script = format!("{} -c 'sleep 30; sleep 30'; sleep 30", fake_client.display());
+        let mut root = std::process::Command::new("sh")
+            .args(["-c", &script, "SteamLaunch", &format!("AppId={appid}")])
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        let root_pid = root.id();
+        let client = || children_of(root_pid).into_iter().next();
+        assert!(wait_for(|| client().is_some_and(|c| !children_of(c).is_empty())), "fake client never forked");
+        let client_pid = client().unwrap();
+        let client_kid = children_of(client_pid)[0];
+        let survivors: Vec<(u32, u64)> =
+            [client_pid, client_kid].iter().map(|&p| (p, proc_start_time(p).unwrap())).collect();
+
+        let tree = steam_app_process_tree(&appid);
+        assert_eq!(tree.iter().map(|&(p, _)| p).collect::<Vec<_>>(), [root_pid], "client not pruned: {tree:?}");
+        assert!(close_steam_games(), "no signal landed on the launch root");
+        assert!(wait_for(|| root.try_wait().ok().flatten().is_some()), "launch root survived SIGTERM");
+        for &(p, st) in &survivors {
+            assert_eq!(proc_start_time(p), Some(st), "pid {p} under the Steam client was signalled");
+        }
+        for &(p, st) in &survivors {
+            signal_pid_verified(p, st, libc::SIGKILL); // test cleanup only
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

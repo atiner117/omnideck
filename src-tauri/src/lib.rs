@@ -33,6 +33,7 @@ mod pin;
 mod proc;
 mod remote;
 mod session;
+mod signals;
 mod sleep_timer;
 mod steamgriddb;
 mod switcher;
@@ -77,6 +78,13 @@ pub fn run() {
 
     // Re-exec once with GPU-appropriate webview env (NVIDIA needs workarounds; Mesa doesn't).
     gpu::ensure_gpu_env();
+
+    // Session teardown (gamescope SIGTERMs its client) must not strand switcher-frozen apps:
+    // the RunEvent::Exit hook below never runs for a signal death. See signals.rs.
+    signals::install(|sig| {
+        tracing::info!(sig, "termination signal — thawing frozen app groups before exit");
+        switcher::resume_stopped_groups();
+    });
 
     tauri::Builder::default()
         // omnideck:// serves on-disk art files (Steam librarycache + our art cache) as URLs

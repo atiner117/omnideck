@@ -25,6 +25,14 @@ fi
 command -v gamescope >/dev/null || {
   echo "✗ gamescope not found. Install it (Arch: pacman -S gamescope)."; exit 1; }
 
+# Non-fatal: WebKitGTK plays the UI's sounds through GStreamer's autoaudiosink, which lives
+# in gst-plugins-good — a package webkit2gtk does not depend on. Missing it is silent
+# (literally: no error, no sound), so say so here where it can still be fixed cheaply.
+if command -v gst-inspect-1.0 >/dev/null && ! gst-inspect-1.0 --exists autoaudiosink; then
+  echo "⚠ GStreamer autoaudiosink not found — navigation sounds and ambient music will be"
+  echo "  silent in the session. Install it (Arch: pacman -S gst-plugins-good)."
+fi
+
 # Always install to /usr/local/share/wayland-sessions: SDDM and GDM scan it on every distro
 # (it's in the default XDG_DATA_DIRS), and unlike /usr/share it stays writable on immutable
 # distros (Bazzite/SteamOS), where the old "/usr/share unless read-only" heuristic silently

@@ -16,7 +16,10 @@ license=('GPL-3.0-or-later')
 # auto-split's build-id symlink trips namcap when the debug pkg is inspected standalone).
 options=('!lto' '!debug')
 # webkit2gtk-4.1 pulls gtk3/libsoup3/glib2 transitively; hicolor-icon-theme owns the icon dirs.
-depends=('webkit2gtk-4.1' 'hicolor-icon-theme')
+# gst-plugins-good is NOT pulled by webkit2gtk-4.1 but is where GStreamer's autoaudiosink
+# lives — without it WebKitGTK plays no audio, so the nav sounds/ambient pad are silent with
+# no error anywhere (couch box 2026-09-23). `omnideck probe` reports it under diagnostics.
+depends=('webkit2gtk-4.1' 'gst-plugins-good' 'hicolor-icon-theme')
 optdepends=('gamescope: 10-foot gamescope session mode (run packaging/install-session.sh)'
             'steam: Steam library scanning + launching'
             'mpv: direct-play for the Jellyfin media library (4K hardware decode)'

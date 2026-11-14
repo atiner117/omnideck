@@ -75,15 +75,19 @@ profiles when the hardware can handle it.
 - 🃏 **Home + recent apps** (session) — tap **Guide** (or `Ctrl+Alt+Home`) to switch between
   Home and the last OmniDeck-launched app without closing it. Hold **Guide** (or press
   `Ctrl+Alt+Insert`) for a task overview: select Home or a recent running app, **Select**
-  (or ✕) to close only that card, **B** to return to the previous foreground app. Steam
-  games are not yet actionable cards; Steam/Proton game focus and close need separate
-  gamescope-safe handling, not a blind signal to the Steam process tree.
+  (or ✕) to close only that card, **B** to return to the previous foreground app. Neither
+  Guide gesture ever closes anything else. Steam games are not yet actionable cards; the
+  explicit close-all (`Ctrl+Alt+End`, or **Close & return**) does end a Steam game OmniDeck
+  launched — just that game's launch tree, deepest process first, never Steam itself.
 - 🎮➡️🖱️ **Controller drives launched apps too** (session) — while a launched PWA/browser/
   app is in front, the pad becomes a virtual keyboard+mouse (`/dev/uinput`): **right stick =
   mouse pointer** (the primary way to navigate any web UI), `A`/cross = click, dpad/left
   stick = arrow keys with console-style repeat (Jellyfin-web and every TV-style UI is
   arrow-driven), `X` = Enter, `B` = Back/Esc, `Y` = play/pause, `R2` = click-and-hold,
   `L1`/`R1` = scroll — the PlayStation-browser experience. Needs your user in the `input` group.
+  A DualShock 4 / DualSense **touchpad** also works as a plain mouse in the session (the kernel
+  exposes it as a touchpad device and gamescope drives the pointer from it directly) — handy
+  for the few PWAs that need a real click where the stick pointer feels slow.
 - 🧊 **Silent hidden apps are frozen** (session) — switching away keeps *audible* apps
   running (background music is a feature), but a hidden app with no active audio stream
   is SIGSTOPped until you switch back — a hidden software-rendering PWA no longer burns
@@ -109,6 +113,9 @@ profiles when the hardware can handle it.
 
 - Linux (X11 or Wayland). A browser (Brave/Chromium/Firefox) for streaming launchers.
 - Build deps: `webkit2gtk-4.1`, `libudev` (gamepad input), Rust (1.80+), Node 20+ or Bun.
+- Runtime: `gst-plugins-good` — WebKitGTK's audio output (`autoaudiosink`) lives there and
+  `webkit2gtk-4.1` does not pull it in; without it the navigation sounds and ambient music
+  are silent with no error anywhere. `omnideck probe` lists it under *diagnostics* if missing.
 - Optional: `gamescope` (for the 10-foot **session** — install it with
   `packaging/install-session.sh`, which runs a *plain* gamescope session; no
   `gamescope-session-plus` required); `cage` (media-kiosk tier on GPU-less hosts);
