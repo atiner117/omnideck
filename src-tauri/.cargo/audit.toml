@@ -1,7 +1,6 @@
 # cargo-audit config (the CI RustSec gate). Keep in sync with deny.toml [advisories].
 [advisories]
-# quick-xml 0.39 DoS advisories (2026-06-29): pulled only via plist (tauri-utils' macOS
-# Info.plist parser) — no untrusted XML reaches it in a Linux launcher. No fixed release
-# exists yet on our tree (needs plist > 1.9.0 to allow quick-xml 0.41).
-# DROP when `cargo update -p plist` moves quick-xml to >= 0.41 (mirror in deny.toml).
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+# No advisory ignores. Any future ignore needs a reason, an expiry and a mirror entry in
+# deny.toml. (The quick-xml RUSTSEC-2026-0194/0195 ignores were dropped once plist 1.10
+# moved quick-xml to 0.42.)
+ignore = []
