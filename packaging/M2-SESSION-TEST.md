@@ -70,6 +70,8 @@ Steam the first time (slow) and *may* not stamp the window. For a clean test, ei
   ```bash
   sudo rm /usr/local/share/wayland-sessions/omnideck.desktop /usr/local/bin/omnideck-session
   ```
+  plus the symlink in SDDM's session dir if the installer made one (its `To remove:` line
+  lists it; see `packaging/README.md` → SDDM's `SessionDir`).
 
 ## 6. If black screen — it's almost certainly GPU/render (not the atom)
 In **plain** gamescope mode the window doesn't need `STEAM_GAME` to be *shown* — that atom drives

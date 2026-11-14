@@ -21,6 +21,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  # install-session.sh's SDDM SessionDir resolution, against fake config trees (no root).
+  install-session:
+    name: install-session.sh · SDDM SessionDir resolution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n + fixture test
+        run: |
+          bash -n packaging/install-session.sh
+          ./packaging/test-install-session.sh
+
   aur:
     name: AUR PKGBUILD · makepkg + namcap (Arch)
     runs-on: ubuntu-latest
