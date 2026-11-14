@@ -51,7 +51,9 @@
 <div class="gwrap" class:compact bind:this={root} style="--gcols:{cols}">
   <div class="ggrid">
     {#each items as t, i (t.id)}
-      {@const hasArt = t.kind === "game" ? !!art[t.game.appid] : !!appIcons[t.app.id]}
+      {@const artId = t.kind === "game" ? t.game.appid : `app:${t.app.id}`}
+      {@const cover = art[artId]}
+      {@const hasArt = !!cover || (t.kind === "app" && !!appIcons[t.app.id])}
       <button
         class="gtile"
         class:focused={i === focus}
@@ -59,8 +61,8 @@
         onclick={() => onactivate(i)}
         aria-label={tileName(t)}
       >
-        {#if t.kind === "game" && art[t.game.appid]}
-          <img src={art[t.game.appid]} alt="" decoding="async" loading="lazy" onerror={() => onarterror(t.game.appid)} />
+        {#if cover}
+          <img src={cover} alt="" decoding="async" loading="lazy" onerror={() => onarterror(artId)} />
         {:else if t.kind === "app" && appIcons[t.app.id]}
           <span class="gicon" style="background:{iconBg[t.app.id] ?? '#f4f5f8'}">
             <img class="appicon" src={appIcons[t.app.id]} alt="" decoding="async" loading="lazy" />

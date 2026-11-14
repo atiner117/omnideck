@@ -20,12 +20,19 @@ const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Canonicalized directories art may legitimately come from: Steam's librarycache (local capsule/
 /// hero art), our own SteamGridDB art cache, the artwork cache (media posters, artwork_cache.rs),
-/// and the downscaled-wallpaper cache (background.rs). Computed once. Favicons still stay on
+/// persistent custom-launcher artwork, and the downscaled-wallpaper cache (background.rs).
+/// Computed once. Favicons still stay on
 /// `data:`, so the icon cache is intentionally NOT a root yet.
 fn roots() -> &'static Vec<PathBuf> {
     static ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
     ROOTS.get_or_init(|| {
         let mut v = Vec::new();
+        if let Some(art) = crate::apps::art_dir() {
+            let _ = std::fs::create_dir_all(&art);
+            if let Ok(p) = art.canonicalize() {
+                v.push(p);
+            }
+        }
         if let Some(steam) = crate::library::steam_root() {
             if let Ok(p) = Path::new(&steam).join("appcache/librarycache").canonicalize() {
                 v.push(p);

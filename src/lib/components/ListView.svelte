@@ -63,10 +63,11 @@
 
 <div class="lwrap" bind:this={root}>
   {#each items as t, i (t.id)}
+    {@const coverId = t.kind === "game" ? t.game.appid : `app:${t.app.id}`}
     <button class="lrow" class:focused={i === focus} data-li={i} onclick={() => onactivate(i)}>
       <span class="lthumb" style={t.kind === "app" && appIcons[t.app.id] ? `background:${iconBg[t.app.id] ?? "#f4f5f8"}` : ""}>
-        {#if t.kind === "game" && art[t.game.appid]}
-          <img src={art[t.game.appid]} alt="" decoding="async" loading="lazy" onerror={() => onarterror(t.game.appid)} />
+        {#if art[coverId]}
+          <img src={art[coverId]} alt="" decoding="async" loading="lazy" onerror={() => onarterror(coverId)} />
         {:else if t.kind === "app" && appIcons[t.app.id]}
           <img class="appicon" src={appIcons[t.app.id]} alt="" decoding="async" loading="lazy" />
         {:else}

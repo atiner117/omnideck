@@ -14,6 +14,16 @@ pub struct App {
     pub accent: String,
     #[serde(default)]
     pub category: String, // "video" | "music" | "games" | "apps"
+    // Local artwork under $XDG_DATA_HOME/omnideck/art (or ~/.local/share/omnideck/art).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub art_icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub art_box: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub art_hero: Option<String>,
 }
 
 fn app(id: &str, name: &str, icon: &str, accent: &str, category: &str, exec: Vec<String>) -> App {
@@ -24,7 +34,19 @@ fn app(id: &str, name: &str, icon: &str, accent: &str, category: &str, exec: Vec
         exec,
         accent: accent.into(),
         category: category.into(),
+        art_icon: None,
+        art_box: None,
+        art_hero: None,
     }
+}
+
+/// Persistent user-supplied artwork, independent of the evictable download caches.
+pub fn art_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))?;
+    Some(base.join("omnideck/art"))
 }
 
 /// True when `bin` is on PATH (shared with commands::media_play's player pick).
@@ -201,4 +223,31 @@ pub fn catalog() -> Vec<App> {
         web("xcloud", "Xbox Cloud", "🟩", "https://www.xbox.com/play", "#107c10", "games"),
     ]);
     v
+}
+
+#[cfg(test)]
+mod artwork_tests {
+    use super::App;
+
+    #[test]
+    fn legacy_launchers_and_local_artwork_round_trip() {
+        let legacy = r##"id = "lutris:5"
+name = "Horizon Forbidden West"
+icon = "game"
+exec = ["lutris", "lutris:rungameid/5"]
+accent = "#f5a524"
+category = "games"
+"##;
+        let mut app: App = toml::from_str(legacy).unwrap();
+        assert!(app.art_icon.is_none() && app.art_box.is_none() && app.art_hero.is_none());
+        assert!(!toml::to_string(&app).unwrap().contains("art_"));
+        app.art_icon = Some("/data/omnideck/art/icon.png".into());
+        app.art_box = Some("/data/omnideck/art/box.jpg".into());
+        app.art_hero = Some("/data/omnideck/art/hero.jpg".into());
+        let restored: App = toml::from_str(&toml::to_string(&app).unwrap()).unwrap();
+        assert_eq!(restored.exec, app.exec);
+        assert_eq!(restored.art_icon, app.art_icon);
+        assert_eq!(restored.art_box, app.art_box);
+        assert_eq!(restored.art_hero, app.art_hero);
+    }
 }
