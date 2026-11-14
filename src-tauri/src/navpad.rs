@@ -158,7 +158,7 @@ impl NavPad {
         let gen = GENERATION.load(Ordering::Relaxed);
         if gen != self.seen_gen || self.last_check.elapsed() >= ACTIVE_CACHE {
             self.seen_gen = gen;
-            self.cached_active = crate::switcher::any_app_visible();
+            self.cached_active = crate::switcher::owned_app_focused();
             self.last_check = Instant::now();
             // Log each transition once so a session log answers "did the bridge engage?"
             // (the couch test couldn't tell whether the gate or the delivery was the issue).

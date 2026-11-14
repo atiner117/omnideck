@@ -155,7 +155,7 @@ test.describe("overlays", () => {
 
   test("15 deck switcher", async ({ page }) => {
     await boot(page, { liveApps: LIVE_APPS });
-    await emit(page, "guide-tap", null); // Guide tap / Ctrl+Alt+Home
+    await emit(page, "guide-hold", null); // Guide hold / Ctrl+Alt+Insert opens the overview (#101: tap = Home)
     await expect(page.locator("section.deck")).toBeVisible();
     await shot(page, "15-deck-switcher");
   });

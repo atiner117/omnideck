@@ -40,7 +40,7 @@ const opts = (over: Partial<Opts> = {}): Opts => ({ inSession: true, onerror, on
 beforeEach(() => {
   vi.clearAllMocks();
   mediaControl.mockResolvedValue(undefined);
-  switchApp.mockResolvedValue(true);
+  switchApp.mockResolvedValue("app");
   closeCurrentApp.mockResolvedValue(true);
   onerror = vi.fn<Opts["onerror"]>();
   ondismiss = vi.fn<Opts["ondismiss"]>();

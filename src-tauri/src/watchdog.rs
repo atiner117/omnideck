@@ -202,6 +202,7 @@ pub fn watch_child(app: tauri::AppHandle, mut child: std::process::Child, name: 
         let _ = child.wait();
         // Clear only if a newer launch hasn't already replaced us as the current app.
         crate::sync::lock_or_recover(&LIVE_GROUPS, "watchdog.LIVE_GROUPS").retain(|a| a.group != pid);
+        crate::switcher::forget_recent(pid);
         let _ = app.emit("app-exited", exit_key);
     });
 }
@@ -303,6 +304,11 @@ impl Drop for SteamWatchGuard {
     fn drop(&mut self) {
         STEAM_WATCHED.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
     }
+}
+
+/// True while any Steam game OmniDeck launched is starting or running.
+pub(crate) fn steam_game_active() -> bool {
+    !STEAM_WATCHED.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
 }
 
 /// Does `cmdline` (a /proc/<pid>/cmdline, NUL-separated) belong to Steam's launch wrapper

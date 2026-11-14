@@ -10,16 +10,18 @@
 #   2. kbd-hide    Ctrl+Alt+Home hides a launched app  (X grab → switcher unmap)
 #   3. kbd-show    Ctrl+Alt+Home again brings it back  (remap)
 #   4. kbd-close   Ctrl+Alt+End closes it              (watchdog pgid kill)
-#   5. pad-deck    Guide short-press opens the deck (hides the app)  (uinput pad → gilrs)
-#   6. pad-pick    A on the focused card brings the app back
-#   7. pad-close   Guide hold closes it AT the 800 ms threshold, while still held
-#   8. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
+#   5. category    app→Home and overview Home reset the selected category (when OCR available)
+#   6. mapped-back already-viewable app behind Home receives X focus on return
+#   7. pad-home    Guide tap hides the app; next tap restores it without relaunch
+#   8. pad-deck    Guide hold opens overview AT the threshold; app stays alive
+#   9. pad-pick    A on the focused recent-app card brings it back
+#  10. stick       left-stick up reaches the app as gilrs LeftStickY +1 (sign convention)
 #
 # Still bare-metal only: display-mode/165 Hz (real EDID), real Steam launch + focus return
 # (STEAM_GAME atom), suspend, SDDM login. Everything else regresses HERE first.
 #
 # Needs: gamescope, xdotool, imagemagick, cargo (test tools), /dev/uinput write access
-# (input group). Steam note: the virtual pad is a real evdev device — a running desktop
+# (input group). Optional: tesseract for visual Home dashboard assertions. Steam note: the virtual pad is a real evdev device — a running desktop
 # Steam may also see its Guide presses; close Steam for a clean run.
 #
 # Usage: ./packaging/test-session.sh [/path/to/omnideck-binary]
@@ -64,6 +66,7 @@ cleanup() {
   sleep 1
   [ -n "${GS_PID:-}" ] && kill "$GS_PID" 2>/dev/null
   [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null
+  [ -n "${FAKE_STEAM_PID:-}" ] && kill "$FAKE_STEAM_PID" 2>/dev/null
   # Keep the session log around when something failed — the temp dir is about to go.
   [ "${FAIL:-0}" -gt 0 ] && [ -f "$GSLOG" ] && cp "$GSLOG" /tmp/omnideck-test-last.log \
     && echo "  (session log saved to /tmp/omnideck-test-last.log)"
@@ -110,10 +113,25 @@ stub_launch() {
   # Track liveness by pid (from the window), never by pgrep -f: a command-line pattern
   # can match unrelated processes — including the shell running this script.
   STUB_PID="$(xdotool getwindowpid "$(xdotool search --name omnideck-harness-stub | head -1)")"
+  # Viewable precedes focus in gamescope. Wait for the app to settle before pressing Guide.
+  wait_for 8 "stable active_stub"
 }
 stub_visible() { xdotool search --onlyvisible --name omnideck-harness-stub 2>/dev/null | grep -q .; }
 stub_alive()   { [ -n "${STUB_PID:-}" ] && kill -0 "$STUB_PID" 2>/dev/null; }
 stub_kill()    { [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null; }
+active_deck() { [ "$(xdotool getactivewindow 2>/dev/null)" = "$APP_WID" ]; }
+selected_category() {
+  import -silent -window "$APP_WID" "$RUN/category.png" || return 1
+  # OCR the selected label alone: full-screen OCR misses it among large game titles.
+  magick "$RUN/category.png" -crop 320x120+360+330 +repage -resize 200% png:- |
+    tesseract stdin stdout --psm 6 2>/dev/null |
+    awk -v label="$1" '$0 == label { found=1 } END { exit !found }'
+}
+active_stub() {
+  local win
+  win="$(xdotool search --onlyvisible --name omnideck-harness-stub 2>/dev/null | head -1)"
+  [ -n "$win" ] && [ "$(xdotool getactivewindow 2>/dev/null)" = "$win" ]
+}
 
 # True once `eval $1` holds across a 0.5 s gap — i.e. the state has actually settled, not
 # just flickered true for one X round-trip. The switcher unmap and gamescope's focus refollow
@@ -126,11 +144,19 @@ stable() { eval "$1" >/dev/null 2>&1 && sleep 0.5 && eval "$1" >/dev/null 2>&1; 
 # each step waits for a settled state before returning, and the caller pauses between steps.
 toggle_expect() {
   local press="$1" want="$2" cond deadline
-  [ "$want" = hidden ] && cond="! stub_visible" || cond="stub_visible"
+  # "shown" means in FRONT, not merely mapped: a mapped app behind Big Picture is the bug.
+  [ "$want" = hidden ] && cond="! stub_visible" || cond="stub_visible && active_stub"
   eval "$press"
   deadline=$((SECONDS + 6))
   until stable "$cond"; do
-    [ $SECONDS -ge $deadline ] && return 1
+    if [ $SECONDS -ge $deadline ]; then
+      echo "  diagnostic: wanted $want; stub windows / X map state:" >&2
+      xdotool search --name omnideck-harness-stub 2>/dev/null | while read -r win; do
+        xwininfo -id "$win" 2>/dev/null | sed -n '/Map State:/p' >&2
+      done
+      echo "  diagnostic: active X window: $(xdotool getactivewindow getwindowname 2>&1)" >&2
+      return 1
+    fi
     sleep 0.3
   done
   sleep 0.5   # let the compositor's focus refollow finish before the next chord
@@ -141,36 +167,152 @@ toggle_expect() {
 echo "── keyboard chords ──"
 KEY="xdotool key --clearmodifiers"
 if stub_launch; then
-  # Ctrl+Alt+Home opens the deck switcher (a global X grab, so it's reliable here); the deck
-  # hides every app so its overlay shows. Card SELECTION via a plain key (Enter) needs the
-  # webview to hold X focus after the hide, which nested-gamescope XTEST can't guarantee — the
-  # gamepad path (pad-pick below, evdev-direct) covers selection end to end. So the keyboard
-  # section verifies open + Ctrl+Alt+End close, both grab-based and focus-independent.
-  toggle_expect "$KEY ctrl+alt+Home" hidden && ok "kbd-deck: Ctrl+Alt+Home opened the deck (app hidden)" || bad "kbd-deck: app still visible"
+  # The grabbed Home chord goes home and then returns to the SAME live app. Insert opens
+  # the overview; End is a separately invoked explicit close shortcut.
+  toggle_expect "$KEY ctrl+alt+Home" hidden && ok "kbd-home: Ctrl+Alt+Home hid the app" || bad "kbd-home: app still visible"
+  toggle_expect "$KEY ctrl+alt+Home" shown && ok "kbd-back: Ctrl+Alt+Home restored the app" || bad "kbd-back: app did not remap"
+  toggle_expect "$KEY ctrl+alt+Insert" hidden && ok "kbd-overview: Insert opened recent apps" || bad "kbd-overview: app still visible"
   $KEY ctrl+alt+End
   if wait_for 8 "! stub_alive"; then ok "kbd-close: Ctrl+Alt+End closed the app (from the deck)"; else bad "kbd-close: process still running"; stub_kill; fi
+  # Explicit close does not dismiss the overview. Clear it before the independent pad tests:
+  # otherwise their first Guide tap cancels the OLD deck instead of toggling the NEW app.
+  $KEY Escape
+  sleep 0.5
 else
   bad "kbd: stub app never appeared (test hook / launch path broken?)"
 fi
 
+# The backend's direction result must drive the UI category, not just expose OmniDeck's
+# window with the old Games rail still selected. OCR is optional on hosts without tesseract.
+if command -v tesseract >/dev/null; then
+  echo "── Home dashboard category ──"
+  $KEY h Right
+  if wait_for 6 "selected_category Games" && stub_launch; then
+    toggle_expect "$KEY ctrl+alt+Home" hidden
+    if wait_for 6 "active_deck && selected_category Home"; then
+      ok "category-tap: app-to-Home selected dashboard"
+    else
+      bad "category-tap: previous category remained selected"
+    fi
+    $KEY ctrl+alt+Insert
+    sleep 0.5
+    $KEY Escape
+    if wait_for 6 "active_deck && ! stub_visible" && stub_alive; then
+      ok "category-cancel: overview opened from Home stays Home on dismiss"
+    else
+      bad "category-cancel: stale snapshot reopened app from Home"
+    fi
+    toggle_expect "$KEY ctrl+alt+Home" shown
+    toggle_expect "$KEY ctrl+alt+Insert" hidden
+    $KEY Left Return
+    if wait_for 6 "active_deck && selected_category Home" && stub_alive; then
+      ok "category-overview: Home card selected dashboard without closing app"
+    else
+      bad "category-overview: Home card did not select dashboard"
+    fi
+    $KEY ctrl+alt+End
+    wait_for 6 "! stub_alive" || stub_kill
+  else
+    if [ -f "$RUN/category.png" ]; then
+      echo "  diagnostic: selected label OCR: $(magick "$RUN/category.png" -crop 320x120+360+330 +repage -resize 200% png:- | tesseract stdin stdout --psm 6 2>/dev/null | tr '\n' ',')" >&2
+    fi
+    bad "category: could not select Games or launch test app"
+  fi
+else
+  echo "  – skipped category visual check: tesseract unavailable"
+fi
+
+# An app may be mapped *behind* an already-focused dashboard. Mapping it again is a no-op;
+# the return-to-app path must explicitly perform a targeted focus-following map transition.
+echo "── mapped background app focus ──"
+if stub_launch; then
+  xdotool windowunmap "$APP_WID"
+  sleep 0.2
+  xdotool windowmap "$APP_WID"
+  if wait_for 5 "active_deck && stub_visible"; then
+    $KEY ctrl+alt+Home
+    if wait_for 6 "active_stub" && stub_alive; then
+      ok "mapped-back: Guide shortcut refocused an already-mapped app"
+    else
+      bad "mapped-back: visible app stayed behind dashboard"
+    fi
+  else
+    bad "mapped-back: test setup could not focus dashboard over visible stub"
+  fi
+  $KEY ctrl+alt+Home
+  $KEY ctrl+alt+End
+  wait_for 6 "! stub_alive" || stub_kill
+else
+  bad "mapped-back: stub app never appeared"
+fi
+
+# Steam client coexistence (couch bug 2026-09-29): Steam Big Picture is an UNOWNED window,
+# stamped STEAM_GAME=769, mapped after OmniDeck. Without `-e`, gamescope gives every window an
+# app id and focuses the most recently mapped one — so unmapping an owned app handed the
+# screen to Steam, not Home. Stand-in: a stub started outside the launch hook (so the
+# watchdog does not own it) carrying the same atom.
+echo "── Steam client coexistence ──"
+"$STUB_BIN" omnideck-fake-steam >/dev/null 2>&1 & FAKE_STEAM_PID=$!
+if wait_for 8 "xdotool search --onlyvisible --name omnideck-fake-steam | grep -q ."; then
+  xprop -id "$(xdotool search --name omnideck-fake-steam | head -1)" -f STEAM_GAME 32c -set STEAM_GAME 769
+  if stub_launch; then
+    toggle_expect "$KEY ctrl+alt+Home" hidden
+    if wait_for 6 "stable active_deck"; then
+      ok "steam-home: Home reached OmniDeck over a newer Steam window"
+    else
+      bad "steam-home: focus went to '$(xdotool getactivewindow getwindowname 2>&1)', not OmniDeck"
+    fi
+    toggle_expect "$KEY ctrl+alt+Home" shown && ok "steam-back: second tap restored the same app" \
+      || bad "steam-back: app did not come back"
+    # A live Steam game (any `reaper SteamLaunch`, even one OmniDeck did not launch) means
+    # the deck must never be re-mapped over the screen: Home declines and the app stays.
+    sh -c 'sleep 30; true' SteamLaunch & FAKE_REAPER=$!
+    # Map order newest-first must be app, Steam, deck — the deck re-map above made it newer.
+    FAKE_WID="$(xdotool search --name omnideck-fake-steam | head -1)"
+    STUB_WID="$(xdotool search --name omnideck-harness-stub | head -1)"
+    xdotool windowunmap --sync "$FAKE_WID"; xdotool windowmap --sync "$FAKE_WID"
+    xdotool windowunmap --sync "$STUB_WID"; xdotool windowmap --sync "$STUB_WID"
+    wait_for 5 "stable active_stub"
+    eval "$KEY ctrl+alt+Home"
+    sleep 1.5
+    if active_stub; then
+      ok "steam-game: Home declined to cover the screen while a Steam game is live"
+    else
+      bad "steam-game: focus went to '$(xdotool getactivewindow getwindowname 2>&1)' with a game live"
+    fi
+    kill "$FAKE_REAPER" 2>/dev/null
+    $KEY ctrl+alt+End
+    wait_for 6 "! stub_alive" || stub_kill
+  else
+    bad "steam: stub app never appeared"
+  fi
+else
+  bad "steam: fake Steam window never appeared"
+fi
+kill "$FAKE_STEAM_PID" 2>/dev/null; FAKE_STEAM_PID=
+wait_for 6 "active_deck" || true
+
 # ── 5-7. gamepad Guide button (virtual pad over uinput) ──
+# Steam on the desktop sees global uinput and can open Big Picture over the nested test;
+# run keyboard-only rather than touching the user's Steam session in that case.
 echo "── gamepad Guide (virtual pad) ──"
-if [ -w /dev/uinput ]; then
+if [ "${OMNIDECK_TEST_KEYBOARD_ONLY:-0}" = 1 ]; then
+  echo "  – skipped: keyboard-only requested (desktop Steam can intercept the virtual Guide)"
+elif [ -w /dev/uinput ]; then
   PAD="$PAD_BIN"
   if stub_launch; then
-    # Guide tap opens the deck switcher (hides apps for the overlay); A/South on the focused
-    # card brings that app back — this exercises deck_open (hide_all) + deck_show end to end.
-    toggle_expect "$PAD guide-short" hidden && ok "pad-deck: Guide tap opened the deck (app hidden)" || bad "pad-deck: app still visible"
-    toggle_expect "$PAD press-south" shown  && ok "pad-pick: A on the card re-showed the app" || bad "pad-pick: app did not remap"
-    # Hold long (3 s): the close must fire AT the 800 ms threshold — i.e. while the button
-    # is still down — so the stub dies while the injector process is still holding.
+    toggle_expect "$PAD guide-short" hidden && ok "pad-home: Guide tap hid the app" || bad "pad-home: app still visible"
+    toggle_expect "$PAD guide-short" shown && ok "pad-back: Guide tap restored the app" || bad "pad-back: app did not remap"
+    # Hold long (3 s): overview opens at the threshold while still held; never close the
+    # process. Guide release must not count as a short tap and undo the overview.
     eval "$PAD guide-hold 3000" & PAD_PID=$!
-    if wait_for 6 "! stub_alive" && kill -0 "$PAD_PID" 2>/dev/null; then
-      ok "pad-close: Guide hold closed the app at the threshold (while held)"
+    if wait_for 6 "grep -q 'guide: hold — task overview' '$GSLOG' && ! stub_visible" && stub_alive && kill -0 "$PAD_PID" 2>/dev/null; then
+      ok "pad-overview: Guide hold opened task overview while app stayed alive"
     else
-      bad "pad-close: app survived the hold, or it only closed after release"; stub_kill
+      bad "pad-overview: hold failed to show overview or unexpectedly closed app"
     fi
     wait "$PAD_PID" 2>/dev/null
+    toggle_expect "$PAD press-south" shown && ok "pad-pick: A on recent card restored the app" || bad "pad-pick: app did not remap"
     # Stick sign convention end to end: raw ABS_Y min (= physically up) must reach the app
     # as gilrs LeftStickY +1 — the value the UI (negating once) turns into "move up".
     eval "$PAD stick-up"

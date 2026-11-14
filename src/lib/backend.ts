@@ -60,9 +60,11 @@ export const backupConfig = (dest: string, includeCredentials = false) =>
 export const restoreConfig = (src: string) => invoke<Config>("restore_config", { src });
 export const powerAction = (action: string) => invoke<void>("power_action", { action });
 export const closeCurrentApp = () => invoke<boolean>("close_current_app");
+export type SwitchResult = "home" | "app" | "unchanged";
 /** Bring a launched app forward without closing it. With a launch id, shows THAT app's
- *  group (deck-card semantics); without one, the legacy global toggle. */
-export const switchApp = (id?: string) => invoke<boolean>("switch_app", { id: id ?? null });
+ *  group (deck-card semantics); without one, toggle Home / last foreground owned app.
+ *  The result tells the UI whether it actually returned to the dashboard. */
+export const switchApp = (id?: string) => invoke<SwitchResult>("switch_app", { id: id ?? null });
 export const inGamescopeSession = () => invoke<boolean>("in_gamescope_session");
 export const quit = () => invoke<void>("quit");
 /** Check GitHub for a newer release. Cached for the process lifetime; `force` bypasses the
@@ -79,6 +81,8 @@ export const deckList = () => invoke<LiveApp[]>("deck_list");
 export const deckShow = (group: number) => invoke<void>("deck_show", { group });
 /** Close one app group (a card's close / Select). */
 export const deckClose = (group: number) => invoke<void>("deck_close", { group });
+/** Choose Home explicitly; unlike cancel, do not restore the pre-open foreground app. */
+export const deckHome = () => invoke<void>("deck_home");
 /** Deck dismissed without picking a card — restore what deck_open hid (re-show + thaw). */
 export const deckCancel = () => invoke<boolean>("deck_cancel");
 
@@ -120,8 +124,10 @@ export const onGamepad = (cb: EventCallback<GamepadEvent>): Promise<UnlistenFn> 
 /** MPRIS state changed (track/status/player) — pushed by the backend watcher, no polling. */
 export const onMediaChanged = (cb: EventCallback<MediaInfo | null>): Promise<UnlistenFn> =>
   listen<MediaInfo | null>("media-changed", cb);
-/** Guide button tapped (or Ctrl+Alt+Home) — the frontend toggles the deck switcher. */
+/** Guide button tapped (or Ctrl+Alt+Home) — toggle Home / last owned app. */
 export const onGuideTap = (cb: EventCallback<null>): Promise<UnlistenFn> => listen<null>("guide-tap", cb);
+/** Guide held past threshold (or overview shortcut) — open the task overview. */
+export const onGuideHold = (cb: EventCallback<null>): Promise<UnlistenFn> => listen<null>("guide-hold", cb);
 /** Sleep timer countdown: remaining seconds, emitted once a second over the final minute. */
 export const onSleepTimerTick = (cb: EventCallback<number>): Promise<UnlistenFn> =>
   listen<number>("sleep-timer-tick", cb);
