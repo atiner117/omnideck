@@ -186,9 +186,18 @@ fn sniff_matches(mime: &str, bytes: &[u8]) -> bool {
 
 /// Launch a Steam game by appid. In a gamescope session Steam stamps the game
 /// window's STEAM_GAME atom so it foregrounds; the exit watchdog is M2.
+///
+/// Async on purpose. A launch is a deliberate move that must supersede the post-Home guard
+/// and any Guide action in flight, and must be ordered after a reclaim already committing
+/// (`switcher::cancel_home_guard`). That wait is awaited here, off the UI thread, never parked
+/// on it.
 #[tauri::command]
-pub fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, id: Option<String>) -> Result<(), String> {
-    crate::switcher::cancel_home_guard(); // a launch is a deliberate move; see GUARD_EPOCH
+pub async fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, id: Option<String>) -> Result<(), String> {
+    crate::switcher::cancel_home_guard().await;
+    launch_game_now(app, appid, name, id)
+}
+
+fn launch_game_now(app: tauri::AppHandle, appid: String, name: Option<String>, id: Option<String>) -> Result<(), String> {
     use tauri::Emitter;
     if !valid_appid(&appid) {
         return Err("invalid appid".into());
@@ -463,7 +472,7 @@ fn media_play_blocking(
     );
     // Through the normal launch path: own process group + watch_child, so the Guide
     // button, the switcher, and the Now Playing card treat playback like any launched app.
-    launch_command(app, exec, Some(name), Some(key.clone()))?;
+    launch_command_blocking(app, exec, Some(name), Some(key.clone()))?;
     Ok(key)
 }
 
@@ -572,9 +581,23 @@ fn is_safe_browser_arg(arg: &str) -> bool {
 /// Launch an arbitrary app/media command (argv form). A leading "BROWSER" token is
 /// resolved to the host's browser (Chromium-family `--app=` PWA mode; Firefox opens
 /// the URL directly since it lacks `--app`).
+///
+/// Async for the same reason as `launch_game`: the guard cancellation is awaited, not waited
+/// for on the UI thread.
 #[tauri::command]
-pub fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
-    crate::switcher::cancel_home_guard(); // a launch is a deliberate move; see GUARD_EPOCH
+pub async fn launch_command(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
+    crate::switcher::cancel_home_guard().await;
+    launch_command_now(app, exec, name, id)
+}
+
+/// `launch_command` for callers already off the UI thread (a blocking worker, the test
+/// hook's thread): the same guard cancellation, waited for in place.
+pub(crate) fn launch_command_blocking(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
+    crate::switcher::cancel_home_guard_blocking();
+    launch_command_now(app, exec, name, id)
+}
+
+fn launch_command_now(app: tauri::AppHandle, exec: Vec<String>, name: Option<String>, id: Option<String>) -> Result<(), String> {
     let mut exec = exec;
     // Per-tile `[launch_overrides]` (config.rs): extra argv is appended BEFORE the BROWSER
     // token is processed, so override args on a browser tile go through the same URL-only

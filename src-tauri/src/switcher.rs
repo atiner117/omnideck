@@ -497,44 +497,105 @@ fn remap_deck(conn: &RustConnection) -> bool {
 static GUARD_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Serializes complete switcher transitions: `hide_all`, `show_group`, `deck_cancel`,
-/// `home_toggle`, and a guard's reclaim. Hide releases X11 between its phases (so the gamepad's
-/// front-ness checks never wait behind a focus poll or pactl). Without this lock a second Guide
-/// tap could restore an app between the first tap's unmap and its freeze, and the first tap
-/// would SIGSTOP a visible window. Lock order: TRANSITION → GUARD_COMMIT → X11. Nothing that
-/// holds X11 takes either of the first two, and the gamepad/navpad polls take only X11.
+/// `home_toggle`, and a guard's reclaim. Without this lock a second Guide tap could restore an
+/// app between the first tap's unmap and its freeze, and the first tap would SIGSTOP a visible
+/// window. Lock order: TRANSITION → GUARD_COMMIT → X11. Nothing that holds X11 takes either of
+/// the first two. Launches take neither on the calling thread (see `cancel_home_guard`).
 static TRANSITION: Mutex<()> = Mutex::new(());
 
-/// Held by a guard across its final epoch check AND the window change it commits to, so a
-/// cancellation either lands before the check (the guard sees it and does nothing) or waits for
-/// the change to finish (and is ordered after it). It never interleaves. Launches take only
-/// this lock, not TRANSITION: a hide in flight can hold TRANSITION for seconds (pactl), and
-/// `launch_command` runs on the UI thread.
+/// The commit lock. Every reclaim from Steam (a guard's, a hide's settle, the Guide-from-Big-
+/// Picture branch) and every write of a hide's cancel snapshot holds it across "is my
+/// generation still current?" AND the change it then makes (`if_current`). A launch bumps the
+/// epoch and then waits for this lock, so it either lands before the check (the change is
+/// skipped) or after the change (the launch is ordered behind it). It never interleaves.
+/// Only the window mutation is held, never the focus poll that follows it.
 static GUARD_COMMIT: Mutex<()> = Mutex::new(());
 
-/// Start a deliberate transition: take the transition lock, then invalidate every armed guard.
-/// Taking the lock first is the point. A guard that is mid-reclaim finishes before we start,
-/// and any guard that has not reached its commit yet will see the new epoch there.
-fn deliberate() -> std::sync::MutexGuard<'static, ()> {
-    let transition = crate::sync::lock_or_recover(&TRANSITION, "switcher.TRANSITION");
-    GUARD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    transition
+/// A deliberate transition in progress: the transition lock plus the generation it started.
+/// Everything it does later that a newer move must be able to veto (re-mapping the deck over
+/// Steam, the cancel snapshot, arming a guard) is conditional on `gen` still being current.
+struct Transition {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    gen: u64,
 }
 
-/// A launch (or any other deliberate move outside the switcher) cancels the post-Home guard.
-/// Returns only once no guard can still act on the old epoch: either it had not committed and
-/// will see the bump, or it had, and this waits for its window change to finish.
-pub(crate) fn cancel_home_guard() {
+/// Start a deliberate transition: take the transition lock, then invalidate every armed guard
+/// and claim a new generation. Taking the lock first is the point. A guard that is mid-reclaim
+/// finishes before we start, and any guard that has not reached its commit yet sees the bump.
+fn deliberate() -> Transition {
+    let lock = crate::sync::lock_or_recover(&TRANSITION, "switcher.TRANSITION");
+    let gen = GUARD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    Transition { _lock: lock, gen }
+}
+
+/// Run `f` only if `gen` is still the current generation, atomically with respect to
+/// `cancel_home_guard`: the check and `f` both happen under GUARD_COMMIT. `None` = superseded,
+/// and `f` did not run. Keep `f` short; a launch waits for it (off the UI thread).
+fn if_current<T>(gen: u64, f: impl FnOnce() -> T) -> Option<T> {
+    let _commit = crate::sync::lock_or_recover(&GUARD_COMMIT, "switcher.GUARD_COMMIT");
+    (GUARD_EPOCH.load(std::sync::atomic::Ordering::SeqCst) == gen).then(f)
+}
+
+/// A launch (or any other deliberate move outside the switcher) supersedes the post-Home guard
+/// AND any transition still in flight. The bump happens at once, on the caller's thread, so a
+/// hide that is mid-settle or mid-freeze loses its right to reclaim, snapshot or arm.
+///
+/// The future resolves only once nothing can still act on the old generation: either a commit
+/// had not started (it will see the bump), or one had, and this waits for its window change to
+/// finish, so the launch is ordered after it. It never blocks the thread that polls it. The
+/// common uncontended case is a `try_lock`; a commit in progress is waited out on a blocking
+/// worker. `launch_game`/`launch_command` are synchronous on the UI thread no longer.
+pub(crate) async fn cancel_home_guard() {
+    GUARD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let busy = matches!(GUARD_COMMIT.try_lock(), Err(std::sync::TryLockError::WouldBlock));
+    if busy {
+        let _ = tauri::async_runtime::spawn_blocking(|| {
+            drop(crate::sync::lock_or_recover(&GUARD_COMMIT, "switcher.GUARD_COMMIT"));
+        })
+        .await;
+    }
+}
+
+/// `cancel_home_guard` for callers that are already on a blocking worker or their own thread
+/// (`media_play`'s blocking body, the test hook). Waits in place. NEVER call it from a
+/// synchronous Tauri command: those run on the UI thread.
+pub(crate) fn cancel_home_guard_blocking() {
     GUARD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     drop(crate::sync::lock_or_recover(&GUARD_COMMIT, "switcher.GUARD_COMMIT"));
 }
 
 /// May the deck (or an owned app) take the screen back from Steam right now? Checked inside
 /// the X lock immediately before the first window change, not just when a caller first
-/// looked. The user (`epoch`), Steam's focus, or a starting game may all have moved since.
-fn reclaim_allowed(conn: &RustConnection, root: Window, epoch: Option<u64>) -> bool {
-    epoch.is_none_or(|e| GUARD_EPOCH.load(std::sync::atomic::Ordering::SeqCst) == e)
-        && steam_client_focused(conn, root)
-        && !steam_game_present(conn, root)
+/// looked. Steam's focus, or a starting game, may have moved since; the user's intent (the
+/// generation) is checked around it by `if_current`.
+fn reclaim_allowed(conn: &RustConnection, root: Window) -> bool {
+    steam_client_focused(conn, root) && !steam_game_present(conn, root)
+}
+
+/// How a reclaim attempt ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reclaim {
+    /// A newer deliberate move (launch, card, cancel, Guide) superseded the generation; nothing
+    /// was touched.
+    Stale,
+    /// Steam no longer holds the screen, or a game is live, or the target is gone; nothing
+    /// was touched.
+    Refused,
+    /// The window change was made; `true` once the target is confirmed in front.
+    Done(bool),
+}
+
+/// The reclaim commit protocol. `mutate` runs under `if_current(gen)`, so it is atomic with
+/// cancellation; it re-validates the screen inside X11 and returns `None` (refused, untouched)
+/// or whether the window change landed. `confirm` (the focus poll, which sleeps) runs after
+/// the commit lock is released, so a waiting launch is not held behind it.
+fn reclaim_with(gen: u64, mutate: impl FnOnce() -> Option<bool>, confirm: impl FnOnce() -> bool) -> Reclaim {
+    match if_current(gen, mutate) {
+        None => Reclaim::Stale,
+        Some(None) => Reclaim::Refused,
+        Some(Some(false)) => Reclaim::Done(false),
+        Some(Some(true)) => Reclaim::Done(confirm()),
+    }
 }
 
 /// Is any Steam game live — launched by OmniDeck (SteamWatchGuard) or from Big Picture, which
@@ -564,13 +625,13 @@ fn steam_game_present(conn: &RustConnection, root: Window) -> bool {
 }
 
 /// Make OmniDeck the most recently mapped window again (unmap + map its own toplevel), then
-/// wait for gamescope to focus it. `None` means the preconditions (`reclaim_allowed`) no longer
-/// held at the point of mutation, so nothing was touched. The focus poll sleeps outside the
-/// shared X lock. The unmap/map itself does not: `set_mapped` can wait up to ~420 ms per call,
-/// and `remap_deck` retries, all under X11. Caller holds TRANSITION.
-fn raise_deck(epoch: Option<u64>) -> Option<bool> {
-    let mapped = with_x11(|conn, root| {
-        if !reclaim_allowed(conn, root, epoch) { return None; }
+/// wait for gamescope to focus it, for generation `gen` (see `reclaim_with`). The focus poll
+/// sleeps outside both the shared X lock and the commit lock. The unmap/map itself does not:
+/// `set_mapped` can wait up to ~420 ms per call, and `remap_deck` retries, all under X11.
+/// Caller holds TRANSITION.
+fn raise_deck(gen: u64) -> Reclaim {
+    let mutate = || with_x11(|conn, root| {
+        if !reclaim_allowed(conn, root) { return None; }
         tracing::info!("switcher: a Steam client window took focus on Home; re-mapping the deck");
         if !remap_deck(conn) { return Some(false); }
         let mine = own_toplevels(conn, root);
@@ -578,13 +639,24 @@ fn raise_deck(epoch: Option<u64>) -> Option<bool> {
         *crate::sync::lock_or_recover(&DECK_WINS, "switcher.DECK_WINS") = mine.clone();
         let _ = set_mapped(conn, &mine, false);
         Some(remap_deck(conn))
-    })?;
-    if mapped != Some(true) { return mapped; }
-    for _ in 0..10 {
-        if with_x11(deck_is_focused) == Some(true) { return Some(true); }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    Some(false)
+    }).flatten();
+    let confirm = || (0..10).any(|i| {
+        if i > 0 { std::thread::sleep(std::time::Duration::from_millis(50)); }
+        with_x11(deck_is_focused) == Some(true)
+    });
+    reclaim_with(gen, mutate, confirm)
+}
+
+/// How a hide's focus check ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Settle {
+    /// Home (or an owned app launched meanwhile) is in front.
+    Home,
+    /// Something foreign kept the screen; the hide should put the app back.
+    Failed,
+    /// A newer deliberate move (a launch) superseded this hide before it could take the screen
+    /// back from Steam. Nothing was re-mapped, and the hide must not put the app back over it.
+    Superseded,
 }
 
 /// After hiding `hidden`, make sure the screen went to Home rather than a foreign window.
@@ -596,9 +668,10 @@ fn raise_deck(epoch: Option<u64>) -> Option<bool> {
 /// window again — the compositor's own focus rule, and nothing foreign is touched. Only a
 /// Steam *client* window is taken back, and never while a Steam game is live; any other
 /// foreign focus reports failure. Must be called WITHOUT the X lock held, and WITH TRANSITION
-/// (so no guard or second Guide action can act between the verdict and the re-map; the
-/// re-map re-checks Steam focus and game state itself).
-fn settle_on_deck(hidden: &[Window]) -> bool {
+/// for generation `gen`. No guard or second Guide action can act between the verdict and the
+/// re-map, the re-map re-checks Steam focus and game state itself, and a launch that lands
+/// in between vetoes it (`Settle::Superseded`).
+fn settle_on_deck(hidden: &[Window], gen: u64) -> Settle {
     for _ in 0..10 {
         let settled = with_x11(|conn, root| {
             gamescope_focused_window(conn, root).is_none_or(|w| !hidden.contains(&w))
@@ -616,9 +689,13 @@ fn settle_on_deck(hidden: &[Window]) -> bool {
         None
     });
     match verdict {
-        Some(Some(v)) => v,
-        Some(None) => raise_deck(None) == Some(true),
-        None => false,
+        Some(Some(true)) => Settle::Home,
+        Some(Some(false)) | None => Settle::Failed,
+        Some(None) => match raise_deck(gen) {
+            Reclaim::Done(true) => Settle::Home,
+            Reclaim::Stale => Settle::Superseded,
+            Reclaim::Done(false) | Reclaim::Refused => Settle::Failed,
+        },
     }
 }
 
@@ -634,12 +711,11 @@ fn steam_client_focused(conn: &RustConnection, root: Window) -> bool {
 }
 
 /// Re-map one owned app's viewable windows so it is the newest mapped window again (same
-/// focus rule as `raise_deck`), then wait for gamescope to focus it. `None` = preconditions no
-/// longer held at the point of mutation (`reclaim_allowed`, or the group is no longer ours);
-/// nothing was touched. Caller holds TRANSITION.
-fn raise_group(group: u32, epoch: Option<u64>) -> Option<bool> {
-    let mapped = with_x11(|conn, root| {
-        if !reclaim_allowed(conn, root, epoch) || !crate::watchdog::live_groups().contains(&group) {
+/// focus rule as `raise_deck`), then wait for gamescope to focus it, for generation `gen`.
+/// `Refused` covers "the group is no longer ours" too. Caller holds TRANSITION.
+fn raise_group(group: u32, gen: u64) -> Reclaim {
+    let mutate = || with_x11(|conn, root| {
+        if !reclaim_allowed(conn, root) || !crate::watchdog::live_groups().contains(&group) {
             return None;
         }
         let wins: Vec<Window> = visible_owned(conn, root, &[group]).into_iter().map(|(w, _)| w).collect();
@@ -653,17 +729,15 @@ fn raise_group(group: u32, epoch: Option<u64>) -> Option<bool> {
             return Some(false);
         }
         Some(true)
-    })?;
-    if mapped != Some(true) { return mapped; }
-    for _ in 0..10 {
-        let focused = with_x11(|conn, root| {
+    }).flatten();
+    let confirm = || (0..10).any(|i| {
+        if i > 0 { std::thread::sleep(std::time::Duration::from_millis(50)); }
+        with_x11(|conn, root| {
             let visible = visible_owned(conn, root, &[group]);
             foreground_group(conn, root, &visible) == Some(group)
-        });
-        if focused == Some(true) { return Some(true); }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    Some(false)
+        }) == Some(true)
+    });
+    reclaim_with(gen, mutate, confirm)
 }
 
 /// How one armed guard ended. Returned from the guard thread so tests can assert it.
@@ -680,16 +754,16 @@ enum GuardOutcome {
 /// The guard loop, with its probe and reclaim injected (the real ones talk to X).
 ///
 /// `stolen` is a cheap pre-check, run without TRANSITION. It decides nothing. The decision is
-/// re-made under TRANSITION + GUARD_COMMIT: the epoch is compared there, and `reclaim`
-/// re-validates focus and game state inside the X lock before touching a window (`None` =
-/// "no longer applies, nothing touched", which keeps the guard watching). So a cancellation
-/// can never be overtaken by a guard that looked before it.
+/// re-made under TRANSITION by `reclaim`, which must go through `reclaim_with` (the epoch is
+/// compared under the commit lock, and the X-side check re-validates focus and game state
+/// before touching a window). `Refused` keeps the guard watching. So a cancellation can never
+/// be overtaken by a guard that looked before it.
 fn spawn_guard(
     epoch: u64,
     tick: std::time::Duration,
     ticks: u32,
     stolen: impl Fn() -> bool + Send + 'static,
-    mut reclaim: impl FnMut(u64) -> Option<bool> + Send + 'static,
+    mut reclaim: impl FnMut(u64) -> Reclaim + Send + 'static,
 ) -> std::thread::JoinHandle<GuardOutcome> {
     use std::sync::atomic::Ordering::SeqCst;
     std::thread::spawn(move || {
@@ -698,12 +772,30 @@ fn spawn_guard(
             if GUARD_EPOCH.load(SeqCst) != epoch { return GuardOutcome::Cancelled; }
             if !stolen() { continue; }
             let _transition = crate::sync::lock_or_recover(&TRANSITION, "switcher.TRANSITION");
-            let _commit = crate::sync::lock_or_recover(&GUARD_COMMIT, "switcher.GUARD_COMMIT");
-            if GUARD_EPOCH.load(SeqCst) != epoch { return GuardOutcome::Cancelled; }
-            if let Some(ok) = reclaim(epoch) { return GuardOutcome::Reclaimed(ok); }
+            match reclaim(epoch) {
+                Reclaim::Stale => return GuardOutcome::Cancelled,
+                Reclaim::Refused => continue,
+                Reclaim::Done(ok) => return GuardOutcome::Reclaimed(ok),
+            }
         }
         GuardOutcome::Expired
     })
+}
+
+/// Arm a guard for the transition that owns generation `gen`, but only if `gen` is still
+/// current. The epoch moves `gen → gen + 1` by compare-and-swap, so arming can never overwrite
+/// a newer move: a launch that bumped first makes the swap fail (no guard), and a launch after
+/// it invalidates the new guard's epoch. `None` = superseded, nothing spawned.
+fn arm_guard(
+    gen: u64,
+    tick: std::time::Duration,
+    ticks: u32,
+    stolen: impl Fn() -> bool + Send + 'static,
+    reclaim: impl FnMut(u64) -> Reclaim + Send + 'static,
+) -> Option<std::thread::JoinHandle<GuardOutcome>> {
+    use std::sync::atomic::Ordering::SeqCst;
+    GUARD_EPOCH.compare_exchange(gen, gen + 1, SeqCst, SeqCst).ok()?;
+    Some(spawn_guard(gen + 1, tick, ticks, stolen, reclaim))
 }
 
 /// Steam also answers the PS/Guide button itself: ~0.4–0.6 s after OmniDeck has acted on a
@@ -712,28 +804,30 @@ fn spawn_guard(
 /// Steam" option is not in this Steam build). For a short window after a Guide action, put
 /// `target` (the deck, or `Some(group)`) back ONCE if a Steam client window grabs focus —
 /// unless the user has moved on (GUARD_EPOCH) or a Steam game is live, where the press is
-/// Steam's. Called with TRANSITION held, at the end of the transition it guards; arming bumps
-/// the epoch, so only the newest guard is ever live.
-fn guard_from_steam(target: Option<u32>) {
-    let epoch = GUARD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+/// Steam's. Called with TRANSITION held, at the end of the transition (generation `gen`) it
+/// guards. Arming is conditional (`arm_guard`): a transition a launch superseded arms nothing,
+/// and only the newest guard is ever live.
+fn guard_from_steam(gen: u64, target: Option<u32>) {
     let stolen = || {
         with_x11(|conn, root| steam_client_focused(conn, root) && !steam_game_present(conn, root))
             == Some(true)
     };
     let reclaim = move |epoch| {
-        let ok = match target {
-            Some(group) => raise_group(group, Some(epoch)),
-            None => raise_deck(Some(epoch)),
-        }?;
-        if ok {
-            tracing::info!("switcher: Steam answered the Guide press; restored {}",
-                if target.is_some() { "the app" } else { "Home" });
-        } else {
-            tracing::warn!("switcher: could not take the screen back from Steam");
+        let outcome = match target {
+            Some(group) => raise_group(group, epoch),
+            None => raise_deck(epoch),
+        };
+        match outcome {
+            Reclaim::Done(true) => tracing::info!("switcher: Steam answered the Guide press; restored {}",
+                if target.is_some() { "the app" } else { "Home" }),
+            Reclaim::Done(false) => tracing::warn!("switcher: could not take the screen back from Steam"),
+            Reclaim::Stale | Reclaim::Refused => {}
         }
-        Some(ok)
+        outcome
     };
-    drop(spawn_guard(epoch, std::time::Duration::from_millis(100), 25, stolen, reclaim));
+    if arm_guard(gen, std::time::Duration::from_millis(100), 25, stolen, reclaim).is_none() {
+        tracing::info!("switcher: a newer move superseded this Guide action; no Home guard armed");
+    }
 }
 
 /// Navpad compatibility: keep HEAD's gamescope focus gate and Steam exclusion.
@@ -748,7 +842,8 @@ pub enum SwitchResult { Home, App, Unchanged }
 pub fn home_toggle() -> SwitchResult {
     // The whole toggle is one transition. A second tap queues behind the first instead of
     // racing it (see TRANSITION), and starting it cancels any guard an earlier tap armed.
-    let _transition = deliberate();
+    let transition = deliberate();
+    let gen = transition.gen;
     if !session_ok() { return SwitchResult::Unchanged; }
     let _ = with_x11(|conn, _| remap_deck(conn)); // finish any re-map an earlier press lost
     let state = with_x11(|conn, root| {
@@ -758,7 +853,7 @@ pub fn home_toggle() -> SwitchResult {
     let Some((front, on_deck)) = state else { return SwitchResult::Unchanged };
     if let Some(group) = front {
         remember_group(group);
-        if hide_all_locked() {
+        if hide_all_locked(gen) {
             deck_home(); // tap commits Home; a later overview cancel must not reopen the app
             return SwitchResult::Home;
         }
@@ -767,15 +862,16 @@ pub fn home_toggle() -> SwitchResult {
     if !on_deck {
         // Big Picture in front (Steam answered an earlier press, or a Steam tile): Guide goes
         // Home. Never while a Steam game is live — that screen is not ours to cover.
-        // raise_deck re-checks both inside the X lock, right before it re-maps.
-        if raise_deck(None) != Some(true) { return SwitchResult::Unchanged; }
+        // raise_deck re-checks both inside the X lock, right before it re-maps, and a launch
+        // since this tap vetoes it.
+        if raise_deck(gen) != Reclaim::Done(true) { return SwitchResult::Unchanged; }
         deck_home();
-        guard_from_steam(None);
+        guard_from_steam(gen, None);
         return SwitchResult::Home;
     }
     for app in recent_apps() {
         if show_group_locked(app.group) {
-            guard_from_steam(Some(app.group)); // a fresh guard for the app just restored
+            guard_from_steam(gen, Some(app.group)); // a fresh guard for the app just restored
             return SwitchResult::App;
         }
     }
@@ -797,8 +893,8 @@ static LAST_HIDE: Mutex<(Vec<Window>, Vec<u32>, Option<u32>)> = Mutex::new((Vec:
 /// deck-switcher's "open" step. Same as toggle's hide half: unmap owned toplevels, remember
 /// them, freeze the silent ones. Returns true once Home is foreground (including empty overview).
 pub fn hide_all() -> bool {
-    let _transition = deliberate();
-    hide_all_locked()
+    let transition = deliberate();
+    hide_all_locked(transition.gen)
 }
 
 /// What the first phase of a hide does, decided before any window is touched.
@@ -837,8 +933,8 @@ fn still_hidden(visible: &[(Window, u32)], viewable_now: &[u32]) -> Vec<(Window,
     visible.iter().copied().filter(|(_, g)| !viewable_now.contains(g)).collect()
 }
 
-/// `hide_all` body. Caller holds TRANSITION (`deliberate`).
-fn hide_all_locked() -> bool {
+/// `hide_all` body. Caller holds TRANSITION (`deliberate`) for generation `gen`.
+fn hide_all_locked(gen: u64) -> bool {
     if !session_ok() {
         return false;
     }
@@ -877,16 +973,28 @@ fn hide_all_locked() -> bool {
         None => return false,
     };
     // Phase 2 (no lock): did the screen actually go Home, or to Steam?
-    if !settle_on_deck(&wins) {
+    let settled = settle_on_deck(&wins, gen);
+    if settled == Settle::Failed {
         // Better the app back in front than a silent fall-through to Steam.
         let _ = with_x11(|conn, _| set_mapped(conn, &wins, true));
         tracing::warn!("switcher: Home could not take focus; restored the app");
         return false;
     }
-    // Phase 3 (X lock): record and freeze what this hide took away and is STILL hidden.
-    // TRANSITION already keeps the switcher's own actions out of the gap since phase 1. The
-    // re-query also covers anything else that mapped a window in the meantime.
-    let done = with_x11(|conn, root| {
+    // A launch landed before Home could be taken back from Steam: the user has moved on. Do
+    // not put the app back over their choice. Its windows stay hidden and are recorded below
+    // (any card restores them), but this hide claims no Home, snapshot or guard.
+    let superseded = settled == Settle::Superseded;
+    if superseded {
+        tracing::info!("switcher: a launch superseded this Guide action; the app stays hidden");
+    }
+    // Phase 3a (no lock): the audio probe (pactl, up to 3 s) runs OUTSIDE X11, so the gamepad's
+    // front-ness polls never wait behind it.
+    let candidates = freeze_candidates(&visible, &[]);
+    let audible = if candidates.is_empty() { Vec::new() } else { audible_groups(&candidates) };
+    // Phase 3b (X lock): record and freeze what this hide took away and is STILL hidden,
+    // re-queried right before the SIGSTOPs. TRANSITION already keeps the switcher's own actions
+    // out of the gap since phase 1. The re-query covers anything else that mapped a window.
+    let recorded = with_x11(|conn, root| {
         let viewable: Vec<u32> = visible_owned(conn, root, &crate::watchdog::live_groups())
             .into_iter().map(|(_, g)| g).collect();
         let visible = still_hidden(&visible, &viewable);
@@ -898,19 +1006,28 @@ fn hide_all_locked() -> bool {
                 }
             }
         }
-        let frozen_now = freeze_silent_groups(&visible, &[]);
+        let still: Vec<u32> = candidates.iter().copied()
+            .filter(|g| visible.iter().any(|&(_, v)| v == *g)).collect();
+        let frozen_now = freeze_groups(&still, &audible);
         // Snapshot THIS hide's effect (not the whole HIDDEN/STOPPED backlog): a deck dismissed
         // without picking a card restores exactly what opening it took away — apps hidden on an
         // earlier deck round stay hidden.
         let hidden_now: Vec<Window> = visible.iter().filter(|&&(_, group)| Some(group) == front)
             .map(|&(win, _)| win).collect();
         let frozen_front: Vec<u32> = frozen_now.into_iter().filter(|g| Some(*g) == front).collect();
+        (hidden_now, frozen_front)
+    });
+    let Some((hidden_now, frozen_front)) = recorded else { return false };
+    if superseded { return false; }
+    // Phase 3c: the snapshot and the guard belong to this hide's generation. A launch since
+    // phase 1 vetoes both, atomically (`if_current`, then the guard's compare-and-swap).
+    let snapshot = || {
         *crate::sync::lock_or_recover(&LAST_HIDE, "switcher.LAST_HIDE") = (hidden_now, frozen_front, front);
-        true
-    })
-    .unwrap_or(false);
-    if done { guard_from_steam(None); } // Steam may answer the same Guide press with Big Picture
-    done
+    };
+    if if_current(gen, snapshot).is_some() {
+        guard_from_steam(gen, None); // Steam may answer the same Guide press with Big Picture
+    }
+    true // Home was reached in phase 2 either way
 }
 
 /// Undo the last `hide_all()` (deck dismissed without picking a card): SIGCONT the groups
@@ -1117,14 +1234,15 @@ fn windows_of_group(
     out
 }
 
-/// SIGSTOP every just-hidden process group that is NOT audibly playing (see header:
-/// background music is a feature; a silent hidden renderer is a space heater). Windows
-/// that resisted unmap keep their group running — a still-visible window must not freeze.
-/// Returns the groups frozen by THIS call (the deck's dismiss snapshot).
-fn freeze_silent_groups(visible: &[(Window, u32)], failed: &[Window]) -> Vec<u32> {
-    // Exclude the WHOLE group when ANY of its windows resisted unmap — filtering per-window
-    // let a two-window group freeze via its unmapped sibling while the resister stayed on
-    // screen as a frozen, input-dead window.
+/// Freezing policy: SIGSTOP every just-hidden process group that is NOT audibly playing
+/// (see header: background music is a feature; a silent hidden renderer is a space heater).
+/// Windows that resisted unmap keep their group running — a still-visible window must not
+/// freeze. Split in two so hide can probe audio (`audible_groups`, pactl) outside the X lock.
+///
+/// The distinct groups of `visible` that may be frozen at all. Exclude the WHOLE group when
+/// ANY of its windows resisted unmap — filtering per-window let a two-window group freeze via
+/// its unmapped sibling while the resister stayed on screen as a frozen, input-dead window.
+fn freeze_candidates(visible: &[(Window, u32)], failed: &[Window]) -> Vec<u32> {
     let failed_groups: Vec<u32> =
         visible.iter().filter(|(w, _)| failed.contains(w)).map(|&(_, g)| g).collect();
     let mut candidates: Vec<u32> = visible
@@ -1134,13 +1252,16 @@ fn freeze_silent_groups(visible: &[(Window, u32)], failed: &[Window]) -> Vec<u32
         .collect();
     candidates.sort_unstable();
     candidates.dedup();
+    candidates
+}
+
+/// SIGSTOP each of `candidates` not in `audible`, recording it in STOPPED. Returns the groups
+/// frozen by THIS call. `audible` comes from `audible_groups`, probed by the caller (hide
+/// probes it outside the X lock).
+fn freeze_groups(candidates: &[u32], audible: &[u32]) -> Vec<u32> {
     let mut frozen = Vec::new();
-    if candidates.is_empty() {
-        return frozen;
-    }
-    let audible = audible_groups(&candidates);
     let mut stopped = crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED");
-    for g in candidates {
+    for &g in candidates {
         if audible.contains(&g) {
             tracing::info!("switcher: hidden group {g} is playing audio — left running");
             continue;
@@ -1160,7 +1281,7 @@ fn freeze_silent_groups(visible: &[(Window, u32)], failed: &[Window]) -> Vec<u32
     frozen
 }
 
-/// SIGCONT everything `freeze_silent_groups` stopped (dead groups just fail the kill).
+/// SIGCONT everything `freeze_groups` stopped (dead groups just fail the kill).
 /// Also the process-exit hook (lib.rs): frozen groups must not outlive the launcher —
 /// SIGTERM can't wake a SIGSTOPped process, so exiting without this stranded them forever.
 pub(crate) fn resume_stopped_groups() {
@@ -1286,7 +1407,7 @@ mod tests {
     /// reason and hide the result.
     static GUARD_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    use super::{spawn_guard, GuardOutcome, GUARD_EPOCH};
+    use super::{reclaim_with, spawn_guard, GuardOutcome, Reclaim, GUARD_EPOCH};
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
     use std::sync::Arc;
     use std::time::Duration;
@@ -1299,10 +1420,18 @@ mod tests {
     ) -> std::thread::JoinHandle<GuardOutcome> {
         let epoch = GUARD_EPOCH.fetch_add(1, SeqCst) + 1;
         let (s, r) = (steam_mapped.clone(), reclaims.clone());
-        spawn_guard(epoch, Duration::from_millis(5), 200, move || s.load(SeqCst), move |_| {
-            r.fetch_add(1, SeqCst);
-            Some(true)
-        })
+        spawn_guard(epoch, Duration::from_millis(5), 200, move || s.load(SeqCst), counting_reclaim(r))
+    }
+
+    /// A reclaim that goes through the real commit protocol (`reclaim_with`) but only counts
+    /// the window operation it would make.
+    fn counting_reclaim(r: Arc<AtomicU32>) -> impl FnMut(u64) -> Reclaim + Send + 'static {
+        move |e| reclaim_with(e, || { r.fetch_add(1, SeqCst); Some(true) }, || true)
+    }
+
+    /// What `launch_game` / `launch_command` await before they launch.
+    fn launch_cancel() {
+        tauri::async_runtime::block_on(super::cancel_home_guard());
     }
 
     /// Control for the two tests below: with nothing cancelling it, the fake guard DOES reclaim
@@ -1344,20 +1473,19 @@ mod tests {
     #[test]
     fn a_guard_paused_after_detecting_steam_does_nothing_once_cancelled() {
         let _serial = crate::sync::lock_or_recover(&GUARD_TESTS, "switcher.tests.GUARD_TESTS");
-        for cancel in [super::cancel_home_guard as fn(), || { super::deck_cancel(); }] {
+        for cancel in [launch_cancel as fn(), || { super::deck_cancel(); }] {
             let reclaims = Arc::new(AtomicU32::new(0));
             let (detected_tx, detected_rx) = std::sync::mpsc::channel();
             let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
             let resume_rx = std::sync::Mutex::new(resume_rx);
             let epoch = GUARD_EPOCH.fetch_add(1, SeqCst) + 1;
-            let r = reclaims.clone();
             let guard = spawn_guard(epoch, Duration::from_millis(5), 200,
                 move || {
                     let _ = detected_tx.send(());
                     let _ = resume_rx.lock().unwrap().recv(); // paused between detect and commit
                     true
                 },
-                move |_| { r.fetch_add(1, SeqCst); Some(true) });
+                counting_reclaim(reclaims.clone()));
             detected_rx.recv_timeout(Duration::from_secs(5)).expect("guard never probed");
             cancel(); // a launch (cancel_home_guard) or an overview dismissal (deck_cancel)
             resume_tx.send(()).unwrap();
@@ -1366,33 +1494,113 @@ mod tests {
         }
     }
 
-    /// Finding 2, the other ordering: a guard that already committed holds GUARD_COMMIT
-    /// across its window change, so a launch that arrives mid-change returns only after it. The
-    /// launch is ordered after the reclaim rather than overtaken by it.
+    /// Finding 2, the other ordering, plus round-2 R2. A guard that already committed holds
+    /// GUARD_COMMIT across its window change, so a launch that arrives mid-change is ordered
+    /// after it, but the launch must never PARK the thread that runs it. `launch_game` and
+    /// `launch_command` used to call a blocking `cancel_home_guard` on the Tauri UI thread, so a
+    /// reclaim retrying map requests froze the webview for seconds. The first poll of the
+    /// cancellation future must return at once (Pending) while the reclaim is paused; the
+    /// future itself completes only after the reclaim finishes.
     #[test]
-    fn a_launch_waits_for_a_guard_reclaim_already_in_progress() {
+    fn a_launch_is_ordered_after_a_reclaim_in_progress_without_blocking_its_thread() {
         let _serial = crate::sync::lock_or_recover(&GUARD_TESTS, "switcher.tests.GUARD_TESTS");
         let (in_reclaim_tx, in_reclaim_rx) = std::sync::mpsc::channel();
         let (finish_tx, finish_rx) = std::sync::mpsc::channel::<()>();
         let finish_rx = std::sync::Mutex::new(finish_rx);
         let epoch = GUARD_EPOCH.fetch_add(1, SeqCst) + 1;
-        let guard = spawn_guard(epoch, Duration::from_millis(5), 200, || true, move |_| {
-            let _ = in_reclaim_tx.send(());
-            let _ = finish_rx.lock().unwrap().recv(); // mid window change
-            Some(true)
+        let guard = spawn_guard(epoch, Duration::from_millis(5), 200, || true, move |e| {
+            reclaim_with(e, || {
+                let _ = in_reclaim_tx.send(());
+                let _ = finish_rx.lock().unwrap().recv(); // mid window change
+                Some(true)
+            }, || true)
         });
         in_reclaim_rx.recv_timeout(Duration::from_secs(5)).expect("guard never committed");
+
+        // The UI thread's view: one poll of the launch's cancellation, which must not block.
+        let (polled_tx, polled_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::future::Future as _;
+            let mut fut = std::pin::pin!(super::cancel_home_guard());
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let _ = polled_tx.send(fut.as_mut().poll(&mut cx).is_pending());
+        });
+        let pending = polled_rx.recv_timeout(Duration::from_millis(500))
+            .expect("polling a launch's guard cancellation blocked its thread");
+        assert!(pending, "cancellation resolved while a reclaim was still changing windows");
+
+        // ...and the awaited launch is still ordered after the reclaim.
         let (launched_tx, launched_rx) = std::sync::mpsc::channel();
         let launch = std::thread::spawn(move || {
-            super::cancel_home_guard();
+            launch_cancel();
             let _ = launched_tx.send(());
         });
         assert!(launched_rx.recv_timeout(Duration::from_millis(150)).is_err(),
-            "launch returned while the guard was still changing windows");
+            "launch went ahead while the guard was still changing windows");
         finish_tx.send(()).unwrap();
         assert_eq!(guard.join().unwrap(), GuardOutcome::Reclaimed(true));
         launched_rx.recv_timeout(Duration::from_secs(5)).expect("launch never returned");
         launch.join().unwrap();
+    }
+
+    /// Regression (round 2, R1 — guard arming): a launch during an in-flight hide must leave
+    /// that hide unable to arm its Home guard. The launch does not wait for TRANSITION (a hide
+    /// can hold it for seconds), so it completes while the hide is still running, and the hide
+    /// then reaches `guard_from_steam`. Before the fix arming was an unconditional
+    /// `fetch_add`: it minted a fresh, valid epoch AFTER the launch, and that guard put Home
+    /// over the user's newer choice when Steam mapped Big Picture.
+    #[test]
+    fn a_launch_during_an_in_flight_hide_stops_it_arming_a_guard() {
+        let _serial = crate::sync::lock_or_recover(&GUARD_TESTS, "switcher.tests.GUARD_TESTS");
+        let (steam, reclaims) = (Arc::new(AtomicBool::new(true)), Arc::new(AtomicU32::new(0)));
+        let arm = |gen| {
+            let (s, r) = (steam.clone(), reclaims.clone());
+            super::arm_guard(gen, Duration::from_millis(5), 200, move || s.load(SeqCst), counting_reclaim(r))
+        };
+
+        // Control: an un-superseded hide does arm, and that guard reclaims.
+        let hide = super::deliberate();
+        let guard = arm(hide.gen).expect("a current transition must be able to arm");
+        drop(hide);
+        assert_eq!(guard.join().unwrap(), GuardOutcome::Reclaimed(true));
+        assert_eq!(reclaims.swap(0, SeqCst), 1);
+
+        // The race: the hide holds TRANSITION; a launch lands; then the hide tries to arm.
+        let hide = super::deliberate();
+        let (launched_tx, launched_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || { launch_cancel(); let _ = launched_tx.send(()); });
+        launched_rx.recv_timeout(Duration::from_secs(2))
+            .expect("a launch must not wait for an in-flight hide");
+        assert!(arm(hide.gen).is_none(), "a superseded hide armed a Home guard");
+        drop(hide);
+        std::thread::sleep(Duration::from_millis(50)); // what any stray guard would need
+        assert_eq!(reclaims.load(SeqCst), 0, "Home was put back over the newer launch");
+    }
+
+    /// Regression (round 2, R1 — direct reclaim and snapshot): a hide's own settle reclaim,
+    /// and the Guide-from-Big-Picture branch, used to re-map the deck with no expected
+    /// generation (`raise_deck(None)`), so a launch landing between their verdict and the
+    /// re-map could not stop it. Both now commit through `reclaim_with(gen)`, and the cancel
+    /// snapshot through `if_current(gen)`. After a launch, neither may touch anything.
+    #[test]
+    fn a_launch_during_an_in_flight_hide_vetoes_its_reclaim_and_snapshot() {
+        let _serial = crate::sync::lock_or_recover(&GUARD_TESTS, "switcher.tests.GUARD_TESTS");
+        let mutations = Arc::new(AtomicU32::new(0));
+        let reclaim = |gen| {
+            let m = mutations.clone();
+            reclaim_with(gen, move || { m.fetch_add(1, SeqCst); Some(true) }, || true)
+        };
+
+        let hide = super::deliberate();
+        assert_eq!(reclaim(hide.gen), Reclaim::Done(true), "control: a current hide may reclaim");
+        assert_eq!(super::if_current(hide.gen, || ()), Some(()));
+        assert_eq!(mutations.swap(0, SeqCst), 1);
+
+        launch_cancel(); // completes although the hide still holds TRANSITION
+        assert_eq!(reclaim(hide.gen), Reclaim::Stale);
+        assert_eq!(super::if_current(hide.gen, || ()), None, "superseded hide wrote its snapshot");
+        assert_eq!(mutations.load(SeqCst), 0, "superseded hide re-mapped the deck");
+        drop(hide);
     }
 
     /// Regression (finding 3): Guide actions are serialized as whole transitions. A second
@@ -1435,7 +1643,9 @@ mod tests {
         let (mut leader, mut member, group, _) = spawn_group_with_outside_parented_member();
         let _cleanup = KillGroup(group);
         crate::watchdog::track_group_for_test(group);
-        let frozen = super::freeze_silent_groups(&super::still_hidden(&[(1, group)], &[group]), &[]);
+        // No group counts as audible here, so only the visibility filter can keep it running.
+        let still = super::still_hidden(&[(1, group)], &[group]);
+        let frozen = super::freeze_groups(&super::freeze_candidates(&still, &[]), &[]);
         assert!(frozen.is_empty(), "froze a group that is back on screen");
         assert!(!crate::sync::lock_or_recover(&STOPPED, "switcher.STOPPED").iter().any(|f| f.group == group));
         std::thread::sleep(Duration::from_millis(50));
@@ -1725,7 +1935,7 @@ mod tests {
         assert!(wait_for(|| group_members(group).len() >= 2), "second member never appeared");
 
         // Launch → hide: the group is tracked, then frozen and recorded exactly as hide_all
-        // records it (freeze_silent_groups pushes the roster into STOPPED).
+        // records it (freeze_groups pushes the roster into STOPPED).
         crate::watchdog::track_group_for_test(group);
         let frozen = stop_group(group).expect("SIGSTOP should land on a live tracked group");
         let member = frozen

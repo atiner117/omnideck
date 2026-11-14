@@ -34,7 +34,7 @@ pub fn spawn_if_enabled(app: tauri::AppHandle) {
                 Some("launch") => {
                     let exec: Vec<String> = words.collect();
                     let name = exec.first().cloned();
-                    match crate::commands::launch_command(app.clone(), exec, name, None) {
+                    match crate::commands::launch_command_blocking(app.clone(), exec, name, None) {
                         Ok(()) => tracing::info!("testhook: launched"),
                         Err(e) => tracing::error!("testhook: launch failed: {e}"),
                     }
