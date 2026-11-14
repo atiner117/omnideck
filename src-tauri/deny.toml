@@ -5,21 +5,18 @@
 
 [advisories]
 version = 2
-# RustSec vulnerabilities + unsound advisories error by default in v2.
+# RustSec vulnerabilities error at any depth. Unsound advisories default to workspace scope
+# (cargo-deny 0.20 advisories/cfg.rs): transitive ones, e.g. glib 0.18 RUSTSEC-2024-0429, only warn.
 # Unmaintained: only fail for OUR direct dependencies. The transitive tree is pinned by
 # Tauri v2's Linux stack (gtk-rs GTK3 bindings ×10, unic-* via tauri's templating,
 # proc-macro-error) — unfixable until Tauri moves to GTK4; enumerating those advisories
 # as ignores would just rot. Real vulnerabilities still fail regardless of depth
 # (cargo-audit caught quinn-proto RUSTSEC-2026-0185 on this gate's first CI run).
 unmaintained = "workspace"
-# quick-xml 0.39 DoS advisories (2026-06-29): pulled only via plist (tauri-utils' macOS
-# Info.plist parser) — no untrusted XML reaches it in a Linux launcher. No fixed release
-# exists yet on our tree (needs plist > 1.9.0 to allow quick-xml 0.41). Mirror of
-# .cargo/audit.toml — DROP BOTH when `cargo update -p plist` moves quick-xml to >= 0.41.
-ignore = [
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml via plist: unreachable with untrusted input; awaiting plist release with quick-xml 0.41" },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml via plist: unreachable with untrusted input; awaiting plist release with quick-xml 0.41" },
-]
+# No advisory ignores. Any future ignore needs a reason, an expiry and a mirror entry in
+# .cargo/audit.toml. (The quick-xml RUSTSEC-2026-0194/0195 ignores were dropped once
+# plist 1.10 moved quick-xml to 0.42.)
+ignore = []
 
 [licenses]
 version = 2
