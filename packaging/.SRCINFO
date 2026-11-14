@@ -20,6 +20,6 @@ pkgbase = omnideck
 	options = !lto
 	options = !debug
 	source = omnideck-0.2.0.tar.gz::https://github.com/atiner117/omnideck/archive/refs/tags/v0.2.0.tar.gz
-	b2sums = 8fb7937af3ab4487ab1beb5d063a85e5fb99fb4b4b6706ddaee4fa938891395db178d67dfc514417c0dc0c78f96b351561bc16488353b424379b5511e7528a05
+	b2sums = SKIP
 
 pkgname = omnideck

@@ -100,7 +100,9 @@ static CACHE: Mutex<Option<UpdateInfo>> = Mutex::new(None);
 
 pub async fn check(force: bool) -> Result<UpdateInfo, String> {
     if !force {
-        if let Some(hit) = CACHE.lock().unwrap().clone() {
+        // Poison-tolerant: "Check for updates" is a UI button — a past panic while the
+        // cache was held must not make it panic forever after.
+        if let Some(hit) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             return Ok(hit);
         }
     }
@@ -122,7 +124,7 @@ pub async fn check(force: bool) -> Result<UpdateInfo, String> {
         return Err("update check: latest release is a draft/pre-release — ignoring".into());
     }
     let info = to_info(&rel);
-    *CACHE.lock().unwrap() = Some(info.clone());
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(info.clone());
     Ok(info)
 }
 

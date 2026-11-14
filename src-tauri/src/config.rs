@@ -448,7 +448,7 @@ pub fn load_or_create() -> Config {
     // must not leave a truncated TOML the load path then refuses to overwrite).
     let mut cfg = defaults();
     if let Ok(text) = toml::to_string_pretty(&cfg) {
-        let _ = write_atomic(&path, text.as_bytes());
+        let _ = write_atomic_with(&path, text.as_bytes(), WriteMode::Private);
     }
     cfg.config_path = path_str;
     cfg
@@ -462,6 +462,64 @@ static SAVE_LOCK: Mutex<()> = Mutex::new(());
 /// Per-process counter so concurrent atomic writes get distinct temp names.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// How the final file's permission bits are chosen, and whether a symlinked destination is
+/// followed. The two axes travel together because they are the same question — "is this a
+/// user-owned cache file, or a secret-bearing file named over IPC?".
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteMode {
+    /// Follow a symlinked destination (dotfiles-managed configs are commonly a link into a
+    /// git checkout) and keep whatever mode the destination already had.
+    Preserve,
+    /// Owner-only, always: whatever mode the destination had, group/other bits are stripped
+    /// before the swap. `config.toml` holds the media-server token, the phone-remote token
+    /// and the SteamGridDB key, so a config that predates the 0600 default is TIGHTENED on
+    /// the next save rather than preserved at 0644. Still follows symlinks — see `Sealed`
+    /// for the IPC-facing policy.
+    Private,
+    /// `Private`, and the destination is NOT followed: the rename replaces a symlink at
+    /// `path` instead of writing through it. This is the backup-IPC policy — the caller
+    /// chose the path, so a pre-planted link must not redirect the write past the gate
+    /// in `commands::valid_backup_path`.
+    Sealed,
+}
+
+impl WriteMode {
+    fn follows_symlinks(self) -> bool {
+        self != WriteMode::Sealed
+    }
+    /// Final mode for a destination that already exists with `existing` bits.
+    fn resolve(self, existing: u32) -> u32 {
+        match self {
+            WriteMode::Preserve => existing,
+            // Keep the owner's own choice (0400 stays 0400) but never leave a secret
+            // readable by group/other.
+            WriteMode::Private | WriteMode::Sealed => existing & !0o077,
+        }
+    }
+}
+
+/// Create the staging file for an atomic write, owner-only **from the instant it exists**.
+///
+/// This is the whole fix for "credentials are briefly world-readable": the mode is an argument
+/// to `open(2)`, not a later `chmod`, so there is no window at all — where create → write →
+/// fsync → chmod left `config.toml`'s tokens at umask 0644 for the entire write, and a chmod
+/// afterwards cannot revoke a descriptor another local user opened during it. `create_new`
+/// (`O_EXCL`) is the other half: the temp name is predictable, so we must fail rather than
+/// adopt a file someone else planted there.
+///
+/// Note the mode survives any sane umask — umask only ever clears bits, and 0600 has none a
+/// normal one would clear — so callers get 0600 or an error, never something wider.
+fn create_temp_private(tmp: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(tmp)
+}
+
+/// Write `bytes` to `path` atomically with the default `Preserve` policy — see
+/// [`write_atomic_with`]. Used for the cache/profile files that hold nothing secret.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic_with(path, bytes, WriteMode::Preserve)
+}
+
 /// Write `bytes` to `path` atomically: fully write a unique temp sibling, fsync it, then
 /// rename over the destination (rename is atomic within a filesystem). A crash, power loss,
 /// I/O error, or full disk during the write leaves the PREVIOUS file intact rather than a
@@ -469,13 +527,25 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// overwrite an unparseable config, so one truncated write would otherwise wedge all future
 /// saves until the user repaired the file by hand.
 ///
-/// Rename-replace has two sharp edges the plain `fs::write` it replaced didn't, both
-/// handled here: a symlinked destination is resolved first (write through to the TARGET —
-/// renaming over the link would sever a dotfiles-managed config), and the destination's
-/// permissions are copied onto the temp before the swap (a chmod-600 config holding the
-/// media-server token must not come back as umask 0644 after every auto-save).
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dest = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+/// Rename-replace has two sharp edges the plain `fs::write` it replaced didn't, both handled
+/// here: a symlinked destination is resolved first unless `mode` is `Sealed` (writing through
+/// to the TARGET, since renaming over the link would sever a dotfiles-managed config), and
+/// the destination's permissions carry across the swap instead of coming back at the process
+/// umask.
+///
+/// The temp file is created with `O_EXCL` at 0600 **before any byte is written**, so a
+/// secret-bearing file is never briefly world-readable on disk. The earlier
+/// create → write → fsync → chmod order left `config.toml`'s tokens at umask 0644 for the
+/// whole write under a normal umask, and a later chmod cannot revoke a descriptor another
+/// local user already opened in that window.
+pub(crate) fn write_atomic_with(path: &Path, bytes: &[u8], mode: WriteMode) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dest = if mode.follows_symlinks() {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    };
     let parent = dest
         .parent()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent"))?;
@@ -488,7 +558,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     ));
     // Scope the file so it's closed before the rename.
     let write = (|| {
-        let mut f = fs::File::create(&tmp)?;
+        let mut f = create_temp_private(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all() // contents durable before we swap it in
     })();
@@ -496,8 +566,26 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(&tmp); // don't leave the partial temp behind
         return Err(e);
     }
-    if let Ok(meta) = fs::metadata(&dest) {
-        let _ = fs::set_permissions(&tmp, meta.permissions());
+
+    // The temp is already 0600; this only widens it back to a mode the destination chose
+    // (Preserve), or narrows it further (an owner-only 0400). `symlink_metadata` — a symlink
+    // has no meaningful mode of its own, and under Sealed we are replacing the link itself.
+    let want = fs::symlink_metadata(&dest)
+        .ok()
+        .filter(|m| m.file_type().is_file())
+        .map(|m| mode.resolve(m.permissions().mode() & 0o7777));
+    if let Some(want) = want {
+        if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(want)) {
+            // Failing OPEN would leave a secret at a mode the caller did not ask for, so this
+            // is not a `let _ =`. Widening back to a cache file's 0644 is not worth failing a
+            // save over, but a Private/Sealed write must not silently land wrong.
+            if mode == WriteMode::Preserve {
+                tracing::warn!("write_atomic: could not restore mode on {}: {e}", dest.display());
+            } else {
+                let _ = fs::remove_file(&tmp);
+                return Err(e);
+            }
+        }
     }
     fs::rename(&tmp, &dest)?;
     // Best-effort: fsync the directory so the rename itself survives power loss.
@@ -525,7 +613,8 @@ fn mutate_and_save(mutate: impl FnOnce(&mut Config)) -> Result<(), String> {
     cfg.config_path = String::new(); // never written to disk
     cfg.has_pin = None; // IPC-only, never written to disk
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    write_atomic(&path, text.as_bytes()).map_err(|e| e.to_string())?;
+    // Private: every save tightens a pre-0600 config.toml back to owner-only.
+    write_atomic_with(&path, text.as_bytes(), WriteMode::Private).map_err(|e| e.to_string())?;
     // The media-server resolution caches the config it saw; drop it so a `[media_server]`
     // edited into config.toml (or a future in-app editor) takes effect on the next probe
     // instead of requiring a restart. Cheap: re-resolution is lazy, on the next server() call.
@@ -610,6 +699,43 @@ fn sanitize_for_backup(mut cfg: Config, include_credentials: bool) -> Config {
     cfg
 }
 
+/// Read `src` as UTF-8 **without following a final symlink** (`O_NOFOLLOW`), and only if it
+/// is a regular file. This is the read half of the backup-IPC symlink policy: the pathname
+/// gate in `commands::valid_backup_path` can only judge the spelling of a path, so a visible
+/// `backup.toml` symlink pointing at a hidden non-TOML file used to sail through it and be
+/// read anyway — turning restore's parse error into a content oracle for arbitrary files.
+/// Enforcing at `open(2)` also removes the check-then-open race: there is no window in which
+/// the path could be swapped for a link, because the kernel refuses the link itself.
+fn read_no_follow(src: &Path) -> std::io::Result<String> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(src)
+        .map_err(|e| {
+            // ELOOP is what O_NOFOLLOW reports for "the final component is a symlink"; say
+            // so, rather than leaking the kernel's "too many levels of symbolic links".
+            if e.raw_os_error() == Some(libc::ELOOP) {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "backup path is a symlink — point it at the real file",
+                )
+            } else {
+                e
+            }
+        })?;
+    if !f.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "backup path is not a regular file",
+        ));
+    }
+    let mut s = String::new();
+    f.read_to_string(&mut s)?;
+    Ok(s)
+}
+
 /// Parse + sanitize backup text. Every field goes through the same `normalize()` pass as a
 /// hand-edited config.toml, so restore is exactly as safe as editing the file by hand.
 fn parse_backup(text: &str) -> Result<Config, String> {
@@ -640,8 +766,12 @@ pub fn backup_to(dest: &std::path::Path, include_credentials: bool) -> Result<St
     }
     let cfg = sanitize_for_backup(cfg, include_credentials);
     let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    // write_atomic creates the parent dir and never leaves a truncated backup.
-    write_atomic(dest, text.as_bytes()).map_err(|e| e.to_string())?;
+    // Sealed: creates the parent dir, never leaves a truncated backup, writes owner-only
+    // (an `include_credentials` backup is a plaintext token file), and — the part the path
+    // gate cannot do on its own — replaces a symlink at `dest` instead of writing THROUGH
+    // it. `commands::valid_backup_path` rejects the link case up front with a better
+    // message; this is the enforcement that survives a link planted after that check.
+    write_atomic_with(dest, text.as_bytes(), WriteMode::Sealed).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -651,7 +781,7 @@ pub fn backup_to(dest: &std::path::Path, include_credentials: bool) -> Result<St
 /// Credential fields left empty in the backup (the default) keep their current on-disk values,
 /// so a sanitized backup never wipes a working pairing.
 pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
-    let text = fs::read_to_string(src).map_err(|e| format!("couldn't read backup: {e}"))?;
+    let text = read_no_follow(src).map_err(|e| format!("couldn't read backup: {e}"))?;
     let mut cfg = parse_backup(&text)?;
 
     // Serialize with every other config write: an auto-save (recents fire on launch) racing
@@ -675,8 +805,9 @@ pub fn restore_from(src: &std::path::Path) -> Result<Config, String> {
     let path = config_path().ok_or("no config path")?;
     let out = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     // Atomic replace: a crash mid-restore must not leave a truncated config.toml that the
-    // load path then refuses to overwrite (the exact clobber-protection deadlock).
-    write_atomic(&path, out.as_bytes()).map_err(|e| e.to_string())?;
+    // load path then refuses to overwrite (the exact clobber-protection deadlock). Private,
+    // because the merge above can fold the live tokens back in.
+    write_atomic_with(&path, out.as_bytes(), WriteMode::Private).map_err(|e| e.to_string())?;
     // A restored backup can change [media_server] — drop the cached resolution like
     // mutate_and_save does, so the new pairing takes effect without a restart.
     crate::media_server::invalidate();
@@ -698,7 +829,21 @@ pub fn report(cfg: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_backup, sanitize_for_backup, write_atomic, Appearance, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, CONFIG_VERSION, THEME_IDS};
+    use super::{create_temp_private, parse_backup, read_no_follow, sanitize_for_backup, write_atomic, write_atomic_with, Appearance, Config, InputConfig, LaunchOverride, ScreensaverConfig, Settings, WriteMode, CONFIG_VERSION, THEME_IDS};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    /// A fresh scratch directory per test — cargo runs these in parallel THREADS, so a name
+    /// keyed only on the pid would have them clobbering each other.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("omnideck-cfgtest-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn mode_of(p: &std::path::Path) -> u32 {
+        std::fs::metadata(p).unwrap().permissions().mode() & 0o7777
+    }
 
     #[test]
     fn appearance_normalize_resets_unknown_layout() {
@@ -733,6 +878,119 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(leftovers, vec!["config.toml".to_string()], "stray temp file left: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression (review 2026-09-10, finding 3): the staging file must be owner-only BEFORE
+    /// it can hold a byte of the media-server / phone-remote / SteamGridDB secrets. The old
+    /// order was `File::create` (0666 & ~umask = 0644 normally) → write → fsync → chmod 0600,
+    /// which published the credentials to any local user for the length of the write; a chmod
+    /// afterwards cannot revoke a descriptor opened in that window. Asserting on creation is
+    /// the deterministic form of that check — there is no window to race, so nothing to time.
+    #[test]
+    fn temp_staging_file_is_owner_only_at_creation() {
+        let dir = scratch("tempmode");
+        let tmp = dir.join(".config.toml.tmp-0");
+
+        let f = create_temp_private(&tmp).unwrap();
+        assert_eq!(mode_of(&tmp), 0o600, "staging file was readable by group/other");
+        drop(f);
+
+        // O_EXCL: the temp name is predictable, so a pre-existing file must be refused rather
+        // than adopted (and written into with our secrets).
+        assert!(create_temp_private(&tmp).is_err(), "second create_new should fail on O_EXCL");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression (finding 3, second half): a config.toml that predates the 0600 default was
+    /// left at 0644 forever, because the writer copied the destination's existing mode onto
+    /// the replacement. `Private` tightens it on the next save; `Preserve` (cache art, mpv
+    /// profiles — nothing secret) still keeps whatever the file had.
+    #[test]
+    fn private_write_tightens_an_existing_world_readable_file() {
+        let dir = scratch("tighten");
+
+        let secret = dir.join("config.toml");
+        std::fs::write(&secret, b"token = \"old\"").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_atomic_with(&secret, b"token = \"new\"", WriteMode::Private).unwrap();
+        assert_eq!(mode_of(&secret), 0o600, "existing 0644 config was not tightened");
+        assert_eq!(std::fs::read(&secret).unwrap(), b"token = \"new\"");
+
+        // An owner-only mode the user chose themselves is narrower, not wider — keep it.
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o400)).unwrap();
+        write_atomic_with(&secret, b"token = \"third\"", WriteMode::Private).unwrap();
+        assert_eq!(mode_of(&secret), 0o400, "owner's stricter mode was widened");
+
+        let cache = dir.join("art.json");
+        std::fs::write(&cache, b"{}").unwrap();
+        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_atomic(&cache, b"{\"a\":1}").unwrap();
+        assert_eq!(mode_of(&cache), 0o644, "Preserve must not tighten non-secret files");
+
+        // A brand-new file has no mode to inherit and must land private either way.
+        let fresh = dir.join("fresh.toml");
+        write_atomic_with(&fresh, b"x = 1", WriteMode::Private).unwrap();
+        assert_eq!(mode_of(&fresh), 0o600);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression (finding 2, write half): the backup path gate judges a pathname, but the
+    /// writer resolved symlinks and wrote THROUGH them — so a visible `backup.toml` link
+    /// aimed at a hidden non-TOML file passed the gate and then overwrote the target anyway.
+    /// `Sealed` replaces the link; `Preserve` still follows it, because a dotfiles-managed
+    /// config.toml is commonly a symlink into a git checkout and must not be severed.
+    #[test]
+    fn sealed_write_replaces_a_symlink_instead_of_writing_through_it() {
+        let dir = scratch("symlink-write");
+        let target = dir.join("private-target");
+        std::fs::write(&target, b"SECRET").unwrap();
+
+        let link = dir.join("backup.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_atomic_with(&link, b"backup = true", WriteMode::Sealed).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"SECRET", "wrote through the symlink");
+        assert_eq!(std::fs::read(&link).unwrap(), b"backup = true");
+        assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(mode_of(&link), 0o600, "a backup can hold credentials — must be owner-only");
+
+        // The dotfiles case the follow behavior exists for.
+        let real = dir.join("real-config.toml");
+        std::fs::write(&real, b"old").unwrap();
+        let managed = dir.join("linked-config.toml");
+        std::os::unix::fs::symlink(&real, &managed).unwrap();
+        write_atomic_with(&managed, b"new", WriteMode::Preserve).unwrap();
+        assert_eq!(std::fs::read(&real).unwrap(), b"new", "Preserve should write through");
+        assert!(std::fs::symlink_metadata(&managed).unwrap().file_type().is_symlink());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression (finding 2, read half): restore read through a symlink, so a `backup.toml`
+    /// pointing at `~/.ssh/id_ed25519` turned the TOML parse error into a content oracle for
+    /// files the gate was written to keep out of reach. Refused at `open(2)` with O_NOFOLLOW,
+    /// which also leaves no check-then-open window to swap a link into.
+    #[test]
+    fn read_no_follow_refuses_a_symlinked_backup() {
+        let dir = scratch("symlink-read");
+        let secret = dir.join("id_ed25519");
+        std::fs::write(&secret, b"PRIVATE KEY").unwrap();
+
+        let link = dir.join("backup.toml");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        let err = read_no_follow(&link).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "symlinked backup was read");
+
+        // A real file still reads normally.
+        let plain = dir.join("plain.toml");
+        std::fs::write(&plain, b"grid_columns = 5").unwrap();
+        assert_eq!(read_no_follow(&plain).unwrap(), "grid_columns = 5");
+
+        // A directory is not a backup either.
+        assert!(read_no_follow(&dir).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

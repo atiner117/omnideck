@@ -1,0 +1,19 @@
+// The e2e harness is Node-side test code, not app code — it can't extend the SvelteKit
+// tsconfig (which is DOM/browser-scoped and only includes src/). Same strictness though:
+// `bun run check:e2e` is what makes the ts-rs-typed fixtures actually pay off.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["**/*.ts", "../playwright.config.ts"]
+}

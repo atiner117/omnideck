@@ -1,0 +1,55 @@
+/*
+ * Self-hosted Inter.
+ *
+ * The UI has always asked for `font-family: "Inter", system-ui, sans-serif` (+page.svelte)
+ * without shipping Inter, so on a machine that doesn't happen to have it installed — which
+ * is the normal case for a dedicated gamescope appliance — every glyph fell through to
+ * whatever the webview's `system-ui` resolved to. That's not just a different look: the
+ * fallback's metrics change layout. Measured across the two engines the harness drives,
+ * list rows came out 84.45px (Chromium) vs 93.91px (WebKitGTK's cousin) — an 11% density
+ * difference on the same CSS, because `.lrow`'s height is content-driven and the taller
+ * fallback text overtook the fixed thumbnail as the governing box.
+ *
+ * One variable file covers the whole 100–900 range; the UI uses 500/600/700/800 plus the
+ * 400 default, and no italics, so the italic file is deliberately not shipped (an italic
+ * would synthesize, and nothing asks for one).
+ *
+ * Served from static/ as a same-origin asset — tauri.conf.json's CSP already allows
+ * `font-src 'self'`, and nothing here reaches the network at runtime.
+ *
+ * Licensed under the SIL Open Font License 1.1 — see static/fonts/Inter-LICENSE.txt.
+ * Upstream: https://github.com/rsms/inter (v4.1).
+ */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  /* Variable font: one file, the full weight axis. */
+  font-weight: 100 900;
+  /* Local file on disk, so the swap window is effectively zero; `swap` over `block` only to
+     guarantee text is never invisible if the asset ever goes missing. */
+  font-display: swap;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+}
+
+/*
+ * Form controls do not inherit typography: the UA stylesheet hard-sets a font on
+ * button/input/select/textarea (Chromium 13.333px Arial, WebKit -webkit-standard). Almost
+ * every interactive surface in this UI is a <button> — rail tiles, grid tiles, list rows,
+ * deck cards, category buttons, header badges — so the family declared on <main> never
+ * reached any of them, and they rendered in whichever font the engine happened to default
+ * to. Bundling Inter alone fixes nothing for those; this is what actually applies it.
+ *
+ * Modal.svelte's `.crow` and PinModal already did this locally, which is why the dialogs
+ * were the only surfaces already on the app's own font. This generalizes it rather than
+ * repeating the declaration per component.
+ *
+ * Deliberately `font-family` and not the `font: inherit` shorthand: components set their own
+ * sizes and weights, and inheriting size as well would resize the controls that rely on the
+ * UA default — the icon-only header badges among them.
+ */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}

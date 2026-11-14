@@ -14,6 +14,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AudioSink {
     /// Internal sink name (e.g. `alsa_output.pci-0000_0b_00.4.analog-stereo`) — the id
     /// passed back to `audio_set_output`.

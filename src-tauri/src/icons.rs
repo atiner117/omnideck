@@ -62,6 +62,18 @@ pub async fn favicon(url: &str) -> Option<String> {
     // (e.g. VLC's cone); Google s2 is the normalized last resort.
     let mut candidates: Vec<String> = Vec::new();
     for d in [Some(host.clone()), root_domain(&host)].into_iter().flatten() {
+        // `host` cleared the gate above; the root domain did NOT — it is a *different* host
+        // (the last two labels), so it needs its own check. Two ways it lands somewhere
+        // internal: a crafted tile `https://foo.127.1` is opaque to the literal check (the
+        // "foo" label makes it non-numeric) and doesn't resolve, so we get here — but its
+        // root is `127.1`, which the resolver reads as 127.0.0.1; and a genuinely public
+        // `sub.example.com` can have a bare `example.com` that resolves internally under
+        // split-horizon DNS. Only the `https://{d}/favicon.ico` candidate fetches `d`
+        // directly, but a blocked root is never a legitimate icon source, so drop the whole
+        // domain rather than also hand it to DDG/Google as a query parameter.
+        if d != host && is_blocked_host_resolved(&d) {
+            continue;
+        }
         candidates.push(ddg_url(&d));
         candidates.push(format!("https://{d}/favicon.ico"));
         candidates.push(google_url(&d));
@@ -166,7 +178,7 @@ fn to_data_url(p: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::domain_of;
+    use super::{domain_of, root_domain};
     use crate::http::is_blocked_host;
     #[test]
     fn extracts_domain() {
@@ -189,5 +201,25 @@ mod tests {
         assert!(!is_blocked_host("spotify.com"));
         assert!(!is_blocked_host("icons.duckduckgo.com"));
         assert!(!is_blocked_host("8.8.8.8")); // public IP is fine
+    }
+
+    /// The root-domain fallback derives a *second* host that the entry gate never saw, so it
+    /// carries its own SSRF check. No IO here: this pins the composition `favicon` relies on —
+    /// a host that passes the gate whose derived root does not.
+    #[test]
+    fn derived_root_domain_can_escape_the_entry_gate() {
+        // Passes the literal check (the "foo" label makes the whole host non-numeric) and
+        // does not resolve, so `favicon` proceeds past its own gate...
+        assert!(!is_blocked_host("foo.127.1"));
+        // ...but the derived root is an inet_aton short form for 127.0.0.1, which is blocked.
+        assert_eq!(root_domain("foo.127.1").as_deref(), Some("127.1"));
+        assert!(is_blocked_host("127.1"));
+        assert_eq!(root_domain("bar.10.0").as_deref(), Some("10.0")); // -> 10.0.0.0, private
+        assert!(is_blocked_host("10.0"));
+
+        // A normal multi-label host still derives a public root we keep fetching.
+        assert_eq!(root_domain("open.spotify.com").as_deref(), Some("spotify.com"));
+        assert!(!is_blocked_host("spotify.com"));
+        assert_eq!(root_domain("spotify.com"), None); // already two labels: no second candidate
     }
 }

@@ -432,7 +432,12 @@ fn spawn_server(listener: TcpListener, token: String, dispatch: Arc<dyn Dispatch
             }
             let Ok(mut stream) = stream else { continue };
             if active.load(Ordering::SeqCst) >= MAX_CONNS {
-                write_response(&mut stream, &Response::err(503, "too many connections"));
+                // DROP the connection instead of answering 503: writing here would run on
+                // the ACCEPT thread, and to a peer that never reads, write_all blocks once
+                // the send buffer fills (no write timeout is set at this point) — a slow
+                // client could wedge the whole listener. A closed connection is signal
+                // enough for the phone page; it just retries.
+                drop(stream);
                 continue;
             }
             active.fetch_add(1, Ordering::SeqCst);
@@ -441,6 +446,9 @@ fn spawn_server(listener: TcpListener, token: String, dispatch: Arc<dyn Dispatch
             let active = active.clone();
             std::thread::spawn(move || {
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                // Bound the response write too: without it, a client that stops reading
+                // pins this worker (and its `active` slot) forever.
+                let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
                 if let Some(req) = parse_request(&stream) {
                     // Query string deliberately not logged — it may carry the token.
                     tracing::debug!("remote: {} {}", req.method, req.path);

@@ -39,11 +39,33 @@ jobs:
           # failure (429 rate limit, 5xx, DNS blip) as no-tag and silently skipped checksum
           # validation — a false-green packaging check on a real release.
           code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+          committed=$(grep -oP "^b2sums=\('\K[^']+" packaging/PKGBUILD || true)
           if [ "$code" = "200" ]; then
             echo "release tarball for v${pkgver} exists — strict mode (download + b2sums)"
+            # A real release must carry a real checksum: the pre-release SKIP placeholder
+            # would make makepkg "pass" while validating nothing (see PKGBUILD comment).
+            if [ "$committed" = "SKIP" ]; then
+              echo "::error::v${pkgver} is released but b2sums is still the SKIP placeholder — run: updpkgsums && makepkg --printsrcinfo > .SRCINFO (RELEASING.md §3)"
+              exit 1
+            fi
             echo "MAKEPKG_EXTRA=" >> "$GITHUB_ENV"
           elif [ "$code" = "404" ]; then
             echo "no v${pkgver} tag yet — building the current checkout (checksums skipped)"
+            # Stale-checksum guard (review 2026-08-21): pre-tag, a non-SKIP hash cannot
+            # belong to v${pkgver} (the tarball doesn't exist) — if it matches the LATEST
+            # existing release's tarball it's a leftover from the version bump, and every
+            # AUR user's makepkg would fail integrity validation the moment the tag lands.
+            # Skip-mode CI can never catch that at release time, so catch it here.
+            if [ -n "$committed" ] && [ "$committed" != "SKIP" ]; then
+              latest=$(curl -sfL "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+' || true)
+              if [ -n "$latest" ]; then
+                prev=$(curl -sfL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${latest}.tar.gz" | b2sum | cut -d' ' -f1 || true)
+                if [ "$committed" = "$prev" ]; then
+                  echo "::error::PKGBUILD b2sums is ${latest}'s tarball checksum, not v${pkgver}'s — it was never re-run after the version bump. Set b2sums=('SKIP') until the tag exists, then updpkgsums (RELEASING.md §3)."
+                  exit 1
+                fi
+              fi
+            fi
             git archive --format=tar.gz --prefix="omnideck-${pkgver}/" \
               -o "packaging/omnideck-${pkgver}.tar.gz" HEAD
             echo "MAKEPKG_EXTRA=--skipchecksums" >> "$GITHUB_ENV"

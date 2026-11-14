@@ -5,13 +5,14 @@
      interactions report back through the on* callbacks. Row styling comes from the
      shared modal vocabulary in Modal.svelte. -->
 <script lang="ts" module>
-  /** Mirror of the backend's AudioSink (bindings/AudioSink.ts once the backend PR lands —
-   *  kept local so the two branches merge in either order). */
-  export type AudioSink = { name: string; description: string; is_default: boolean };
+  /** Re-export of the generated binding — the Rust struct is the source of truth
+   *  (audio.rs now carries #[ts(export)] like every other IPC-crossing type). */
+  export type { AudioSink } from "./bindings/AudioSink";
 </script>
 
 <script lang="ts">
   import Modal from "./Modal.svelte";
+  import type { AudioSink } from "./bindings/AudioSink";
 
   let {
     sinks,
