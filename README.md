@@ -201,6 +201,13 @@ category = "games"                      # games | video | music | apps
 Most of these are also editable in-app (**Settings**), including an **Add custom launcher**
 form for your own commands.
 
+Custom launchers can also have local `art_icon`, `art_box` (portrait cover), and
+`art_hero` (wide wallpaper) paths in their `[[apps]]` entry. Store the images under
+`$XDG_DATA_HOME/omnideck/art` (normally `~/.local/share/omnideck/art`) and use absolute
+paths in the config. Covers appear in the poster grid; icons appear in the rail,
+list, and search. Game wallpapers follow **Game backgrounds**; other launcher
+wallpapers follow **App backgrounds**. No network lookup is needed for local art.
+
 Debug helpers (headless, no window): `omnideck probe`, `scan`, `config`,
 `catalog`, `gridart <appid>`, `media`, `mediasrv`, `watched <id> [--un]`, `mpvprofiles`,
 `bgprep <image>`, `logs`, `doctor` (and `omnideck --help` / `--version`).

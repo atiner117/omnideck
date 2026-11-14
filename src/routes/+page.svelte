@@ -4,6 +4,7 @@
   import type { App, Game, Config, Capability, MediaInfo, Settings, LiveApp } from "$lib/backend";
   import { clamp, railWindow } from "$lib/nav";
   import { mintLaunchId, baseId } from "$lib/launchId";
+  import { artUrl } from "$lib/art";
   import { cardActions, type NpAction } from "$lib/npActions";
   import Modal from "$lib/Modal.svelte";
   import NowPlaying from "$lib/NowPlaying.svelte";
@@ -176,7 +177,28 @@
     return null;
   }
   async function loadAppIcon(a: App) {
+    const coverId = `app:${a.id}`;
+    if (a.art_box && !art[coverId] && !artFailed.has(coverId)) {
+      const url = artUrl(a.art_box);
+      if (url) art = { ...art, [coverId]: url };
+    }
     if (appIcons[a.id] || iconTried.has(a.id) || iconInflight.has(a.id)) return;
+    const local = a.art_icon || a.art_box;
+    if (local) {
+      // A missing local icon leaves the existing emoji fallback intact. Decode only the
+      // windowed tiles, like favicons; covers and wallpapers stay as file URLs.
+      iconInflight.add(a.id);
+      const img = new Image();
+      img.onload = () => {
+        appIcons = { ...appIcons, [a.id]: img.src };
+        iconBg = { ...iconBg, [a.id]: a.accent };
+        iconTried.add(a.id);
+        iconInflight.delete(a.id);
+      };
+      img.onerror = () => { iconTried.add(a.id); iconInflight.delete(a.id); };
+      img.src = artUrl(local);
+      return;
+    }
     const url = iconSource(a); if (!url) return;
     iconInflight.add(a.id);
     try {
@@ -372,7 +394,13 @@
     if (t?.kind === "game" && (cfg?.settings?.game_backgrounds ?? true)) {
       const u = heroes[t.game.appid]; return u ? { kind: "art", url: u } : null;
     }
-    if (t?.kind === "app" && (cfg?.settings?.app_backgrounds ?? true)) {
+    if (t?.kind === "app") {
+      const enabled = t.cat === "games"
+        ? (cfg?.settings?.game_backgrounds ?? true)
+        : (cfg?.settings?.app_backgrounds ?? true);
+      if (!enabled) return null;
+      const hero = t.app.art_hero && artUrl(t.app.art_hero);
+      if (hero) return { kind: "art", url: hero };
       const c = iconColor[t.app.id]; return c ? { kind: "wash", color: c } : null;
     }
     return null;
@@ -407,14 +435,6 @@
     pendingTimers.add(t);
     return t;
   }
-  // Build an omnideck:// URL for an on-disk art file (Steam librarycache / our art cache). The
-  // webview holds the URL and decodes the file to GPU on paint — vs a base64 data URL pinned and
-  // re-diffed in reactive state. Each path segment is percent-encoded; the backend (asset.rs)
-  // canonicalizes + allowlists before reading. Favicons + the bg image stay on data: for now.
-  function artUrl(path: string): string {
-    return "omnideck://localhost" + path.split("/").map(encodeURIComponent).join("/");
-  }
-
   // The manifest's art path can go stale (Steam moved/GC'd its librarycache): drop the 404'd
   // URL so the styled name-tile fallback shows, and tombstone the id so loadArt doesn't loop.
   function artError(appid: string) {
