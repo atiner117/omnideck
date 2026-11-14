@@ -157,6 +157,15 @@ pub fn gamepad_loop(handle: tauri::AppHandle) {
                     continue;
                 }
             }
+            // Something else is in front — a Steam game (never owned, so the bridge above
+            // stays out of it) or any other window gamescope is presenting: the press belongs
+            // to that app, not to the hidden dashboard. Couch box, 2026-09-13: every Cross in
+            // KH3 also fired the focused tile behind the game (Jellyfin, then Assassin's
+            // Creed), and the resulting focus flips wedged Steam Input. Still user activity.
+            if !crate::switcher::omnideck_in_front() {
+                saw_input = true;
+                continue;
+            }
             // Drop sub-epsilon axis jitter before it crosses the IPC boundary.
             if let gilrs::EventType::AxisChanged(a, v, _) = &event {
                 let key = (id, *a);

@@ -613,8 +613,15 @@
     }
   });
 
+  // One launch at a time: a held/bounced button (or two input paths reacting to the same
+  // press) fired launchTile several times per press on the couch box, and every repeat was
+  // a fresh steam:// / spawn. The backend dedupes Steam games too; this keeps commands honest.
+  let launchBusy = false;
   async function launchTile(t: Tile) {
     if (t.kind === "app" && t.app.id === "media-library") { mediaNav.openLibrary(); return; }
+    if (launchBusy) return;
+    launchBusy = true;
+    later(() => (launchBusy = false), 1500);
     const name = t.kind === "game" ? t.game.name : t.app.name;
     // A UNIQUE per-launch id (not the tile id) — see $lib/launchId for the format contract.
     // The backend passes this straight back as the exit key; the tile id stays the

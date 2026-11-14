@@ -192,15 +192,23 @@ pub fn launch_game(app: tauri::AppHandle, appid: String, name: Option<String>, i
     if !valid_appid(&appid) {
         return Err("invalid appid".into());
     }
+    let label = name.unwrap_or_else(|| format!("game {appid}"));
+    // Already launching/running: don't ask Steam again (it would only pop "already
+    // running" and re-raise the game mid-load). Re-emit app-launched so the UI lands on
+    // "now playing" either way.
+    let Some(guard) = watchdog::SteamWatchGuard::claim(&appid) else {
+        tracing::info!("launch_game: '{label}' already launching/running — ignoring repeat");
+        let _ = app.emit("app-launched", label);
+        return Ok(());
+    };
     // Steam's URI handler returns immediately, so the running game has no child handle
-    // here; watch_steam_game polls Steam's registry to detect start/exit instead.
+    // here; watch_steam_game polls for the game's reaper process to detect start/exit.
     std::process::Command::new("steam")
         .arg(format!("steam://rungameid/{appid}"))
         .spawn()
         .map_err(|e| spawn_error("steam", &e))?;
-    let label = name.unwrap_or_else(|| format!("game {appid}"));
     let _ = app.emit("app-launched", label.clone());
-    watchdog::watch_steam_game(app, appid, label, id);
+    watchdog::watch_steam_game(app, appid, label, id, guard);
     Ok(())
 }
 
