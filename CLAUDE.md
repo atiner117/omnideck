@@ -78,6 +78,11 @@ cargo run -- mediasrv     # probe the configured media server (sections + first 
 cargo run -- mpvprofiles  # report the auto-generated mpv profile set
 cargo run -- gridart 570  # fetch SteamGridDB art for an appid (needs steamgriddb_key)
 cargo run -- bgprep <img> # wallpaper downscale-to-cache
+cargo run -- watched <id> # mark an item watched through the couch's own transport, then
+                          # re-read it (add --un to clear). <id> comes from `mediasrv`.
+                          # WRITES to the media server — it changes real watch state, and
+                          # marking watched clears that item's resume point (Jellyfin's
+                          # behaviour). Use an item you don't mind touching.
 ```
 
 ### 4. Input/session paths without a physical pad or logout
@@ -105,6 +110,12 @@ polish. Capture those findings in a dated `NOTES-COUCHTEST-*.md`. Everything abo
 Beyond §1–2, CI also runs `bun run tauri build --no-bundle`, `cargo deny check` (from src-tauri),
 `cargo audit`, and the five-way version-sync. Run these when the change could plausibly affect them
 (new deps, bundling, version bumps).
+
+CI also has an **`e2e` job** running `bun run check:e2e` then the screenshot tour on *both* engines
+(`bunx playwright test`). `check:e2e` is the guard that matters most: the fixtures are typed off
+`src/lib/bindings/`, so **changing a `#[ts(export)]` struct without updating `e2e/mock/fixtures.ts`
+fails there** — and it fails before the browser download, in seconds. If you touched a Rust type,
+run `bun run check:e2e` locally.
 
 ## Architecture / module map
 

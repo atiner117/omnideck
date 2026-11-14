@@ -59,6 +59,10 @@ argon2 = { version = "0.5", features = ["std"] } # std → rand_core/getrandom f
 # launched PWAs/browsers console-style; also examples/virtual-pad.rs (uinput gamepad
 # injector for the nested-session harness — gilrs sees it as a real evdev pad)
 evdev = "0.12"
+# watchdog/switcher: direct kill(2) group signalling — no fork+exec of kill(1) on the
+# Guide-button path, and errno-accurate results (ESRCH vs EPERM). Already in the tree
+# transitively; this only makes it a direct dependency.
+libc = "0.2"
 
 [dev-dependencies]
 ts-rs = "12.0.1"

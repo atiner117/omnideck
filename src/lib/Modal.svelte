@@ -62,6 +62,11 @@
   .prefs :global(.cbtn.danger) { background: var(--accent); color: #04121f; border-color: transparent; }
   .prefs :global(.osk) { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 4px; transition: opacity .15s; }
   .prefs :global(.osk.dim) { opacity: 0.35; }
+  /* This is the one animated surface the page-level reduced-motion rules can't reach
+     (component-scoped), and Modal is the shared shell for every dialog. */
+  @media (prefers-reduced-motion: reduce) {
+    .prefs :global(.osk) { transition: none; }
+  }
   .prefs :global(.oskkey) { background: var(--surface-card); border: 2px solid var(--border); color: #dde5f0; border-radius: 8px; padding: 10px 0; font-size: clamp(15px, 1.6vw, 20px); font-weight: 700; cursor: pointer; text-transform: uppercase; }
   .prefs :global(.oskkey.special) { color: var(--accent); background: #11192b; }
   .prefs :global(.oskkey.focused) { border-color: var(--accent); background: var(--surface); color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }

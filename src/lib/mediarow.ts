@@ -15,10 +15,28 @@
 //     make the row look untouched on the one row that's about to resume into credits.
 import type { MediaItem } from "./bindings/MediaItem";
 
-/** Item kinds that drill down instead of playing. Drives both navigation (activate()
- *  browses) and resume gating (no seek target) — one list, module-level, no per-row
- *  array allocation. */
-export const BROWSE_KINDS = new Set(["Series", "Season", "Folder", "BoxSet", "CollectionFolder"]);
+/** Item kinds that drill down instead of playing — the FALLBACK classifier, used only when
+ *  the server didn't send IsFolder. Module-level, no per-row array allocation.
+ *
+ *  This list being an *allowlist* is why `isBrowse` exists: anything not named here fell
+ *  through as playable, so an unlisted container kind became mark-watchable. Widened beyond
+ *  the original five to the container kinds Jellyfin can actually return, but the name list
+ *  can never be complete — `is_folder` is the real gate. */
+export const BROWSE_KINDS = new Set([
+  "Series", "Season", "Folder", "BoxSet", "CollectionFolder",
+  "AggregateFolder", "UserView", "Playlist", "PlaylistsFolder", "ManualPlaylistsFolder",
+  "MusicAlbum", "MusicArtist", "PhotoAlbum", "ChannelFolderItem",
+]);
+
+/** Does activating this row drill down (true) or play it (false)?
+ *
+ *  Prefer the server's own container flag; the name list is only a fallback for a response
+ *  that omitted it. Getting this wrong in the "playable" direction is the costly one — it
+ *  hands a folder id to mpv AND opens the row to mark-watched, which on a container clears
+ *  every child's resume point with no undo (see MediaNav.toggleWatched). */
+export function isBrowse(i: MediaItem): boolean {
+  return i.is_folder ?? BROWSE_KINDS.has(i.kind);
+}
 
 /** The row's resume point in seconds, or undefined when activating should play from the
  *  top (browse rows never resume). ts-rs types u64 as bigint, so arithmetic needs Number. */

@@ -90,6 +90,64 @@ jobs:
       - name: Tauri build (no bundle)
         run: bun run tauri build --no-bundle
 
+  # The browser half of the "Verify" ladder (CLAUDE.md §3). Separate from `build` because it
+  # needs a browser download and no Rust at all, so it runs in parallel instead of adding
+  # minutes to the long job.
+  e2e:
+    name: e2e (screenshot tour · chromium + webkit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Keep in lockstep with the `build` job's pin.
+          bun-version: "1.2.0"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      # First, and deliberately before the browser download: this is a plain `tsc --noEmit`
+      # over the fixtures, which are typed off the generated ts-rs bindings. A Rust struct
+      # change that the fixtures don't account for fails HERE, in seconds, instead of being
+      # found by hand later — the harness's whole point. No browser needed to catch it.
+      - name: Harness typecheck (fixtures match the ts-rs bindings)
+        run: bun run check:e2e
+
+      # bun skips browser-download postinstalls for untrusted packages, so `bun install` above
+      # does NOT fetch the engines — they have to be installed explicitly.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-playwright-
+
+      - name: Install Playwright browsers
+        # --with-deps pulls the apt packages WebKit needs. On an Ubuntu runner both engines
+        # just work; the ICU/libxml2/flite shimming in e2e/install-webkit-deps.sh is only for
+        # rolling distros, so it is deliberately NOT used here.
+        run: bunx playwright install --with-deps chromium webkit
+
+      # Both engines on purpose: webkit is the closest match to the WebKitGTK webview that
+      # actually ships, chromium is the stable fast path. They render differently enough that
+      # a regression can land in one and not the other.
+      - name: Screenshot tour
+        run: bunx playwright test
+
+      - name: Upload screenshots and traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output
+          path: |
+            e2e/screenshots
+            e2e/.results
+          retention-days: 7
+          if-no-files-found: ignore
+
   cargo-deny:
     name: cargo-deny (advisories · licenses · bans · sources)
     runs-on: ubuntu-latest

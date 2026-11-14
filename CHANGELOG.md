@@ -4,9 +4,101 @@ All notable changes to OmniDeck are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (pre-1.0: minor bumps may break).
 
-## [0.2.0] — 2026-07-27
+## [Unreleased] — 0.2.0
 
 ### Added
+- **Continue Watching actually resumes — and you can mark a title watched**: picking a
+  half-watched film off the Continue Watching row used to restart it from 0:00 (the row was
+  a label, not a feature). `MediaItem` now carries the server's resume position and watched
+  flag; playback passes `--start=` to mpv — appended late in the argv so a per-launch resume
+  beats a profile default — resumable rows read **"N min left"** instead of total runtime,
+  and watched items show a ✓. **West / `W`** toggles watched state on a playable row: an
+  optimistic flip that reverts if the server refuses. Deliberately *not* offered on a series
+  or season row — Jellyfin's `PlayedItems` accepts one, but marking a show watched clears
+  every episode's resume point and un-marking never gives them back, so a single press could
+  destroy a 60-episode series' progress.
+- **Remote artwork is a disk-first resource** (`artwork_cache.rs`): cold boots re-fetched
+  every Jellyfin poster over the network, so art popped in on the rail on every launch.
+  Posters now land in an FNV-1a-keyed disk cache with `.meta` sidecars — under 24 h old
+  serves from disk with zero network, older revalidates with `If-None-Match`/
+  `If-Modified-Since` (a 304 costs headers), and a network error serves the stale copy
+  instead of a blank tile. True-LRU 200 MB budget (`[media_server] art_cache_mb`), atomic
+  writes, and rail art warmed by a bounded prefetch once sections load. `omnideck doctor`
+  reports the cache; `--clear-art-cache` empties it.
+- **Library view modes** (`[appearance] layout`): the XMB rail is now one of four —
+  **rail**, **large grid**, **compact grid**, and a **detail list** (thumbnail, type/source
+  subline, last-played for games). Grids wrap top/bottom preserving the column, and falling
+  off a row edge moves to the next category, so the XMB "never trapped" rule holds in 2D;
+  D-pad, stick, keyboard and hold-repeat all route through the same unit-tested nav math.
+  Offscreen grid rows skip paint via `content-visibility`.
+- **Six built-in themes**: a theme is a named set of overrides for the design tokens, applied
+  by stamping `data-theme` on `<html>` — `omnidark` (the current look, rendered
+  byte-identically), `oled` (true `#000` for OLED panels), `light`, `high-contrast`, `crt`
+  (phosphor green under static, *unanimated* scanlines) and `deck`. All colour work is CSS,
+  so switching is a single attribute write and nothing lands on the gamepad rAF path; your
+  accent rides on top of any theme unchanged.
+- **TV overscan calibration**: a console-style safe-area screen — accent frame and corner
+  markers at the inset boundary, live percentage card, D-pad/stick to grow or shrink 0–10 %
+  in 0.5 % steps, A saves and B cancels. The inset applies globally through one `--overscan`
+  custom property (modals and toasts contained too); **0 % renders byte-identical to before**.
+- **Screensaver — OLED burn-in protection** (`[screensaver]`): the gamepad thread tracks
+  input activity and emits idle/active transitions, and a layout-mounted overlay stages down
+  through dim veil → near-black accent drift (nothing static keeps burning) → true black with
+  a clock that moves each minute. Any input restores instantly, MPRIS playback suppresses
+  engagement, and it is reduced-motion aware. It runs its own DOM + gamepad idle timer as
+  well as reading the backend config, so it works on a plain desktop too.
+- **Audio output switcher** (`audio.rs` + `AudioOutputModal`): enumerate and switch
+  PipeWire/PulseAudio sinks from the couch — "TV over HDMI" versus "the receiver" without
+  dropping to a desktop. `pactl -f json list sinks` with a `list short sinks` fallback for
+  older pactl; every invocation is bounded by a 3 s deadline and runs on the blocking pool,
+  so even a wedged sound server never reaches the IPC thread.
+- **Sleep timer** (`sleep_timer.rs` + `SleepTimer.svelte`): "pause playback in N minutes",
+  with presets that show the "until HH:MM" they land on, a countdown, and a final-minute
+  warning. Expiry **pauses every playing MPRIS player, never kills** — falling asleep to
+  music while a paused video sits behind it must silence the music, and keeping the position
+  makes resuming in the morning one button. Re-arming replaces the running timer race-free.
+  Deliberately not persisted across restarts: a sleep timer is about tonight's session.
+- **Phone as a remote** (`[remote]`, **off by default**, port 8765): a self-contained phone
+  page served by a hand-rolled `std::net` HTTP server — **no new dependency** — exposing
+  MPRIS transport, volume, and navigation. Nav arrives as the same synthetic gamepad events
+  a real pad produces, so it drives OmniDeck's own UI (a fullscreened app ignores it).
+  Pairing is a 32-byte `/dev/urandom` token generated on first enable.
+- **Parental-controls PIN** (`pin.rs` + `PinModal.svelte`): a phone-order PIN pad over an
+  argon2id-hashed PIN (PHC format, fresh random salt, never stored or logged in plaintext)
+  gating locked categories. Hashing runs on the blocking pool, so the deliberately-slow
+  verify never janks the UI or the gamepad thread. The module header states the threat model
+  plainly: **deterrence, not access control**.
+- **Update check** (`update.rs`, `settings.check_updates`, default on): a check-only probe of
+  the GitHub latest-release API compares the newest published tag against the running
+  version, caches the answer for the process lifetime (the unauthenticated API allows
+  60 req/hr; a manual "check now" bypasses the cache), and never proposes a draft or
+  prerelease. Acting on an update is out of scope — OmniDeck tells you, your package manager
+  does the rest.
+- **Config backup & restore**: `backup_config` / `restore_config` write and read sanitized
+  TOML snapshots. A restore passes the same `normalize()` gates as a hand-edited file and
+  deliberately works *while the live config is broken* — restoring is how you fix that — but
+  creating a backup **from** a broken state is refused, so defaults can't be laundered into a
+  "good" snapshot. Both paths take the same atomic-write lock as every other config write.
+- **`[launch_overrides."<tile-id>"]` — per-tile env and extra args** for tiles launched
+  through `launch_command` (custom launchers and catalog apps). Steam titles hand off to the
+  Steam client, so their options belong in Steam's own Launch Options. Hand-editable for now
+  ("config is king"); an empty map serializes to nothing, so generated configs stay clean.
+- **`[input]` config**: `guide_hold_ms` — the Guide long-hold-to-close threshold, clamped
+  200–5000 ms (below 200 every tap reads as "close"; above 5000 the hold reads as broken) —
+  and `session_hotkeys`, a kill-switch for the `Ctrl+Alt+Home`/`End` global grabs for
+  keyboards that need those chords. Both are read once at startup: the input threads park in
+  blocking waits, so a change needs a relaunch.
+- **`omnideck doctor` and `omnideck logs`** — the support story next to the existing probes.
+  `doctor` prints a one-command bug-report bundle: version, session detection, the full
+  capability probe, config health, Steam library count, playback stack, and controllers via
+  the same gilrs path the app uses — **presence-only for keys and tokens, values never
+  printed** — and it is offline on purpose. `logs` lists the rotating log files with sizes
+  and tails the newest (`-n N`); `omnideck logs --path` prints just the newest path, for
+  `tail -f $(omnideck logs --path)`.
+- **`docs/ARCHITECTURE.md`**: the committed 10,000-foot map — process shape, the ts-rs IPC
+  contract, config invariants, the three input paths, the session-versus-desktop fork, the
+  launch and media stacks, network policy, logging, testing — linked from CONTRIBUTING, with
+  every claim re-verified against the tree before it shipped.
 - **Durable boot-error panel**: if capability/catalog/config-and-library loading fails at
   startup, a persistent `role="alert"` panel now lists exactly which subsystem(s) failed
   and offers **Retry** (or `F5`) — replacing a 5 s toast that was gone before a couch user
@@ -177,6 +269,36 @@ All notable changes to OmniDeck are documented here. Format follows
   real Steam launch/return, suspend, SDDM login (see `M2-SESSION-TEST.md` §0.5).
 
 ### Changed
+- **One input router instead of three, and `+page.svelte` is being decomposed**: the three
+  parallel input paths (keyboard `if`-chain, gamepad `if`-chain, stick handling) collapse
+  into a single ordered `OVERLAYS` roster where each entry declares `open()` plus its
+  `key`/`pad`/`stickX`/`stickY` handlers, and `anyModal` derives from the roster instead of a
+  hand-maintained 11-term boolean that had to be kept in sync in three places. Alongside it,
+  the deck switcher (`DeckSwitcher.svelte`), the Jellyfin browse state
+  (`medianav.svelte.ts`, a `MediaNav` class) and the add-launcher form
+  (`LauncherForm.svelte`) moved out of the page, which keeps what is genuinely page-level:
+  input routing, the status toast, the Now Playing cards, and error reporting.
+- **The Settings column is table-driven**: four string-key dispatchers (read / adjust / cycle
+  / numeric-and-text setters) collapse into one pass over a typed `SettingDef` table
+  (`settings-defs.ts`). Behaviour-preserving — same display values, same steps, same
+  visibility rules — but a new setting is now a table row instead of an edit in four
+  `switch` statements.
+- **App icons load in a window, like game art**: icon fetching fired for every app tile at
+  mount (O(library)); it now follows visibility. Focus clamps became `$derived` instead of
+  write-back `$effect`s, removing a class of effect-ordering surprise, and the
+  custom-launcher command box splits argv **quote-aware** (`argv.ts`) instead of on
+  whitespace — a quoted path with spaces now survives, and an unbalanced quote is an error
+  rather than a mangled launch.
+- **The switcher shares one pooled X11 connection** across its entry points: navpad polls
+  "is a launched app visible?" ~3×/s for the whole session, and each poll used to pay a fresh
+  connect and auth handshake. A cheap liveness round-trip on reuse reconnects transparently
+  if the server went away. The hotkey thread deliberately keeps its own connection — it parks
+  in `wait_for_event`, which would wedge anything sharing it.
+- **Configuring Jellyfin takes effect without a restart**: the resolved server moved from a
+  process-lifetime `OnceLock` to an invalidatable cache, invalidated after every config save
+  — including a restored backup that changes `[media_server]`. Resolution stays lazy. The
+  config file also now carries a `config_version` stamp, so a future shape change has a
+  migration hook to hang off.
 - **Config saves and the deck/media/background commands run off the UI thread**: a shared
   `blocking()` helper carries their fsyncs/blocking work on the async runtime's blocking
   pool instead of the main thread. Media-library sections now fetch concurrently
@@ -229,6 +351,11 @@ All notable changes to OmniDeck are documented here. Format follows
   overwriting a same-named entry; empty/symbol-only names are rejected.
 
 ### Fixed
+- **Launch failures say what actually went wrong**: raw OS errors from `spawn()` are mapped
+  at the spawn site into actionable messages ("not found on `PATH`", permission denied, …)
+  instead of surfacing an errno. Done as error mapping rather than a `PATH` pre-flight on
+  purpose — the pre-flight was racy (the binary can vanish between check and spawn) and the
+  mapped version is both simpler and correct.
 - **`config.toml` writes are now atomic and serialized**: a crash/power-loss/full-disk
   mid-write could leave a truncated file — and because the loader deliberately refuses to
   overwrite an unparseable config, one interrupted write used to wedge *all* future saves
@@ -315,6 +442,28 @@ All notable changes to OmniDeck are documented here. Format follows
   search-engine favicon) are dropped by sequence guards.
 
 ### Security
+- **The mpv direct-play stream authenticates with an `X-Emby-Token` header, not an `api_key`
+  query parameter**: the token no longer appears on URL-shaped surfaces — mpv's log, OSD and
+  IPC socket, its watch-later state, or the server's HTTP access log.
+- **The PIN hash never crosses IPC**: `pin_hash` is masked behind a `has_pin: Option<bool>`
+  presence flag that is cleared before any disk write, and `locked_categories` is writable
+  only through the PIN-verified `set_locked_categories` — a plain settings save can no longer
+  empty the locked list to walk around the PIN.
+- **The artwork fetch can't become an open proxy**: `get_artwork` fetches with the media
+  server's token attached, so its URL argument is gated by `url_within_base` before anything
+  leaves the machine — a compromised webview naming a lookalike host gets nothing (tested).
+- **The audio switcher only accepts sinks it enumerated itself**: `audio_set_output` matches
+  its argument against our own sink list before it reaches `pactl`, which is invoked
+  argv-only and never through a shell, so a crafted frontend value has nowhere to go
+  (unit-tested with an injection-shaped id).
+- **Credentials stay out of backups and off the wire**: config backups exclude the
+  media-server token and the SteamGridDB key by default (a backup is meant to travel), and a
+  restore carrying none keeps the credentials already on the machine. The phone remote's
+  token is masked over IPC, stripped from backups the same way, compared in constant time
+  (length differences fold into the accumulator — no early return), and never logged.
+- **`argon2` added as a runtime dependency** (`pin.rs`) — deliberately: a PIN gate is worth a
+  vetted password hash rather than a hand-rolled one. It is the only new runtime dep in this
+  release; the phone remote and its HTTP server added none.
 - **Jellyfin media/parent ids are validated at the IPC boundary** (`browse()`, `poster()`,
   `media_play()`): alphanumeric + hyphen, bounded — rejecting `../`, `&`, `/` injection from
   an arbitrary frontend-supplied string before it's interpolated into a URL path or query.
