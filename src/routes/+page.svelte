@@ -1375,11 +1375,12 @@
           {#if winLo > 0}<div class="xpad" style="height: calc({winLo} * var(--ih))" aria-hidden="true"></div>{/if}
           {#each winItems as t, wi (t.id)}
             {@const i = wi + winLo}
+            {@const coverId = t.kind === "game" ? t.game.appid : `app:${t.app.id}`}
             <button class="xitem" class:focused={i === focus} class:near={Math.abs(i - focus) <= 4}
               onclick={() => { focusRaw = i; launchTile(t); }}>
               <span class="xthumb" style={t.kind === "app" ? `background:${appIcons[t.app.id] ? (iconBg[t.app.id] ?? "#f4f5f8") : t.app.accent}` : ""}>
-                {#if t.kind === "game" && art[t.game.appid]}
-                  <img src={art[t.game.appid]} alt="" decoding="async" onerror={() => artError(t.game.appid)} />
+                {#if art[coverId]}
+                  <img src={art[coverId]} alt="" decoding="async" onerror={() => artError(coverId)} />
                 {:else if t.kind === "app" && appIcons[t.app.id]}
                   <img class="appicon" src={appIcons[t.app.id]} alt="" decoding="async" />
                 {:else}
